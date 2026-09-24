@@ -47,6 +47,7 @@ class Kind:
     CALIBRATION_OUTCOME = "calibration_outcome"
     ALERT = "alert"
     BACKTEST = "backtest"
+    OPERATOR = "operator_action"
     STRATEGY_HALT = "strategy_halt"
     HEARTBEAT = "heartbeat"
 

@@ -26,7 +26,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class Instrument:
     symbol: str
-    kind: str  # "spot" | "perp"
+    kind: str  # "spot" | "perp" | "cfd"
     base: str
     quote: str
     cluster: str
@@ -39,7 +39,7 @@ class Instrument:
 
     @property
     def can_short(self) -> bool:
-        return self.kind == "perp"
+        return self.kind in ("perp", "cfd")
 
     @property
     def is_perp(self) -> bool:

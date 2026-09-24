@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[research,dev]"
+      - run: pip install -e ".[research,web,dev]"
       - run: ruff check hedgefund tests --select F,E9,B --ignore B905,B008
       - run: python -m hedgefund validate
       - run: pytest -q

@@ -21,6 +21,7 @@ NATURAL_REGIMES = {
     "reversion": {Regime.MEAN_REVERTING, Regime.HIGH_VOL},
     "macro": {Regime.TRENDING, Regime.MEAN_REVERTING},
     "relative_value": {Regime.MEAN_REVERTING},
+    "mean_reversion": {Regime.MEAN_REVERTING},
 }
 
 
@@ -95,9 +96,9 @@ class ReferenceJev(AnswerEngine):
             if g is None or sma is None:
                 return {"long": 0.0, "short": -8.0, "flat": flat}
             return {"long": 150.0 * (g - 0.004) + 8.0 * sma + flat, "short": -8.0, "flat": flat}
-        if profile == "relative_value":
-            z = f.get("ratio_z")
-            rer = f.get("ratio_er", 0.5)
+        if profile in ("relative_value", "mean_reversion"):
+            z = f.get("ratio_z") if profile == "relative_value" else f.get("price_z")
+            rer = f.get("ratio_er", 0.5) if profile == "relative_value" else f.get("price_er", 0.5)
             if z is None:
                 return {"long": 0.0, "short": 0.0, "flat": flat}
             trend_penalty = 6.0 * max(0.0, rer - 0.25)
@@ -118,6 +119,8 @@ class ReferenceJev(AnswerEngine):
             return max(0.0, f.get("stable_growth_30d", 0.0)) / 0.015 * (1.0 if f.get("close_vs_sma200", 0.0) > 0 else 0.3)
         if profile == "relative_value":
             return abs(f.get("ratio_z", 0.0)) / 2.5
+        if profile == "mean_reversion":
+            return abs(f.get("price_z", 0.0)) / 2.5
         return 0.0
 
     def answers(self, state: JevState, schema: JevSchema) -> dict[str, dict[str, Any]]:

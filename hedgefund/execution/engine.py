@@ -145,10 +145,14 @@ class ExecutionEngine:
 
     def flatten_all(self, reason: str, liquidity: dict[str, float]) -> list[str]:
         """Reduce-only market orders closing every book. Always passes risk (reduces exposure)."""
+        return self.flatten_books(list(self.portfolio.books), reason, liquidity, event="flatten_all")
+
+    def flatten_books(self, strategy_ids: list[str], reason: str, liquidity: dict[str, float], event: str = "flatten_book") -> list[str]:
+        """Close the given strategies' books with reduce-only market orders."""
         self.sync()
         ts = self.clock.now_ms()
         submitted = []
-        for sid in list(self.portfolio.books):
+        for sid in strategy_ids:
             for sym, info in self.portfolio.book_positions(sid).items():
                 for o in list(self.orders.values()):
                     if o.strategy_id == sid and o.symbol == sym and not o.is_terminal:
@@ -173,7 +177,7 @@ class ExecutionEngine:
                 )
                 self._submit(order)
                 submitted.append(order.client_order_id)
-        self.ledger.append(Kind.RISK_EVENT, {"event": "flatten_all", "reason": reason, "orders": submitted}, ts=ts)
+        self.ledger.append(Kind.RISK_EVENT, {"event": event, "strategies": strategy_ids, "reason": reason, "orders": submitted}, ts=ts)
         self.sync()
         return submitted
 

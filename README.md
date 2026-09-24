@@ -1,7 +1,14 @@
 # botprive
 
-This repository holds two things:
+This repository holds three things:
 
+- **Web platform for MetaTrader 5** (`hedgefund/web`, `hedgefund/mt5`, `hedgefund/bots`): a
+  secure, responsive dashboard to create bots on any asset your broker offers (gold, Nasdaq,
+  crypto, forex, oil…), backtest them, start and stop them, and follow the results live.
+  **Guide in French: [docs/PLATFORM.md](docs/PLATFORM.md).** Quick start on Windows:
+  `.\deploy\windows\install.ps1`, then
+  `.\.venv\Scripts\python.exe -m hedgefund.web create-user --username YOU`, then
+  `.\deploy\windows\start.ps1`, and open http://127.0.0.1:8000.
 - **`hedgefund/`** is a one-person, 24/7 AI hedge fund. Claude Opus 5.5 does the research,
   an orchestrated set of workflows runs the operation, Jev makes fast typed decisions, and
   deterministic code owns risk and execution. The full design, build plan and risk analysis
@@ -15,8 +22,8 @@ This repository holds two things:
 ## Quickstart
 
 ```bash
-pip install -e ".[research,dev]"
-pytest -q                                   # 103 tests
+pip install -e ".[research,web,dev]"
+pytest -q                                   # all tests
 python -m hedgefund validate                # config + 5 strategy specs
 python -m hedgefund org                     # departments and workflows
 python -m hedgefund backtest --stress       # synthetic backtest of all strategies + stress scenarios
@@ -54,7 +61,7 @@ python -m hedgefund paper --with-research                     # 24/7 loop (paper
 See [docs/BLUEPRINT.md §4](docs/BLUEPRINT.md#4-repository-structure). In short: `config/`
 holds the fund config, risk limits and strategy specs. `hedgefund/` holds the code, split
 into core, data, jev, policy, risk, execution, portfolio, strategy, backtest, calibration,
-research, orchestration, monitoring and ops. `tests/` has 103 tests.
+research, orchestration, monitoring, ops, plus the platform (web, mt5, bots). `tests/` covers all of it.
 
 ## Not verified
 

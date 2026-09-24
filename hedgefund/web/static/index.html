@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>HedgeFund – Plateforme de trading</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/charts.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <!-- ================= LOGIN ================= -->
+  <div id="login-view" class="login hidden">
+    <form id="login-form" class="login-card" autocomplete="on">
+      <h1>HedgeFund</h1>
+      <p class="muted">Connexion à votre plateforme de trading</p>
+      <label for="lg-user">Nom d'utilisateur</label>
+      <input id="lg-user" name="username" autocomplete="username" required maxlength="60">
+      <label for="lg-pass">Mot de passe</label>
+      <input id="lg-pass" name="password" type="password" autocomplete="current-password" required maxlength="200">
+      <label for="lg-totp">Code 2FA <span class="muted">(si activé)</span></label>
+      <input id="lg-totp" name="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="10">
+      <button class="btn primary" type="submit">Se connecter</button>
+      <div id="lg-error" class="error" role="alert"></div>
+    </form>
+  </div>
+
+  <!-- ================= APP ================= -->
+  <div id="app-view" class="hidden">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <span class="brand">HedgeFund</span>
+        <span id="mode-badge" class="badge">—</span>
+        <span id="conn-badge" class="badge"><span class="dot"></span><span>—</span></span>
+        <nav class="tabs" role="tablist" aria-label="Sections">
+          <button class="tab-btn" role="tab" data-tab="dashboard" aria-selected="true">Tableau de bord</button>
+          <button class="tab-btn" role="tab" data-tab="bots" aria-selected="false">Bots</button>
+          <button class="tab-btn" role="tab" data-tab="journal" aria-selected="false">Journal</button>
+          <button class="tab-btn" role="tab" data-tab="settings" aria-selected="false">Réglages</button>
+        </nav>
+        <span class="spacer"></span>
+        <button id="kill-btn" class="btn danger small" type="button">Arrêt d'urgence</button>
+        <button id="theme-btn" class="btn ghost small" type="button" aria-label="Changer de thème">Thème</button>
+        <button id="logout-btn" class="btn ghost small" type="button">Déconnexion</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="banners"></div>
+
+      <!-- ---------- dashboard ---------- -->
+      <section id="tab-dashboard" class="tab" role="tabpanel">
+        <div class="toolbar">
+          <span class="muted">Période</span>
+          <div class="segmented" id="range">
+            <button type="button" data-days="1" aria-pressed="false">24 h</button>
+            <button type="button" data-days="7" aria-pressed="false">7 j</button>
+            <button type="button" data-days="30" aria-pressed="true">30 j</button>
+            <button type="button" data-days="90" aria-pressed="false">90 j</button>
+          </div>
+          <span class="spacer"></span>
+          <span class="muted" id="last-update"></span>
+        </div>
+        <div class="tiles" id="tiles"></div>
+        <div class="grid">
+          <div class="card span-8">
+            <div class="card-head"><h2>Valeur du portefeuille</h2><div class="legend" id="equity-legend"></div></div>
+            <div class="chart" id="equity-chart"></div>
+          </div>
+          <div class="card span-4">
+            <div class="card-head"><h2>Compte</h2></div>
+            <div id="account"></div>
+          </div>
+          <div class="card span-6">
+            <div class="card-head"><h2>Drawdown</h2><span class="muted">baisse depuis le plus haut</span></div>
+            <div class="chart" id="dd-chart"></div>
+          </div>
+          <div class="card span-6">
+            <div class="card-head"><h2>Résultat par bot</h2></div>
+            <div class="chart" id="bots-chart"></div>
+          </div>
+          <div class="card span-12">
+            <div class="card-head"><h2>Positions ouvertes</h2></div>
+            <div class="table-wrap" id="positions"></div>
+          </div>
+          <div class="card span-8">
+            <div class="card-head"><h2>Dernières exécutions</h2></div>
+            <div class="table-wrap" id="fills"></div>
+          </div>
+          <div class="card span-4">
+            <div class="card-head"><h2>Alertes</h2></div>
+            <div id="alerts"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- bots ---------- -->
+      <section id="tab-bots" class="tab hidden" role="tabpanel">
+        <div class="toolbar">
+          <h2>Vos bots</h2>
+          <span class="spacer"></span>
+          <button id="new-bot-btn" class="btn primary" type="button">+ Nouveau bot</button>
+        </div>
+        <div class="bots" id="bots"></div>
+      </section>
+
+      <!-- ---------- journal ---------- -->
+      <section id="tab-journal" class="tab hidden" role="tabpanel">
+        <div class="card">
+          <div class="card-head"><h2>Journal d'audit</h2><span class="muted">actions, événements de risque, alertes (non modifiable)</span></div>
+          <div class="table-wrap" id="journal"></div>
+        </div>
+      </section>
+
+      <!-- ---------- settings ---------- -->
+      <section id="tab-settings" class="tab hidden" role="tabpanel">
+        <div class="grid">
+          <div class="card span-6">
+            <h2>Mode d'exécution</h2>
+            <p class="help">Simulation : prix simulés. Papier : prix MT5, ordres simulés. MT5 : ordres envoyés au compte connecté. Changement possible seulement quand tous les bots sont arrêtés et sans position.</p>
+            <form id="mode-form">
+              <label for="mode-select">Mode</label>
+              <select id="mode-select">
+                <option value="simulation">Simulation (sans MT5)</option>
+                <option value="paper">Papier (prix MT5, aucun ordre)</option>
+                <option value="mt5">MT5 (ordres réels sur le compte connecté)</option>
+              </select>
+              <div class="field-row">
+                <div><label for="mode-pass">Mot de passe</label><input id="mode-pass" type="password" autocomplete="current-password" required></div>
+                <div><label for="mode-totp">Code 2FA</label><input id="mode-totp" inputmode="numeric" autocomplete="one-time-code"></div>
+              </div>
+              <button class="btn primary" type="submit">Changer de mode</button>
+              <div class="error" id="mode-error" role="alert"></div>
+            </form>
+          </div>
+          <div class="card span-6">
+            <h2>Capital alloué</h2>
+            <p class="help">Base de calcul des tailles de position et des limites de risque pour le mode actuel.</p>
+            <form id="capital-form">
+              <label for="capital-input">Capital</label>
+              <input id="capital-input" type="number" min="100" step="100" required>
+              <div class="field-row">
+                <div><label for="capital-pass">Mot de passe</label><input id="capital-pass" type="password" autocomplete="current-password" required></div>
+                <div><label for="capital-totp">Code 2FA</label><input id="capital-totp" inputmode="numeric" autocomplete="one-time-code"></div>
+              </div>
+              <button class="btn primary" type="submit">Enregistrer</button>
+              <div class="error" id="capital-error" role="alert"></div>
+            </form>
+          </div>
+          <div class="card span-6">
+            <h2>Trading sur compte réel</h2>
+            <div id="real-status" class="help"></div>
+            <form id="real-form">
+              <label for="real-confirm">Pour déverrouiller, tapez : <strong>JE COMPRENDS LE RISQUE</strong></label>
+              <input id="real-confirm" autocomplete="off">
+              <div class="field-row">
+                <div><label for="real-pass">Mot de passe</label><input id="real-pass" type="password" autocomplete="current-password" required></div>
+                <div><label for="real-totp">Code 2FA</label><input id="real-totp" inputmode="numeric" autocomplete="one-time-code"></div>
+              </div>
+              <div class="actions">
+                <button class="btn danger" type="submit" data-enable="1">Déverrouiller</button>
+                <button class="btn" type="submit" data-enable="0">Verrouiller</button>
+              </div>
+              <div class="error" id="real-error" role="alert"></div>
+            </form>
+          </div>
+          <div class="card span-6">
+            <h2>Sécurité du compte</h2>
+            <form id="pw-form">
+              <div class="field-row">
+                <div><label for="pw-cur">Mot de passe actuel</label><input id="pw-cur" type="password" autocomplete="current-password" required></div>
+                <div><label for="pw-new">Nouveau (12+ caractères)</label><input id="pw-new" type="password" autocomplete="new-password" minlength="12" required></div>
+              </div>
+              <label for="pw-totp">Code 2FA</label><input id="pw-totp" inputmode="numeric" autocomplete="one-time-code">
+              <button class="btn" type="submit">Changer le mot de passe</button>
+              <div class="error" id="pw-error" role="alert"></div>
+            </form>
+            <hr>
+            <h3>Double authentification (2FA)</h3>
+            <div id="totp-status" class="help"></div>
+            <form id="totp-begin-form">
+              <label for="totp-pass">Mot de passe</label><input id="totp-pass" type="password" autocomplete="current-password" required>
+              <button class="btn" type="submit">Configurer la 2FA</button>
+            </form>
+            <form id="totp-enable-form" class="hidden">
+              <p class="help">Ajoutez ce compte dans votre application d'authentification (Google Authenticator, Aegis…) avec la clé ci-dessous, puis saisissez le code affiché.</p>
+              <div class="picked num" id="totp-secret"></div>
+              <label for="totp-code">Code à 6 chiffres</label><input id="totp-code" inputmode="numeric" required>
+              <button class="btn primary" type="submit">Activer</button>
+            </form>
+            <div class="error" id="totp-error" role="alert"></div>
+          </div>
+          <div class="card span-12">
+            <h2>Limites de risque (moteur déterministe)</h2>
+            <p class="help">Appliquées à tous les bots, sans exception possible par un modèle. Modifiables uniquement sur le serveur (config/risk_limits.yaml).</p>
+            <div class="table-wrap" id="limits"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ================= DIALOGS ================= -->
+  <dialog id="dlg-bot" aria-labelledby="bot-title">
+    <form id="bot-form" method="dialog">
+      <div class="dlg-body">
+        <h2 id="bot-title">Nouveau bot</h2>
+        <label for="bot-name">Nom</label>
+        <input id="bot-name" maxlength="60" required>
+        <label for="bot-strategy">Stratégie</label>
+        <select id="bot-strategy"></select>
+        <p class="help" id="bot-strategy-help"></p>
+        <div id="pickers"></div>
+        <div class="field-row">
+          <div><label for="bot-tf">Unité de temps</label><select id="bot-tf"></select></div>
+          <div><label for="bot-dir">Sens</label><select id="bot-dir"></select></div>
+        </div>
+        <div class="field-row">
+          <div><label for="bot-risk">Risque par trade (% du capital)</label><input id="bot-risk" type="number" min="0.05" max="1.5" step="0.05" value="0.5" required></div>
+          <div><label for="bot-maxpos">Position maximale (% du capital)</label><input id="bot-maxpos" type="number" min="1" max="25" step="1" value="20" required></div>
+        </div>
+        <details>
+          <summary>Paramètres avancés</summary>
+          <div class="field-row" id="bot-params"></div>
+        </details>
+        <div class="error" id="bot-error" role="alert"></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn ghost" type="button" id="bot-cancel">Annuler</button>
+        <button class="btn" type="button" id="bot-backtest">Backtester</button>
+        <button class="btn primary" type="submit" id="bot-save">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-backtest" aria-labelledby="bt-title">
+    <div class="dlg-body">
+      <h2 id="bt-title">Backtest</h2>
+      <div id="bt-content"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" id="bt-close">Fermer</button></div>
+  </dialog>
+
+  <dialog id="dlg-confirm" aria-labelledby="cf-title">
+    <form id="cf-form" method="dialog">
+      <div class="dlg-body">
+        <h2 id="cf-title">Confirmer</h2>
+        <p id="cf-text" class="secondary"></p>
+        <div id="cf-fields"></div>
+        <div class="error" id="cf-error" role="alert"></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn ghost" type="button" id="cf-cancel">Annuler</button>
+        <button class="btn primary" type="submit" id="cf-ok">Confirmer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
