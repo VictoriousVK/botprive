@@ -55,11 +55,13 @@ class Template:
     allow_scale_in: bool = True
     holding: str = ""
     exit_rules: tuple[str, ...] = ("règles de sortie du modèle", "état de risque Jev flat / crise")
+    origin: str = ""  # e.g. the EA a template was ported from (shown as a badge)
 
     def public(self) -> dict[str, Any]:
         return {
             "key": self.key,
             "label": self.label,
+            "origin": self.origin,
             "description": self.description,
             "n_symbols": self.n_symbols,
             "timeframes": list(self.timeframes),
@@ -187,6 +189,7 @@ TEMPLATES: dict[str, Template] = {
         allow_scale_in=False,
         holding="intraday (quelques minutes à quelques heures)",
         exit_rules=ICT_EXITS,
+        origin="Votre EA · ICT_Ultimate_Pro_AllInOne v6.20",
     ),
     "ict_v6": Template(
         "ict_v6",
@@ -233,6 +236,7 @@ TEMPLATES: dict[str, Template] = {
         allow_scale_in=False,
         holding="intraday à quelques jours",
         exit_rules=ICT_EXITS,
+        origin="Votre EA · ICT_Ultimate_Pro_v6",
     ),
 }
 

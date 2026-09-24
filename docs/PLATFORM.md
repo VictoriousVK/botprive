@@ -86,6 +86,19 @@ ceux du broker.
    ```
 7. Ouvrez **http://127.0.0.1:8000** dans le navigateur du PC et connectez-vous.
 
+### Mettre à jour la plateforme (nouvelle version reçue en zip)
+
+1. Arrêtez la plateforme : **Ctrl+C** dans la fenêtre PowerShell de `start.ps1` (deux fois
+   si elle redémarre toute seule), puis fermez cette fenêtre.
+2. Décompressez le zip **dans le même dossier parent** que l'ancienne version et acceptez
+   « **Remplacer les fichiers** ». Vos données sont conservées : le zip ne contient ni
+   `.venv`, ni `var` (comptes, bots, historique), ni `.env.ps1` (vos réglages).
+   **Ne décompressez pas dans un nouveau dossier** : vous repartiriez de zéro.
+3. Dans PowerShell, dans le dossier du projet : `.\deploy\windows\install.ps1`, puis
+   `.\deploy\windows\start.ps1`.
+4. Dans le navigateur : **Ctrl+F5**. L'onglet **Bots → Stratégies disponibles** affiche le
+   numéro de version (par exemple « Version 0.2.0 · 5 stratégies »).
+
 ## 5. Utilisation
 
 1. **Réglages → Mode d'exécution** : commencez en **Papier** (prix MT5, aucun ordre).
@@ -285,6 +298,7 @@ Ce que la plateforme fait déjà :
 | « Historique insuffisant » | Augmentez « Nombre max. de barres dans le graphique » dans MT5 (Outils → Options → Graphiques), ou choisissez une unité de temps plus longue |
 | « trop de tentatives » à la connexion | Attendez 15 minutes |
 | Mot de passe oublié | Sur le PC : `.\.venv\Scripts\python.exe -m hedgefund.web reset-password --username vic` |
+| Je ne vois pas mes stratégies ICT | Vous utilisez encore l'ancienne version : suivez « Mettre à jour la plateforme » (§4). Elles apparaissent dans **Bots → Stratégies disponibles** et dans la liste « Stratégie » du formulaire. Elles ne s'affichent **pas dans MT5** : le calcul se fait dans la plateforme, MT5 ne voit que les ordres (commentaire `hf…`) |
 | « spread … > 0.15 ATR M5 » (bot ICT) | Spread du broker trop large par rapport à la volatilité (souvent la nuit ou avant les annonces) : c'est le filtre de l'EA. Réglable dans les paramètres avancés |
 | « hors fenêtre Silver Bullet et hors macro » | Normal : le bot ICT Pro ne cherche des setups que dans les fenêtres et macros de New York |
 | « confidence … < required 0.62 » | Jev juge la situation trop incertaine (volatilité anormale, données manquantes) : aucune nouvelle position, les positions ouvertes restent gérées |

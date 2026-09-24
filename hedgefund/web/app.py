@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from hedgefund.bots.engine import BotEngine, EngineError
+from hedgefund import __version__
 from hedgefund.bots.templates import DIRECTIONS, TEMPLATES, TIMEFRAMES, new_bot_id, validate_bot
 from hedgefund.core.ledger import Kind
 from hedgefund.mt5.catalog import CATEGORY_LABELS
@@ -146,6 +147,8 @@ def create_app(engine: BotEngine, auth: AuthService, settings: WebSettings | Non
         h["Cross-Origin-Opener-Policy"] = "same-origin"
         if request.url.path.startswith("/api/"):
             h["Cache-Control"] = "no-store"
+        elif request.url.path.startswith("/static/") or request.url.path == "/":
+            h["Cache-Control"] = "no-cache"  # revalidate, so an update is picked up at once
         if settings.hsts:
             h["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
@@ -279,7 +282,7 @@ def create_app(engine: BotEngine, auth: AuthService, settings: WebSettings | Non
 
     @app.get("/api/strategies")
     def strategies(s: Session = Depends(session)) -> dict:
-        return {"strategies": [t.public() for t in TEMPLATES.values()], "timeframes": TIMEFRAMES, "directions": DIRECTIONS, "categories": CATEGORY_LABELS}
+        return {"strategies": [t.public() for t in TEMPLATES.values()], "timeframes": TIMEFRAMES, "directions": DIRECTIONS, "categories": CATEGORY_LABELS, "version": __version__}
 
     @app.get("/api/symbols")
     def symbols(q: str = "", category: str = "", s: Session = Depends(session)) -> list[dict]:

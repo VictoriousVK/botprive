@@ -345,6 +345,7 @@ def test_templates_restrict_timeframes_and_validate_flags():
     assert validate_bot(bot("ict_v6", "15m"), feed.specs()) == []
     assert any("0 ou 1" in p for p in validate_bot(bot(params={"enable_sb": 0.5}), feed.specs()))
     assert TEMPLATES["ict_pro"].public()["params"]["enable_sb"]["kind"] == "bool"
+    assert "v6.20" in TEMPLATES["ict_pro"].public()["origin"] and TEMPLATES["trend"].public()["origin"] == ""
     spec = spec_for(bot())
     assert spec.params["point"] == feed.spec("XAUUSD").point and spec.timeframe == "1m" and spec.jev.profile == "ict"
     assert {"1m", "5m"} <= set(MT5_TIMEFRAMES)

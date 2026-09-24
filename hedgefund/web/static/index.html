@@ -98,12 +98,27 @@
 
       <!-- ---------- bots ---------- -->
       <section id="tab-bots" class="tab hidden" role="tabpanel">
+        <details class="card howto">
+          <summary>Comment ça marche ?</summary>
+          <ol>
+            <li><strong>Une stratégie</strong> est une méthode de décision (par exemple votre EA ICT). Elle ne trade pas seule.</li>
+            <li><strong>Un bot</strong> = une stratégie + un actif (or, Nasdaq, Bitcoin…) + vos réglages de risque. Créez-le avec « + Nouveau bot » ou avec le bouton d'une stratégie ci-dessous.</li>
+            <li><strong>Backtestez</strong>, puis <strong>démarrez</strong> le bot. À chaque clôture de bougie, il propose une action ; Jev et le moteur de risque la valident ou la refusent (la raison s'affiche sur le bot).</li>
+            <li>Commencez en mode <strong>Papier</strong> (Réglages), puis <strong>MT5 sur compte démo</strong>. Le tableau de bord montre les résultats en direct.</li>
+          </ol>
+        </details>
         <div class="toolbar">
           <h2>Vos bots</h2>
           <span class="spacer"></span>
           <button id="new-bot-btn" class="btn primary" type="button">+ Nouveau bot</button>
         </div>
         <div class="bots" id="bots"></div>
+        <div class="toolbar section-gap">
+          <h2>Stratégies disponibles</h2>
+          <span class="spacer"></span>
+          <span class="muted" id="app-version"></span>
+        </div>
+        <div class="bots" id="strategies"></div>
       </section>
 
       <!-- ---------- journal ---------- -->

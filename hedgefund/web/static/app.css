@@ -145,6 +145,15 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
 /* ---------- bots ---------- */
 .bots { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 .bot-card h3 { font-size: 1.02rem; }
+.section-gap { margin-top: 28px; }
+.strategy-card { display: flex; flex-direction: column; gap: 6px; }
+.strategy-card h3 { font-size: 1rem; }
+.strategy-card .actions { margin-top: auto; padding-top: 6px; }
+.small { font-size: 0.8rem; }
+.badge.accent { border-color: var(--accent); color: var(--accent); white-space: normal; }
+.howto { margin-bottom: 16px; }
+.howto summary { margin-top: 0; font-weight: 600; color: var(--text-primary); }
+.howto ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px; color: var(--text-secondary); }
 .bot-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .bot-msg { font-size: 0.85rem; color: var(--text-secondary); min-height: 2.4em; }
 .bot-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }

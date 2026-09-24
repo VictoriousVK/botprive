@@ -87,7 +87,7 @@
   function showApp() {
     $("login-view").classList.add("hidden");
     $("app-view").classList.remove("hidden");
-    api("/api/strategies").then(function (m) { state.meta = m; });
+    api("/api/strategies").then(function (m) { state.meta = m; renderStrategies(); });
     refresh();
     startPolling();
   }
@@ -312,11 +312,28 @@
   }
   $("new-bot-btn").addEventListener("click", function () { openBotForm(null); });
 
+  function renderStrategies() {
+    var m = state.meta, box = $("strategies");
+    box.textContent = "";
+    $("app-version").textContent = "Version " + m.version + " · " + m.strategies.length + " stratégies";
+    var yours = function (s) { return s.origin ? 0 : 1; };
+    m.strategies.slice().sort(function (a, b) { return yours(a) - yours(b); }).forEach(function (s) {
+      var tfs = s.timeframes.map(function (k) { return m.timeframes[k] || k; }).join(", ");
+      box.appendChild(el("div", { cls: "card strategy-card" }, [
+        el("h3", { text: s.label }),
+        s.origin ? el("div", { cls: "bot-meta" }, [el("span", { cls: "badge accent", text: s.origin })]) : null,
+        el("p", { cls: "help", text: s.description }),
+        el("p", { cls: "muted small", text: (s.n_symbols === 2 ? "2 actifs" : "1 actif") + " · unités de temps : " + tfs }),
+        el("div", { cls: "actions" }, [el("button", { cls: "btn primary small", type: "button", onclick: function () { openBotForm(null, s.key); }, text: "Créer un bot avec cette stratégie" })]),
+      ]));
+    });
+  }
+
   // ---------- bot form & symbol picker ----------
   var picks = [];
   function strategyMeta(key) { return (state.meta.strategies || []).filter(function (s) { return s.key === key; })[0]; }
 
-  function openBotForm(bot) {
+  function openBotForm(bot, strategyKey) {
     if (!state.meta) { toast("Chargement…"); return; }
     state.editing = bot;
     $("bot-title").textContent = bot ? "Modifier « " + bot.name + " »" : "Nouveau bot";
@@ -326,7 +343,7 @@
     var dir = $("bot-dir"); dir.textContent = "";
     Object.keys(state.meta.directions).forEach(function (k) { dir.appendChild(el("option", { value: k, text: state.meta.directions[k] })); });
     $("bot-name").value = bot ? bot.name : "";
-    sel.value = bot ? bot.strategy : "trend";
+    sel.value = bot ? bot.strategy : (strategyKey || "trend");
     dir.value = bot ? bot.direction : "both";
     $("bot-risk").value = bot ? bot.risk_per_trade_pct : 0.5;
     $("bot-maxpos").value = bot ? bot.max_position_pct : 20;

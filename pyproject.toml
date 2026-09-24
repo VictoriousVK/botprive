@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hedgefund"
-version = "0.1.0"
+version = "0.2.0"
 description = "One-person 24/7 AI hedge fund: Opus 5.5 research, orchestrated workflows, Jev fast decisions, deterministic risk and execution."
 requires-python = ">=3.11"
 dependencies = ["pyyaml>=6", "requests>=2.31"]
