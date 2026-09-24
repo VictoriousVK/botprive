@@ -1,0 +1,18 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[research,dev]"
+      - run: ruff check hedgefund tests --select F,E9,B --ignore B905,B008
+      - run: python -m hedgefund validate
+      - run: pytest -q
