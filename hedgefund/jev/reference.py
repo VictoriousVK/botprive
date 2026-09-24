@@ -22,6 +22,9 @@ NATURAL_REGIMES = {
     "macro": {Regime.TRENDING, Regime.MEAN_REVERTING},
     "relative_value": {Regime.MEAN_REVERTING},
     "mean_reversion": {Regime.MEAN_REVERTING},
+    # Intraday ICT setups (ported EAs): the setup itself is the thesis; the regime only has to
+    # rule out crisis / abnormal volatility. "trending" = the H1 structure has a bias.
+    "ict": {Regime.TRENDING, Regime.MEAN_REVERTING},
 }
 
 
@@ -67,6 +70,22 @@ class ReferenceJev(AnswerEngine):
         mr = max(0.0, 1.0 - c - hv - tr)
         return {"trending": tr, "mean_reverting": mr, "high_vol": hv, "crisis": c}
 
+    @staticmethod
+    def ict_regime_probs(f: dict[str, float]) -> dict[str, float]:
+        """Crisis from the daily state (as above), high volatility from the daily state or an
+        intraday ATR spike (the EA's 'ATR > average x 2.5' filter); the rest is 'trending' when
+        the H1 structure has a break-of-structure bias, else 'mean_reverting'."""
+        c = hv_d = 0.0
+        if f.get("rv_ratio") is not None:
+            dd = min(f.get("dd_6d", 0.0), f.get("ret_1d", 0.0))
+            c = _sig(4.0 * (f["rv_ratio"] - 2.3)) * _sig(40.0 * (-dd - 0.12))
+            hv_d = _sig(5.0 * (f["rv_ratio"] - 1.6))
+        spike = _sig(6.0 * (f.get("ict_atr_ratio", 1.0) - 2.5))
+        hv = max(hv_d, spike) * (1 - c)
+        rest = max(0.0, 1.0 - c - hv)
+        trending = abs(f.get("ict_htf_bias", 0.0)) > 0.5
+        return {"trending": rest if trending else 0.0, "mean_reverting": 0.0 if trending else rest, "high_vol": hv, "crisis": c}
+
     # ---- direction (profile-specific evidence for the candidate package direction) ----
     @staticmethod
     def direction_logits(profile: str, f: dict[str, float]) -> dict[str, float]:
@@ -96,6 +115,11 @@ class ReferenceJev(AnswerEngine):
             if g is None or sma is None:
                 return {"long": 0.0, "short": -8.0, "flat": flat}
             return {"long": 150.0 * (g - 0.004) + 8.0 * sma + flat, "short": -8.0, "flat": flat}
+        if profile == "ict":
+            d = f.get("ict_dir")
+            if d is None:
+                return {"long": 0.0, "short": 0.0, "flat": flat}
+            return {"long": 3.0 * d, "short": -3.0 * d, "flat": 0.5}
         if profile in ("relative_value", "mean_reversion"):
             z = f.get("ratio_z") if profile == "relative_value" else f.get("price_z")
             rer = f.get("ratio_er", 0.5) if profile == "relative_value" else f.get("price_er", 0.5)
@@ -121,13 +145,15 @@ class ReferenceJev(AnswerEngine):
             return abs(f.get("ratio_z", 0.0)) / 2.5
         if profile == "mean_reversion":
             return abs(f.get("price_z", 0.0)) / 2.5
+        if profile == "ict":
+            return f.get("ict_setup", 0.0)  # set by the strategy from its own setup score
         return 0.0
 
     def answers(self, state: JevState, schema: JevSchema) -> dict[str, dict[str, Any]]:
         f = state.features
         profile = state.profile
 
-        regime_p = self.regime_probs(f)
+        regime_p = self.ict_regime_probs(f) if profile == "ict" else self.regime_probs(f)
         p_crisis, p_hv = regime_p["crisis"], regime_p["high_vol"]
         regime = max(regime_p, key=regime_p.get)
         fit = 1.0 if Regime(regime) in NATURAL_REGIMES.get(profile, set()) else 0.0
@@ -146,6 +172,7 @@ class ReferenceJev(AnswerEngine):
         bz = abs(f.get("bar_ret_z", 0.0))
         tox_mean = 0.3 + 0.6 * max(0.0, bz - 2.0) + (0.8 * max(0.0, math.log(vr) - 0.7) if vr else 0.5)
         tox_mean += 8.0 * max(0.0, abs(f.get("oi_chg_1d", 0.0)) - 0.06)
+        tox_mean += 1.0 * max(0.0, f.get("ict_atr_ratio", 1.0) - 2.0)  # intraday volatility spike
         tox_p = _level_dist(tox_mean, schema.question("toxic_flow").levels)
 
         exp_level = lambda p: sum(i * v for i, v in enumerate(p.values()))  # noqa: E731

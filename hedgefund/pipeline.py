@@ -86,6 +86,19 @@ class DecisionPipeline:
                 results.append(self._decide_one(rt, sig, view, ts, nav, blocked_symbols, rt.spec.id in halted))
         return results
 
+    def force_exit(self, strategy_id: str, package: str, reason: str, ts: int) -> list[PolicyResult]:
+        """Exit one package now, outside the bar loop (e.g. a stop touched between bar closes).
+        Goes through the policy like any exit, so it is logged the same way."""
+        out = []
+        for rt in self.runtimes:
+            if rt.spec.id != strategy_id:
+                continue
+            for p in rt.spec.packages:
+                if p.key == package:
+                    sig = Signal(rt.spec.id, p.key, p.legs, Direction.FLAT, 1.0, ts, reason)
+                    out.append(self._decide_one(rt, sig, None, ts, self.portfolio.nav(), frozenset()))  # type: ignore[arg-type]
+        return out
+
     def _decide_one(self, rt: StrategyRuntime, sig: Signal, view: MarketView, ts: int, nav: float, blocked: set[str] | frozenset, halted: bool = False) -> PolicyResult:
         book_notional = {s: info.notional for s, info in self.portfolio.book_positions(rt.spec.id).items()}
         decision = None

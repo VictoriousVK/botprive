@@ -265,7 +265,7 @@
       box.appendChild(el("div", { cls: "card bot-card" }, [
         el("div", { cls: "card-head" }, [el("h3", { text: b.name }), el("span", { cls: "badge" }, [el("span", { cls: "dot " + status[0] }), status[1]])]),
         el("div", { cls: "bot-meta" }, [
-          el("span", { cls: "badge", text: b.strategy_label }), el("span", { cls: "badge", text: b.symbols.join(" / ") }),
+          el("span", { cls: "badge clip", text: b.strategy_label, title: b.strategy_label }), el("span", { cls: "badge", text: b.symbols.join(" / ") }),
           el("span", { cls: "badge", text: tfs[b.timeframe] || b.timeframe }), el("span", { cls: "badge", text: dirs[b.direction] || b.direction }),
           el("span", { cls: "badge", text: "risque " + num(b.risk_per_trade_pct, 2) + " %" }),
         ]),
@@ -323,35 +323,44 @@
     $("bot-error").textContent = "";
     var sel = $("bot-strategy"); sel.textContent = "";
     state.meta.strategies.forEach(function (s) { sel.appendChild(el("option", { value: s.key, text: s.label })); });
-    var tf = $("bot-tf"); tf.textContent = "";
-    Object.keys(state.meta.timeframes).forEach(function (k) { tf.appendChild(el("option", { value: k, text: state.meta.timeframes[k] })); });
     var dir = $("bot-dir"); dir.textContent = "";
     Object.keys(state.meta.directions).forEach(function (k) { dir.appendChild(el("option", { value: k, text: state.meta.directions[k] })); });
     $("bot-name").value = bot ? bot.name : "";
     sel.value = bot ? bot.strategy : "trend";
-    tf.value = bot ? bot.timeframe : "4h";
     dir.value = bot ? bot.direction : "both";
     $("bot-risk").value = bot ? bot.risk_per_trade_pct : 0.5;
     $("bot-maxpos").value = bot ? bot.max_position_pct : 20;
     picks = bot ? bot.symbols.slice() : [];
-    onStrategyChange(bot ? bot.params : null);
+    onStrategyChange(bot ? bot.params : null, bot ? bot.timeframe : null);
     $("dlg-bot").showModal();
   }
   $("bot-strategy").addEventListener("change", function () { onStrategyChange(null); });
   $("bot-cancel").addEventListener("click", function () { $("dlg-bot").close(); });
 
-  function onStrategyChange(params) {
+  function onStrategyChange(params, timeframe) {
     var s = strategyMeta($("bot-strategy").value);
     $("bot-strategy-help").textContent = s.description;
     picks = picks.slice(0, s.n_symbols);
     if (s.key === "pair") $("bot-dir").value = "both";
+    var tf = $("bot-tf"), keep = timeframe || tf.value;
+    tf.textContent = "";
+    s.timeframes.forEach(function (k) { tf.appendChild(el("option", { value: k, text: state.meta.timeframes[k] || k })); });
+    tf.value = s.timeframes.indexOf(keep) >= 0 ? keep : s.default_timeframe;
     var box = $("pickers"); box.textContent = "";
     for (var i = 0; i < s.n_symbols; i++) box.appendChild(symbolPicker(i, s.n_symbols));
     var pbox = $("bot-params"); pbox.textContent = "";
+    var group = null;
     Object.keys(s.params).forEach(function (k) {
-      var p = s.params[k];
+      var p = s.params[k], value = params && params[k] !== undefined ? params[k] : p.default;
+      if (p.group && p.group !== group) { group = p.group; pbox.appendChild(el("h4", { cls: "param-group", text: group })); }
+      if (p.kind === "bool") {
+        var cb = el("input", { type: "checkbox", id: "param-" + k, "data-param": k });
+        cb.checked = Number(value) >= 0.5;
+        pbox.appendChild(el("div", { cls: "check" }, [cb, el("label", { "for": "param-" + k, text: p.label })]));
+        return;
+      }
       var input = el("input", { type: "number", id: "param-" + k, "data-param": k, min: p.min, max: p.max, step: "any" });
-      input.value = params && params[k] !== undefined ? params[k] : p.default;
+      input.value = value;
       pbox.appendChild(el("div", {}, [el("label", { "for": "param-" + k, text: p.label }), input, el("div", { cls: "help", text: "entre " + p.min + " et " + p.max })]));
     });
   }
@@ -411,7 +420,7 @@
 
   function botPayload() {
     var params = {};
-    Array.prototype.forEach.call(document.querySelectorAll("#bot-params input"), function (i) { params[i.getAttribute("data-param")] = Number(i.value); });
+    Array.prototype.forEach.call(document.querySelectorAll("#bot-params input"), function (i) { params[i.getAttribute("data-param")] = i.type === "checkbox" ? (i.checked ? 1 : 0) : Number(i.value); });
     return {
       name: $("bot-name").value.trim() || ($("bot-strategy").selectedOptions[0].textContent + " " + picks.join("/")),
       strategy: $("bot-strategy").value, symbols: picks.filter(Boolean), timeframe: $("bot-tf").value, direction: $("bot-dir").value,

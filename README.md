@@ -5,6 +5,9 @@ This repository holds three things:
 - **Web platform for MetaTrader 5** (`hedgefund/web`, `hedgefund/mt5`, `hedgefund/bots`): a
   secure, responsive dashboard to create bots on any asset your broker offers (gold, Nasdaq,
   crypto, forex, oil…), backtest them, start and stop them, and follow the results live.
+  It includes the operator's two ICT Expert Advisors ported to Python
+  (`hedgefund/strategy/library/ict*.py`): ICT Ultimate Pro v6 (EMA cross + Silver Bullet)
+  and v6.20 (Silver Bullet M5 + Macro Breaker M1).
   **Guide in French: [docs/PLATFORM.md](docs/PLATFORM.md).** Quick start on Windows:
   `.\deploy\windows\install.ps1`, then
   `.\.venv\Scripts\python.exe -m hedgefund.web create-user --username YOU`, then

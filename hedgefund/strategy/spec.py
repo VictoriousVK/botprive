@@ -72,6 +72,8 @@ class StrategyRisk:
     max_package_notional_pct_nav: float
     rebalance_threshold: float = 0.25
     exit_on_crisis: bool = True
+    # False: never add to an open position (setups with a fixed stop and target, partial exits).
+    allow_scale_in: bool = True
 
 
 @dataclass(frozen=True)
@@ -257,7 +259,8 @@ def spec_to_dict(spec: StrategySpec) -> dict[str, Any]:
         "exit_rules": list(spec.exit_rules),
         "expected_holding": spec.expected_holding,
         "params": dict(spec.params),
-        "risk": vars(spec.risk).copy(),
+        # allow_scale_in is omitted at its default so existing spec hashes are unchanged.
+        "risk": {k: v for k, v in vars(spec.risk).items() if not (k == "allow_scale_in" and v)},
         "costs": vars(spec.costs).copy(),
         "liquidity": {"min_bar_notional_volume": spec.min_bar_notional_volume},
         "jev": {

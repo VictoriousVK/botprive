@@ -146,10 +146,13 @@ class MarketData:
     open_interest: dict[str, Series] = field(default_factory=dict)  # perp symbol -> OI notional (quote)
     macro: dict[str, Series] = field(default_factory=dict)  # e.g. "stablecoin_supply_usd"
     provenance: dict[str, dict] = field(default_factory=dict)
+    # Other timeframes of the same symbols (e.g. "5m", "1h", "1d" next to a 1m base). Bars keep
+    # the close-time convention, so a view at t only ever sees aux bars that closed by t.
+    aux: dict[str, "MarketData"] = field(default_factory=dict)
 
     @property
     def synthetic(self) -> bool:
-        return any(p.get("synthetic") for p in self.provenance.values())
+        return any(p.get("synthetic") for p in self.provenance.values()) or any(a.synthetic for a in self.aux.values())
 
     def symbols(self) -> list[str]:
         return sorted(self.bars)
@@ -173,6 +176,21 @@ class MarketView:
         self.data = data
         self.t = t
         self._idx: dict[str, int] = {}
+        self._aux: dict[str, MarketView] = {}
+
+    def aux(self, interval: str) -> "MarketView | None":
+        """Point-in-time view of another timeframe (None if it was not loaded)."""
+        v = self._aux.get(interval)
+        if v is None:
+            d = self.data.aux.get(interval)
+            if d is None:
+                return None
+            v = self._aux[interval] = MarketView(d, self.t)
+        return v
+
+    def series(self, symbol: str) -> tuple[BarSeries, int]:
+        """The raw bar series and the number of bars visible at t (bars[:n] are knowable)."""
+        return self.data.bars[symbol], self._i(symbol)
 
     def _i(self, symbol: str) -> int:
         i = self._idx.get(symbol)

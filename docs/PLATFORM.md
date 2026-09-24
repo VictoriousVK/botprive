@@ -5,8 +5,10 @@ téléphone). Elle sert à :
 
 - **choisir l'actif** : or, argent, Nasdaq, S&P 500, DAX, Bitcoin, Ethereum, forex,
   pétrole… (la liste vient directement de votre broker) ;
-- **choisir une stratégie** : suivi de tendance, retour à la moyenne, ou paire (valeur
-  relative, par exemple or/argent ou Nasdaq/S&P 500) ;
+- **choisir une stratégie** : suivi de tendance, retour à la moyenne, paire (valeur
+  relative, par exemple or/argent ou Nasdaq/S&P 500), ou **vos deux EA ICT** portés sur la
+  plateforme : *ICT Ultimate Pro v6* (croisement EMA + Silver Bullet) et *ICT Ultimate Pro
+  v6.20* (Silver Bullet + Macro Breaker), voir §5 bis ;
 - **backtester** un bot sur l'historique MT5 avant de le lancer ;
 - **démarrer ou arrêter** chaque bot, et tout arrêter d'un clic (**arrêt d'urgence**) ;
 - **suivre les résultats** dans un tableau de bord : valeur du portefeuille, drawdown,
@@ -94,8 +96,11 @@ ceux du broker.
    - choisissez l'**actif** : filtrez par famille (Métaux, Indices, Crypto, Forex…) ou
      tapez « or », « nasdaq », « btc »… La fiche affiche le prix, le spread et la **taille
      minimale d'un ordre** chez votre broker ;
-   - choisissez l'unité de temps (15 min, 1 h, 4 h, 1 jour), le sens (achat et vente, achat
-     seul, vente seule), le risque par trade (0,05 % à 1,5 %) et la position maximale ;
+   - choisissez l'unité de temps (proposée selon la stratégie : 1 min pour ICT Pro v6.20,
+     5 min à 1 h pour ICT v6, 15 min à 1 jour pour les autres), le sens (achat et vente,
+     achat seul, vente seule), le risque par trade (0,05 % à 1,5 %) et la position maximale ;
+   - **Paramètres avancés** : les réglages de la stratégie (pour les EA ICT : fenêtres,
+     macros, scores, filtres, break-even, clôture partielle, stop suiveur, time stop) ;
    - cliquez sur **Backtester** pour voir le résultat sur l'historique MT5 (coûts inclus,
      swaps non inclus) ;
    - puis **Enregistrer**, et **Démarrer**.
@@ -108,6 +113,60 @@ ceux du broker.
 et bloque tout nouvel ordre. Le réarmement demande votre mot de passe (et la 2FA si elle
 est activée). Vous pouvez aussi créer un fichier `var\KILL_SWITCH`, ce qui fonctionne
 même si l'interface ne répond plus.
+
+## 5 bis. Vos EA ICT sur la plateforme
+
+Les deux Expert Advisors MQL5 ont été réécrits en Python, en reprenant leurs algorithmes et
+leurs valeurs par défaut. Chaque bot passe ensuite par les mêmes garde-fous que les autres :
+avis de Jev, moteur de risque, arrêt d'urgence, journal.
+
+| Stratégie dans la plateforme | EA d'origine | Unité de temps | Ce qu'elle fait |
+|---|---|---|---|
+| **ICT Ultimate Pro v6.20 (Silver Bullet + Macro Breaker)** | `ICT_Ultimate_Pro_AllInOne.mq5` v6.20 | 1 minute (+ contexte M5, H1, D1) | Silver Bullet M5 dans les fenêtres 03-04, 10-11, 14-15 heure de New York (sweep → MSS avec displacement → 1ère FVG) ; Macro Breaker M1 dans les macros ICT (stop hunt → breaker confirmé → retest) ; passe stricte puis relâchée ; score ; objectif sur le pool de liquidité opposé (RR ≥ 2) |
+| **ICT Ultimate Pro v6 (croisement EMA + Silver Bullet)** | `ICT_Ultimate_Pro_v6.mq5` + `ICT_RiskGuard.mqh` | 5 min, 15 min ou 1 h | Croisement EMA 7/21 filtré par la EMA 50 ; Silver Bullet v6 prioritaire dans les fenêtres (heure serveur 02-05, 09-12, 13-16, 18-21) ; filtres de phase AMD, de volatilité et de spread |
+
+**Repris à l'identique** : carte de liquidité (PDH/PDL, PWH/PWL, IPDA 20/40/60, sessions
+Asie/Londres/NY, swings H1 et M5, equal highs/lows, swings M1), niveaux de référence (true
+open minuit et 07:30, opening ranges, TBR, NDOG/NWOG, ADR), biais H1 par cassure de
+structure, sweeps, MSS, FVG (mitigation, BPR, OTE), breakers et Unicorn, scores, passe
+relâchée, arbitrage SB/MB, horloge de New York **avec les heures d'été américaine et
+européenne**, plafonds de trades par jour et par fenêtre, vendredi après 12 h NY, spread
+maximal en fraction de l'ATR, filtre ADR, break-even, **une** clôture partielle, stop
+suiveur ATR / swing, time stop, fermeture programmée.
+
+**Adapté à la plateforme** (à connaître) :
+
+- **Stops et objectifs virtuels.** Aucun SL/TP n'est posé chez le broker. La plateforme les
+  surveille à chaque clôture de bougie et **toutes les 15 secondes sur le prix live**, puis
+  ferme au marché. Dans un marché rapide, la sortie peut se faire un peu au-delà du stop.
+  Si la plateforme est arrêtée, les positions ne sont plus surveillées : gardez-la en marche
+  24 h/24 (§7) ou arrêtez les bots avant de l'éteindre.
+- **Entrées limites.** Quand l'EA posait un ordre limite (bord de la FVG ou du breaker), la
+  plateforme arme une entrée en attente, prise au marché dès qu'une bougie touche le niveau.
+  Elle est annulée à l'expiration, si une clôture traverse la zone, ou si l'objectif est
+  atteint avant.
+- **Taille de position.** C'est la plateforme qui calcule la taille : risque % du capital ÷
+  distance du stop, **plafonnée par la position maximale du bot (25 % du capital au plus)**.
+  Avec les stops très serrés de l'or en M1/M5, ce plafond s'applique presque toujours : le
+  risque réel par trade est alors **nettement plus faible** que dans l'EA, qui pouvait
+  utiliser un fort effet de levier. C'est volontaire.
+- **Une position par bot**, et **pas d'ordre contraire entre bots** sur le même actif
+  (anti-couverture, comme `AllowHedging = false`).
+- **Jev et le moteur de risque ont le dernier mot.** Un setup valide peut être refusé
+  (message « confidence … < required 0.62 », « regime high_vol… ») si la volatilité est
+  anormale ou si les données manquent. La raison s'affiche sur le bot et dans le Journal.
+- **Non repris** : filtre d'annonces économiques (le calendrier MQL5 n'est pas accessible
+  depuis Python : évitez de laisser tourner le bot pendant le NFP/CPI/FOMC, ou arrêtez-le),
+  apprentissage adaptatif et modèle ONNX, mode « order block après FVG », plafond de perte
+  hebdomadaire (la perte journalière de 3 % et l'arrêt sur drawdown de la plateforme
+  s'appliquent), confirmation UT Bot (désactivée par défaut dans l'EA).
+
+**Mise en route conseillée** : un bot *ICT Pro v6.20* sur XAUUSD en mode **Papier** pendant
+au moins 2 semaines, en comparant ses setups à ceux de l'EA sur le même compte démo ; puis
+mode **MT5 sur compte démo**. Le backtest de la plateforme porte sur 5 jours de M1
+(ICT Pro) ou environ 4 000 bougies (ICT v6) : c'est un contrôle du fonctionnement, pas une
+preuve de rentabilité. Les positions ouvertes par vos EA (autres numéros magiques) ne sont
+jamais touchées par la plateforme.
 
 ## 6. Accéder à la plateforme depuis votre téléphone (mise en ligne)
 
@@ -206,6 +265,8 @@ Ce que la plateforme fait déjà :
   2 400 USD d'exposition. Certains ordres calculés par le moteur de risque peuvent être
   trop petits et sont alors refusés (c'est affiché).
 - **Écarts du week-end et spreads élargis** hors séance : le stop peut être dépassé.
+- **Stratégies ICT** : stops virtuels, taille plafonnée et filtre d'annonces non repris
+  (§5 bis).
 - **Heure du serveur** : la plateforme détecte le décalage horaire du broker quand le
   marché est ouvert. Réglez `MT5_SERVER_UTC_OFFSET_HOURS` pour les périodes de fermeture.
 - **Le connecteur MT5 est testé contre un simulateur de terminal, pas contre votre broker.**
@@ -224,4 +285,7 @@ Ce que la plateforme fait déjà :
 | « Historique insuffisant » | Augmentez « Nombre max. de barres dans le graphique » dans MT5 (Outils → Options → Graphiques), ou choisissez une unité de temps plus longue |
 | « trop de tentatives » à la connexion | Attendez 15 minutes |
 | Mot de passe oublié | Sur le PC : `.\.venv\Scripts\python.exe -m hedgefund.web reset-password --username vic` |
+| « spread … > 0.15 ATR M5 » (bot ICT) | Spread du broker trop large par rapport à la volatilité (souvent la nuit ou avant les annonces) : c'est le filtre de l'EA. Réglable dans les paramètres avancés |
+| « hors fenêtre Silver Bullet et hors macro » | Normal : le bot ICT Pro ne cherche des setups que dans les fenêtres et macros de New York |
+| « confidence … < required 0.62 » | Jev juge la situation trop incertaine (volatilité anormale, données manquantes) : aucune nouvelle position, les positions ouvertes restent gérées |
 | Ordres refusés « below min notional » | Capital ou risque trop faible pour la taille minimale du broker : augmentez le risque par trade ou choisissez un actif avec une taille minimale plus petite |

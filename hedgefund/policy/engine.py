@@ -2,6 +2,7 @@
 
 Precedence (first match wins):
   1. Strategy exit signal (FLAT)            -> EXIT. Exits never wait for Jev.
+     Strategy partial exit (reduce_to)      -> REDUCE the held position. Never waits for Jev.
   2. Jev unavailable / invalid              -> no new risk; hold existing.
   3. Regime = crisis                        -> no new risk, escalate; EXIT if spec.exit_on_crisis.
   4. Jev confidence < max(floor, spec min)  -> no new risk, escalate; hold existing.
@@ -125,6 +126,10 @@ class PolicyEngine:
         if signal.is_exit:
             return result(Action.EXIT, flat_targets, "strategy exit signal") if holding else result(Action.NO_TRADE, flat_targets, "exit signal, nothing held")
 
+        # 1b. Strategy partial take-profit on the held position
+        if signal.reduce_to is not None and holding and cur_dir is signal.direction and 0.0 < signal.reduce_to < 1.0:
+            return result(Action.REDUCE, {s: v * signal.reduce_to for s, v in current.items()}, f"strategy partial exit: keep {signal.reduce_to:.0%}", direction=cur_dir)
+
         # 2. Jev unavailable
         if decision is None:
             return hold(f"{unavailable_reason}: no new risk")
@@ -207,7 +212,7 @@ class PolicyEngine:
             if cur_size > base_notional * (1 + thr):
                 shrink = {leg.symbol: sign * leg.weight * base_notional for leg in signal.legs}
                 return result(Action.ADJUST, shrink, "position above risk budget: shrink", notional=base_notional, sizing=sizing)
-            if notional > cur_size * (1 + thr):
+            if notional > cur_size * (1 + thr) and spec.risk.allow_scale_in:
                 return result(Action.ADJUST, targets, "quality-adjusted target materially larger: grow", notional=notional, sizing=sizing)
             return result(Action.HOLD, dict(current), "within rebalance band", notional=notional, sizing=sizing)
         return result(Action.ENTER, targets, "all entry gates passed", notional=notional, sizing=sizing)

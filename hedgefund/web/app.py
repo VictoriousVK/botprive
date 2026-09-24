@@ -86,9 +86,9 @@ class CodeIn(BaseModel):
 
 class BotIn(BaseModel):
     name: str = Field(min_length=1, max_length=60)
-    strategy: Literal["trend", "mean_reversion", "pair"]
+    strategy: Literal["trend", "mean_reversion", "pair", "ict_pro", "ict_v6"]
     symbols: list[str] = Field(min_length=1, max_length=2)
-    timeframe: Literal["15m", "1h", "4h", "1d"]
+    timeframe: Literal["1m", "5m", "15m", "1h", "4h", "1d"]
     direction: Literal["both", "long", "short"] = "both"
     risk_per_trade_pct: float = Field(ge=0.05, le=1.5)
     max_position_pct: float = Field(ge=1, le=25)

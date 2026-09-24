@@ -19,7 +19,7 @@ from hedgefund.data.sources import DataSourceError
 from hedgefund.mt5.catalog import SymbolSpec, spec_from_info
 from hedgefund.mt5.client import MT5Client
 
-TIMEFRAMES = {"15m": ("TIMEFRAME_M15", 15), "1h": ("TIMEFRAME_H1", 16385), "4h": ("TIMEFRAME_H4", 16388), "1d": ("TIMEFRAME_D1", 16408)}
+TIMEFRAMES = {"1m": ("TIMEFRAME_M1", 1), "5m": ("TIMEFRAME_M5", 5), "15m": ("TIMEFRAME_M15", 15), "1h": ("TIMEFRAME_H1", 16385), "4h": ("TIMEFRAME_H4", 16388), "1d": ("TIMEFRAME_D1", 16408)}
 MAX_OFFSET_S = 14 * 3600
 
 

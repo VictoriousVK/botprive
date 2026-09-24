@@ -25,8 +25,9 @@ from hedgefund.bots.templates import TEMPLATES, build_spec, min_trade_notional, 
 from hedgefund.config import FundConfig, Instrument
 from hedgefund.core.clock import Clock, SystemClock
 from hedgefund.core.ledger import Kind, Ledger
-from hedgefund.core.timeutil import DAY_MS, MINUTE_MS, utc_iso
+from hedgefund.core.timeutil import DAY_MS, MINUTE_MS, interval_ms, utc_iso
 from hedgefund.data.quality import check_market_data
+from hedgefund.data.series import MarketData
 from hedgefund.execution.paper import PaperVenue
 from hedgefund.jev.reference import ReferenceJev
 from hedgefund.monitoring.alerts import AlertSink
@@ -35,6 +36,8 @@ from hedgefund.mt5.venue import MT5Venue
 from hedgefund.ops.assembly import build_stack
 from hedgefund.ops.runner import replay_books
 from hedgefund.pipeline import DecisionPipeline, StrategyRuntime
+from hedgefund.policy.engine import Action
+from hedgefund.strategy.base import Strategy
 from hedgefund.strategy.monitor import evaluate_invalidation, strategy_metrics
 
 MODES = ("simulation", "paper", "mt5")
@@ -64,6 +67,8 @@ class BotEngine:
         self.feed = feed
         self.clock = clock or SystemClock()
         self.client = mt5_client
+        if getattr(feed, "synthetic", False) and hasattr(feed, "clock"):
+            feed.clock = self.clock  # simulated quotes follow the engine's time
         self.data_dir = Path(data_dir or base_config.var_dir)
         self.allow_real_env = allow_real_env
         self.lock = threading.RLock()
@@ -171,12 +176,23 @@ class BotEngine:
             if problems:
                 raise EngineError("; ".join(problems))
             rt = StrategyRuntime.from_spec(spec)
+            saved = self.store.get_setting(self._state_key(bot_id))
+            if saved:
+                rt.strategy.import_state(saved)
             pipe = DecisionPipeline([rt], self.stack.pipeline.jev, self.stack.policy, self.stack.portfolio, self.ledger, self.stack.calibration)
             self.runtimes[bot_id] = _BotRuntime(bot, pipe, rt.strategy.warmup_bars)
             bot.update(status="running", last_error=None)
             self.store.save_bot(bot)
             self._log("bot_resume" if resume else "bot_start", operator, bot_id=bot_id, bot=bot, spec_hash=spec.spec_hash)
             return bot
+
+    def _state_key(self, bot_id: str) -> str:
+        return f"strategy_state:{self.mode}:{bot_id}"
+
+    def _save_state(self, bot_id: str, rt: "_BotRuntime") -> None:
+        state = rt.pipeline.runtimes[0].strategy.export_state()
+        if state is not None:
+            self.store.set_setting(self._state_key(bot_id), state)
 
     def stop_bot(self, bot_id: str, operator: str, close_positions: bool = True) -> dict:
         with self.lock:
@@ -311,6 +327,7 @@ class BotEngine:
                 self._kill_alerted = False
                 for bot_id, rt in list(self.runtimes.items()):
                     try:
+                        traded |= self._intrabar_exits(bot_id, rt, now)
                         traded |= self._step_bot(rt, now)
                     except Exception as e:  # noqa: BLE001 - one bot's failure must not stop the others
                         rt.message = f"Erreur : {type(e).__name__}: {e}"
@@ -329,13 +346,61 @@ class BotEngine:
                 self.store.set_setting("units_per_lot", self.units_per_lot)
             self.last_loop_ms = now
 
+    def _intrabar_exits(self, bot_id: str, rt: _BotRuntime, now: int) -> bool:
+        """Between bar closes, let strategies with a stop/target (the ICT EAs) exit on live quotes."""
+        strat = rt.pipeline.runtimes[0].strategy
+        if type(strat).intrabar_exit is Strategy.intrabar_exit:
+            return False
+        book = self.stack.portfolio.book_positions(bot_id)
+        if not book:
+            return False
+        traded = False
+        for pkg in rt.pipeline.runtimes[0].spec.packages:
+            sym = pkg.legs[0].symbol
+            if sym not in book or not self.feed.market_open(sym, now):
+                continue  # a closed market has no live price to act on
+            q = self.feed.quote(sym)
+            if not q:
+                continue
+            reason = strat.intrabar_exit(pkg, book, q[0], q[1], now)
+            if not reason:
+                continue
+            for r in rt.pipeline.force_exit(bot_id, pkg.key, reason, now):
+                if r.action.trades:
+                    self.stack.execution.execute(r, self._liquidity())
+                    traded = True
+            rt.message = f"{utc_iso(now)[11:16]} UTC : sortie — {reason}"
+            self._save_state(bot_id, rt)
+        return traded
+
+    def _market_data(self, syms: list[str], timeframe: str, count: int, now: int, aux: dict[str, int], extra_ms: int = 0) -> MarketData:
+        data = self.feed.market_data(syms, timeframe, count, now)
+        for tf, n in aux.items():
+            data.aux[tf] = self.feed.market_data(syms, tf, n + extra_ms // interval_ms(tf) + 2, now)
+        return data
+
+    def _opposite_holder(self, bot_id: str, r: Any) -> str | None:
+        """Anti-hedge (as in the EAs): no new position against another bot's open position."""
+        for sym, target in r.leg_targets.items():
+            for sid, book in self.stack.portfolio.books.items():
+                p = book.positions.get(sym)
+                if sid != bot_id and p is not None and abs(p.qty) > 1e-12 and p.qty * target < 0:
+                    return sid
+        return None
+
     def _step_bot(self, rt: _BotRuntime, now: int) -> bool:
         bot = rt.bot
         syms = bot["symbols"]
         if not all(self.feed.market_open(s, now) for s in syms):
             rt.message = "Marché fermé"
             return False
-        data = self.feed.market_data(syms, bot["timeframe"], rt.warmup + 20, now)
+        probe = self.feed.market_data(syms, bot["timeframe"], 3, now).timeline(syms)
+        if not probe or (bot.get("last_bar_ts") and probe[-1] <= bot["last_bar_ts"]):
+            if not probe:
+                rt.message = "Pas de données"
+            return False
+        strat = rt.pipeline.runtimes[0].strategy
+        data = self._market_data(syms, bot["timeframe"], rt.warmup + 20, now, strat.aux_timeframes)
         timeline = data.timeline(syms)
         if not timeline:
             rt.message = "Pas de données"
@@ -349,13 +414,27 @@ class BotEngine:
         quality = check_market_data(data, now, syms, max_staleness_bars=2, max_gap_bars=10**6)
         halted = {bot["id"]} if rt.halted_reason else set()
         results = rt.pipeline.decide(data.view(t), t, quality.blocked_symbols, halted)
+        # Persist the strategy's plan before sending orders: after a crash, a partial exit is
+        # skipped rather than repeated.
+        self._save_state(bot["id"], rt)
         traded = False
+        acts, why = [], strat.note
         for r in results:
+            if r.action is Action.ENTER and (other := self._opposite_holder(bot["id"], r)):
+                name = (self.store.get_bot(other) or {}).get("name", other)
+                acts.append("entrée bloquée")
+                why = f"anti-couverture : « {name} » tient la position inverse"
+                continue
+            acts.append(r.action.value)
+            if r.action is Action.NO_TRADE and r.reasons:
+                why = f"{r.reasons[0]} ({strat.note})" if strat.note else r.reasons[0]
+            elif not strat.note and r.reasons:
+                why = r.reasons[0]
             if r.action.trades:
                 self.stack.execution.execute(r, self._liquidity())
                 traded = True
-        acts = ", ".join(f"{r.action.value}" for r in results) or "aucun signal"
-        rt.message = f"Bougie du {utc_iso(t)[:16].replace('T', ' ')} UTC : {acts}" + (f" — {results[-1].reasons[0]}" if results and results[-1].reasons else "")
+        acts = ", ".join(acts) or "aucun signal"
+        rt.message = f"Bougie du {utc_iso(t)[:16].replace('T', ' ')} UTC : {acts}" + (f" — {why}" if why else "")
         bot["last_bar_ts"] = t
         self.store.save_bot(bot)
         return traded
@@ -476,7 +555,7 @@ class BotEngine:
         price = (q[0] + q[1]) / 2 if q else 0.0
         return {**spec.to_dict(), "price": price, "min_trade_notional": min_trade_notional(spec, price), "spread_bps": spec.half_spread_bps(price) * 2}
 
-    def backtest(self, bot: dict, bars: int = 2000) -> dict:
+    def backtest(self, bot: dict, bars: int | None = None) -> dict:
         catalog = self.feed.specs()
         problems = validate_bot(bot, catalog)
         if problems:
@@ -489,8 +568,11 @@ class BotEngine:
             prices[s] = (q[0] + q[1]) / 2 if q else 0.0
             instruments[s] = instrument_from_spec(spec, prices[s])
         spec = build_spec(bot, catalog, prices)
-        warmup = StrategyRuntime.from_spec(spec).strategy.warmup_bars
-        data = self.feed.market_data(bot["symbols"], bot["timeframe"], warmup + bars, self.clock.now_ms())
+        strat = StrategyRuntime.from_spec(spec).strategy
+        warmup = strat.warmup_bars
+        bars = bars or TEMPLATES[bot["strategy"]].backtest_bars
+        span = (warmup + bars) * interval_ms(bot["timeframe"])
+        data = self._market_data(bot["symbols"], bot["timeframe"], warmup + bars, self.clock.now_ms(), strat.aux_timeframes, extra_ms=span)
         cfg = replace(self.base, instruments=instruments, starting_nav=self.cfg.starting_nav)
         timeline = data.timeline(bot["symbols"])
         if len(timeline) < warmup + 50:

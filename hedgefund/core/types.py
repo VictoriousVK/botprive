@@ -69,7 +69,9 @@ class Signal:
 
     ``direction`` is the desired package direction. FLAT means "exit / do not hold".
     ``stop_distance_pct`` is the adverse package move the strategy treats as its stop;
-    policy uses it for risk-based sizing.
+    policy uses it for risk-based sizing. ``reduce_to`` (0 < x < 1), on a signal in the held
+    direction, asks to keep only that fraction of the current position (partial take-profit);
+    like an exit it is risk-reducing, so it never waits for Jev.
     """
 
     strategy_id: str
@@ -80,6 +82,7 @@ class Signal:
     ts: int
     thesis: str
     features: dict[str, float] = field(default_factory=dict)
+    reduce_to: float | None = None
 
     @property
     def is_exit(self) -> bool:
