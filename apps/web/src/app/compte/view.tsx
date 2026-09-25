@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { Emblem } from "@/components/brand";
 import { Notice, Spinner } from "@/components/ui";
-import { api, dateFr, fcfa, type CheckoutResult, type Me, type Payment } from "@/lib/api";
+import { api, dateFr, dollars, fcfa, type CheckoutResult, type Me, type Payment } from "@/lib/api";
 import { useSession } from "@/lib/session";
 
 export function AccountView() {
@@ -107,7 +107,7 @@ function Dashboard({ me, params }: { me: Me; params: URLSearchParams }) {
   const router = useRouter();
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const offer = params.get("offre");
-  const months = Number(params.get("mois") || 1);
+  const months = Number(params.get("mois") ?? 1);
   const returning = params.get("paiement");
 
   const loadPayments = useCallback(() => api<Payment[]>("/api/m/payments").then(setPayments).catch(() => setPayments([])), []);
@@ -135,7 +135,7 @@ function Dashboard({ me, params }: { me: Me; params: URLSearchParams }) {
       </div>
 
       {returning && <PaymentReturn id={returning} onDone={() => { refreshMe(); loadPayments(); router.replace("/compte/"); }} />}
-      {offer && !returning && site?.offers.some((o) => o.key === offer && o.price_xof > 0) && (
+      {offer && !returning && site?.products.some((o) => o.key === offer && o.purchasable) && (
         <Checkout offerKey={offer} months={months} onChange={() => { loadPayments(); }} />
       )}
 
@@ -144,14 +144,30 @@ function Dashboard({ me, params }: { me: Me; params: URLSearchParams }) {
           <div className="absolute -right-20 -top-20 size-56 rounded-full bg-brand-500/15 blur-3xl" aria-hidden />
           <div className="relative flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-wider text-faint">Mon offre</div>
-              <div className="mt-1 font-[family-name:var(--font-display)] text-3xl font-bold">{me.offer_label}</div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-faint">{me.offer === "gratuit" && me.access.length ? "Mes accès" : "Mon abonnement"}</div>
+              <div className="mt-1 font-[family-name:var(--font-display)] text-3xl font-bold">{me.offer === "gratuit" && me.access.length ? "Membre" : me.offer_label}</div>
               <div className="mt-1 text-sm text-muted">
-                {expires ? <>Active jusqu&apos;au <span className="text-fg">{dateFr(expires)}</span> ({daysLeft} jour{daysLeft === 1 ? "" : "s"})</> : "Offre gratuite, sans limite de durée"}
+                {expires ? <>Active jusqu&apos;au <span className="text-fg">{dateFr(expires)}</span> ({daysLeft} jour{daysLeft === 1 ? "" : "s"})</> : me.offer === "gratuit" ? (me.access.length ? "Sans abonnement mensuel" : "Compte gratuit, sans limite de durée") : "Accès à vie"}
               </div>
             </div>
-            <Link href="/tarifs/" className="btn btn-primary btn-sm">{me.offer === "decouverte" ? "Passer à l'offre supérieure" : "Prolonger ou changer"} <ArrowRight className="size-4" /></Link>
+            <Link href="/tarifs/" className="btn btn-primary btn-sm">{me.offer === "gratuit" ? "Voir les offres" : "Prolonger ou changer"} <ArrowRight className="size-4" /></Link>
           </div>
+          {me.access.length > 0 && (
+            <ul className="relative mt-6 grid gap-2">
+              {me.access.map((a) => (
+                <li key={a.product} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-ink-950/50 px-4 py-3 text-sm">
+                  <span className="font-semibold">{a.page ? <Link href={a.page} className="hover:underline">{a.label}</Link> : a.label}</span>
+                  <span className="text-muted">{a.expires_at ? <>jusqu&apos;au {dateFr(a.expires_at)}</> : "à vie"}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {(me.community.telegram || me.community.discord) && (
+            <div className="relative mt-6 flex flex-wrap gap-2">
+              {me.community.telegram && <a className="btn btn-ghost btn-sm" href={me.community.telegram} target="_blank" rel="noopener noreferrer">Rejoindre le groupe Telegram</a>}
+              {me.community.discord && <a className="btn btn-ghost btn-sm" href={me.community.discord} target="_blank" rel="noopener noreferrer">Rejoindre le Discord</a>}
+            </div>
+          )}
           <div className="relative mt-6 flex flex-wrap gap-2">
             {me.entitlements.map((e) => (
               <span key={e} className="chip chip-green"><CircleCheck className="size-3" /> {site?.entitlements[e] ?? e}</span>
@@ -182,7 +198,7 @@ function Dashboard({ me, params }: { me: Me; params: URLSearchParams }) {
                 {payments.map((p) => (
                   <tr key={p.id}>
                     <td className="num text-muted">{dateFr(p.created_at)}</td>
-                    <td>{p.offer_label} · {p.months} mois</td>
+                    <td>{p.offer_label}{p.months ? ` · ${p.months} mois` : ""}</td>
                     <td className="num">{p.amount ? fcfa(p.amount) : "—"}</td>
                     <td>{p.method_label}</td>
                     <td><StatusChip p={p} /></td>
@@ -244,10 +260,11 @@ function Checkout({ offerKey, months, onChange }: { offerKey: string; months: nu
   const [res, setRes] = useState<CheckoutResult | null>(null);
   const [txn, setTxn] = useState("");
   const [declared, setDeclared] = useState(false);
-  const offer = site?.offers.find((o) => o.key === offerKey);
-  const dur = site?.billing.durations.find((d) => d.months === months);
-  if (!offer || !dur) return <Notice kind="error" className="mt-6">Offre ou durée inconnue.</Notice>;
-  const amount = offer.price_xof * Math.max(1, months - dur.free_months);
+  const offer = site?.products.find((o) => o.key === offerKey);
+  const once = offer?.period === "once";
+  const dur = once ? { months: 0, free_months: 0 } : site?.billing.durations.find((d) => d.months === months);
+  if (!offer || !dur || offer.price_xof == null) return <Notice kind="error" className="mt-6">Offre ou durée inconnue.</Notice>;
+  const amount = once ? offer.price_xof : offer.price_xof * Math.max(1, months - dur.free_months);
 
   const pay = async () => {
     setBusy(true);
@@ -284,8 +301,9 @@ function Checkout({ offerKey, months, onChange }: { offerKey: string; months: nu
       <div className="grid md:grid-cols-[1fr_1.2fr]">
         <div className="bg-gradient-to-br from-[#1dc8ff]/12 to-transparent p-6">
           <p className="eyebrow !text-[#7fe0ff]">Paiement Wave</p>
-          <div className="mt-2 font-[family-name:var(--font-display)] text-2xl font-bold">Offre {offer.label}</div>
-          <div className="text-sm text-muted">{months} mois{dur.free_months ? `, dont ${dur.free_months} offerts` : ""}</div>
+          <div className="mt-2 font-[family-name:var(--font-display)] text-2xl font-bold">{offer.label}</div>
+          <div className="text-sm text-muted">{once ? "Paiement unique, accès à vie" : `${months} mois${dur.free_months ? `, dont ${dur.free_months} offerts` : ""}`}</div>
+          {offer.price_usd != null && <div className="num mt-3 text-sm text-muted">{once ? dollars(offer.price_usd) : `${dollars(offer.price_usd)} / mois`}</div>}
           <div className="num mt-5 text-3xl font-semibold">{fcfa(amount)}</div>
         </div>
         <div className="p-6">

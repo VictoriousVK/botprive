@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpRight, Menu, TrendingDown, TrendingUp, User, X } from "lucide-react";
+import { ArrowUpRight, Menu, MessageCircle, TrendingDown, TrendingUp, User, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -10,6 +10,7 @@ import { useSession } from "@/lib/session";
 import { Emblem, Lockup, VFMark, Wordmark } from "./brand";
 
 const LINKS = [
+  { href: "/formation-ict/", label: "Formation ICT" },
   { href: "/robots/", label: "Robots" },
   { href: "/copytrading/", label: "Copytrading" },
   { href: "/academie/", label: "Académie" },
@@ -95,7 +96,7 @@ export function Nav() {
           {me ? (
             <Link href="/compte/" className="btn btn-ghost btn-sm">
               <User className="size-4" /> {me.name.split(" ")[0]}
-              <span className="chip chip-blue !px-2 !py-0 text-[10px]">{me.offer_label}</span>
+              <span className="chip chip-blue !px-2 !py-0 text-[10px]">{me.offer !== "gratuit" ? me.offer_label : me.access?.length ? "Membre" : "Gratuit"}</span>
             </Link>
           ) : (
             <>
@@ -157,6 +158,11 @@ export function Footer() {
             <Wordmark className="text-xl" />
           </div>
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted">{site?.brand.pitch ?? "Robots de trading, formation et copytrading encadré."}</p>
+          {site?.contact.whatsapp && (
+            <a href={`https://wa.me/${site.contact.whatsapp}`} target="_blank" rel="noopener noreferrer" className="mt-4 flex w-fit items-center gap-2 text-sm text-muted hover:text-white">
+              <MessageCircle className="size-4 text-up-400" /> WhatsApp : <span className="num">{site.contact.whatsapp_display}</span>
+            </a>
+          )}
           <div className="mt-5 inline-flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
             <VFMark size={26} />
             <span className="text-xs leading-tight text-muted">
@@ -165,7 +171,7 @@ export function Footer() {
             </span>
           </div>
         </div>
-        <FooterCol title="Plateforme" links={[["Robots", "/robots/"], ["Copytrading", "/copytrading/"], ["Académie", "/academie/"], ["Offres et paiement Wave", "/tarifs/"]]} />
+        <FooterCol title="Plateforme" links={[["Formation ICT Victorious Trader", "/formation-ict/"], ["Robots", "/robots/"], ["Copytrading", "/copytrading/"], ["Académie", "/academie/"], ["Offres et paiement Wave", "/tarifs/"]]} />
         <FooterCol title="Compte" links={[["Espace membre", "/compte/"], ["Créer un compte", "/compte/?vue=inscription"], ["Console de trading", "/console"]]} />
         <FooterCol title="Informations" links={[["Avertissement sur les risques", "/risques/"], ["Conditions d'utilisation", "/risques/#conditions"], ["Confidentialité", "/risques/#confidentialite"]]} />
       </div>

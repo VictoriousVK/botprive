@@ -40,15 +40,23 @@ export async function api<T = unknown>(path: string, { method = "GET", body, as 
 }
 
 // ---------------- types ----------------
-export type Offer = { key: string; label: string; price_xof: number; summary: string; highlights: string[]; entitlements: string[]; featured: boolean };
+export type Highlight = { text: string; soon: boolean };
+export type Product = {
+  key: string; category: "abonnement" | "formation" | "mentorat" | "licence"; label: string; period: "month" | "once"; status: "available" | "soon" | "contact"; status_label: string;
+  price_usd: number | null; price_xof: number | null; price_range_usd: [number, number] | null; alt_price: string; summary: string; audience: string[];
+  highlights: Highlight[]; entitlements: string[]; featured: boolean; page: string; purchasable: boolean;
+};
 export type Founder = { name: string; role: string; initials: string; bio: string; mark?: string };
 export type SiteInfo = {
   brand: { name: string; platform: string; tagline: string; pitch: string; country: string; contact_email: string };
   founders: Founder[];
-  offers: Offer[];
-  billing: { currency: string; durations: { months: number; free_months: number }[]; wave_manual: boolean };
+  free: { label: string; summary: string; entitlements: string[] };
+  products: Product[];
+  categories: Record<string, string>;
+  billing: { currency: string; usd_xof: number | null; durations: { months: number; free_months: number }[]; wave_manual: boolean };
+  payment_methods: { name: string; status: "available" | "soon" }[];
+  contact: { whatsapp: string; whatsapp_display: string; email: string };
   academy: { planned: { slug: string; title: string; subtitle: string; level: string }[] };
-  community: Record<string, boolean>;
   entitlements: Record<string, string>;
   copytrading: "off" | "demo" | "live";
   wave: "api" | "manual" | "off";
@@ -58,7 +66,11 @@ export type SiteInfo = {
 export type Robot = { key: string; name: string; status: string; status_label: string; headline: string; markets: string; access: string | null; description: string; timeframes: string[]; origin: string; params: number };
 export type Quote = { symbol: string; label: string; price: number; digits: number; change_pct: number | null };
 export type Quotes = { synthetic: boolean; source: string; quotes: Quote[] };
-export type Me = { id: number; email: string; name: string; phone: string | null; offer: string; offer_label: string; offer_expires_at: number | null; entitlements: string[]; totp_enabled: boolean; created_at: number; csrf?: string };
+export type Access = { product: string; label: string; category: string; period: string; starts_at: number; expires_at: number | null; page: string };
+export type Me = {
+  id: number; email: string; name: string; phone: string | null; offer: string; offer_label: string; offer_expires_at: number | null; access: Access[];
+  entitlements: string[]; community: { telegram?: string; discord?: string }; totp_enabled: boolean; created_at: number; csrf?: string;
+};
 export type Payment = { id: string; offer: string; offer_label: string; months: number; amount: number; currency: string; method: string; method_label: string; status: string; status_label: string; transaction_ref: string | null; launch_url: string | null; created_at: number; applied_at: number | null; email?: string; name?: string; note?: string | null };
 export type CheckoutResult = { payment: Payment; launch_url?: string; manual?: { number: string | null; link: string | null; amount: number; reference: string } };
 export type CourseSummary = { slug: string; title: string; subtitle: string; level: string; access: string; access_label: string; status: string; parts: number; duration_s: number; free_parts: number; planned?: boolean };
@@ -77,6 +89,8 @@ export type Follow = {
 
 // ---------------- formatting ----------------
 export const fcfa = (n: number) => `${new Intl.NumberFormat("fr-FR").format(Math.round(n))} FCFA`;
+export const dollars = (n: number) => `${new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 }).format(n)} $`;
+export const whatsappLink = (number: string, text: string) => `https://wa.me/${number}?text=${encodeURIComponent(text)}`;
 export const usd = (n: number, d = 2) => new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD", maximumFractionDigits: d, minimumFractionDigits: d }).format(n);
 export const pct = (n: number | null | undefined, d = 2, sign = true) => (n == null || !Number.isFinite(n) ? "—" : `${sign && n > 0 ? "+" : ""}${n.toFixed(d).replace(".", ",")} %`);
 export const price = (n: number, digits: number) => new Intl.NumberFormat("fr-FR", { minimumFractionDigits: Math.min(digits, 5), maximumFractionDigits: Math.min(digits, 5) }).format(n);

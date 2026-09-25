@@ -119,7 +119,7 @@ function LockedPanel({ signedIn, compact = false }: { signedIn: boolean; compact
     <div className={compact ? "grid gap-2 text-sm" : "card grid aspect-video place-items-center p-6 text-center"}>
       <div className="grid gap-3">
         {!compact && <Lock className="mx-auto size-8 text-brand-300" />}
-        <p className={compact ? "text-muted" : "font-semibold"}>La suite du cours est réservée aux membres Trader, Pro et Elite.</p>
+        <p className={compact ? "text-muted" : "font-semibold"}>La suite de ce cours est réservée aux membres qui y ont accès.</p>
         <Link href={signedIn ? "/tarifs/" : "/compte/?vue=inscription"} className="btn btn-primary btn-sm mx-auto">
           {signedIn ? "Voir les offres" : "Créer un compte gratuit"}
         </Link>

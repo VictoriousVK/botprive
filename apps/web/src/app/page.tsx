@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, BookOpenCheck, ChevronDown, Clapperboard, FileClock, FingerprintPattern, KeyRound, ListChecks, Lock, MonitorSmartphone, CirclePlay, ScrollText, ShieldCheck } from "lucide-react";
+import { ArrowRight, BookOpenCheck, Crown, ChevronDown, Clapperboard, FileClock, FingerprintPattern, KeyRound, ListChecks, Lock, MonitorSmartphone, CirclePlay, ScrollText, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { VFMark, Initials } from "@/components/brand";
@@ -24,21 +24,51 @@ export default function Home() {
           <RobotGrid />
         </div>
       </section>
+      <FormationBand />
       <CopySection />
       <AcademySection />
       <SecuritySection />
       <section id="offres" className="container-x scroll-mt-24 py-20">
-        <SectionHead center eyebrow="Offres" title="Un accès complet, payé avec Wave.">
-          Commencez gratuitement. Passez à l&apos;offre supérieure quand vous êtes prêt, pour un mois, trois mois ou un an.
+        <SectionHead center eyebrow="Abonnements" title="Choisissez votre niveau, payez avec Wave.">
+          Starter, Pro Trader ou Quant Elite : pour un mois, trois mois ou un an, sans prélèvement automatique. Les formations, le mentorat et les licences
+          EA sont détaillés sur la page des offres.
         </SectionHead>
         <div className="mt-10">
-          <Pricing />
+          <Pricing only={["abonnement"]} />
+        </div>
+        <div className="mt-8 text-center">
+          <Link href="/tarifs/" className="btn btn-ghost">Formations, mentorat et licences <ArrowRight className="size-4" /></Link>
         </div>
       </section>
       <Founders />
       <Faq />
       <FinalCta />
     </>
+  );
+}
+
+function FormationBand() {
+  return (
+    <section className="container-x py-10">
+      <Reveal>
+        <Link href="/formation-ict/" className="group relative block overflow-hidden rounded-3xl border border-gold-400/35 bg-gradient-to-r from-gold-500/15 via-ink-850 to-ink-900 p-7 transition-colors hover:border-gold-400/60 sm:p-10">
+          <div className="absolute -right-24 -top-24 size-72 rounded-full bg-gold-500/20 blur-3xl" aria-hidden />
+          <div className="relative grid items-center gap-6 md:grid-cols-[1fr_auto]">
+            <div>
+              <span className="chip chip-gold"><Crown className="size-3" /> Programme officiel · Formation ICT</span>
+              <h2 className="text-gold mt-4 font-[family-name:var(--font-display)] text-3xl font-extrabold uppercase sm:text-4xl">Victorious Trader</h2>
+              <p className="mt-2 max-w-xl text-muted">
+                16 modules par Victor Faye : IPDA, AMD, Silver Bullet, MMXM, SMT, NWOG/NDOG… sur des cas réels du NAS100, de l&apos;or et de l&apos;EUR/USD, avec
+                accès à vie au groupe d&apos;élite.
+              </p>
+            </div>
+            <span className="btn btn-gold justify-self-start md:justify-self-end">
+              Découvrir le programme <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+            </span>
+          </div>
+        </Link>
+      </Reveal>
+    </section>
   );
 }
 

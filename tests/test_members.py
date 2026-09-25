@@ -47,8 +47,8 @@ def _engine(tmp):
 
 def _site(tmp, manual=True):
     raw = (Path(__file__).resolve().parent.parent / "config" / "site.yaml").read_text(encoding="utf-8")
-    if manual:
-        raw = raw.replace('manual_number: ""', 'manual_number: "+221 77 000 00 00"')
+    assert 'manual_number: "+221 78 426 01 82"' in raw
+    raw = raw.replace('manual_number: "+221 78 426 01 82"', 'manual_number: "+221 77 000 00 00"' if manual else 'manual_number: ""')
     p = Path(tmp) / "site.yaml"
     p.write_text(raw, encoding="utf-8")
     return load_site(p)
@@ -88,13 +88,13 @@ def test_register_login_and_isolation_from_console(site_app):
     assert register(c, email="pas-un-email")[0].status_code == 400
     assert register(c, password="court")[0].status_code == 400
     r, H = register(c)
-    assert r.status_code == 200 and r.json()["offer"] == "decouverte" and "copy_demo" in r.json()["entitlements"]
+    assert r.status_code == 200 and r.json()["offer"] == "gratuit" and "copy_demo" in r.json()["entitlements"] and r.json()["community"] == {}
     assert "samesite=lax" in r.headers["set-cookie"].lower() and "httponly" in r.headers["set-cookie"].lower()
     assert register(c, email="AWA@example.com")[0].status_code == 400  # e-mails are case-insensitive
     assert c.get("/api/overview").status_code == 401  # a member session never opens the console
     assert c.get("/api/admin/payments").status_code == 401
-    assert c.post("/api/m/checkout", json={"offer": "pro", "months": 1}).status_code == 403  # CSRF
-    assert c.post("/api/m/checkout", json={"offer": "pro", "months": 1}, headers={**H, "Origin": "https://evil.example"}).status_code == 403
+    assert c.post("/api/m/checkout", json={"offer": "pro_trader", "months": 1}).status_code == 403  # CSRF
+    assert c.post("/api/m/checkout", json={"offer": "pro_trader", "months": 1}, headers={**H, "Origin": "https://evil.example"}).status_code == 403
     c.cookies.clear()
     assert c.get("/api/m/me").status_code == 401
     assert c.post("/api/m/login", json={"email": "awa@example.com", "password": "faux"}).status_code == 401
@@ -114,20 +114,23 @@ def test_manual_wave_transfer_validated_by_admin(site_app):
     c, _, _ = site_app(manual=True)
     _, H = register(c)
     assert c.get("/api/site").json()["wave"] == "manual"
-    assert c.post("/api/m/checkout", json={"offer": "decouverte", "months": 1}, headers=H).status_code == 400
-    assert c.post("/api/m/checkout", json={"offer": "pro", "months": 2}, headers=H).status_code == 400  # duration not offered
-    r = c.post("/api/m/checkout", json={"offer": "pro", "months": 12}, headers=H).json()
-    assert r["manual"]["amount"] == 450_000 and r["manual"]["number"] == "+221 77 000 00 00"  # 12 months billed 10
+    assert c.post("/api/m/checkout", json={"offer": "gratuit", "months": 1}, headers=H).status_code == 400
+    assert c.post("/api/m/checkout", json={"offer": "pro_trader", "months": 2}, headers=H).status_code == 400  # duration not offered
+    assert "pas encore en vente" in c.post("/api/m/checkout", json={"offer": "formation_quant", "months": 0}, headers=H).json()["detail"]
+    assert "candidature" in c.post("/api/m/checkout", json={"offer": "mentorat_individuel", "months": 1}, headers=H).json()["detail"]
+    assert c.post("/api/m/checkout", json={"offer": "formation_ict", "months": 1}, headers=H).status_code == 400  # one-time: no duration
+    r = c.post("/api/m/checkout", json={"offer": "pro_trader", "months": 12}, headers=H).json()
+    assert r["manual"]["amount"] == 552_000 and r["manual"]["number"] == "+221 77 000 00 00"  # 12 x 46 000 FCFA
     pid = r["payment"]["id"]
     assert c.post(f"/api/m/payments/{pid}/declare", json={"transaction_ref": "bad ref!"}, headers=H).status_code == 400
     assert c.post(f"/api/m/payments/{pid}/declare", json={"transaction_ref": "TXN-000123"}, headers=H).json()["status"] == "declared"
-    assert c.get("/api/m/me").json()["offer"] == "decouverte"  # nothing granted before the admin checks
+    assert c.get("/api/m/me").json()["offer"] == "gratuit"  # nothing granted before the admin checks
     member_cookie = c.cookies.get("lf_session")
 
     # a second member cannot reuse the same Wave transaction
     c2 = TestClient(c.app)
     _, H2 = register(c2, email="moussa@example.com")
-    pid2 = c2.post("/api/m/checkout", json={"offer": "trader", "months": 1}, headers=H2).json()["payment"]["id"]
+    pid2 = c2.post("/api/m/checkout", json={"offer": "starter", "months": 1}, headers=H2).json()["payment"]["id"]
     assert "déjà" in c2.post(f"/api/m/payments/{pid2}/declare", json={"transaction_ref": "TXN-000123"}, headers=H2).json()["detail"]
 
     op = TestClient(c.app)
@@ -137,7 +140,7 @@ def test_manual_wave_transfer_validated_by_admin(site_app):
     assert op.post(f"/api/admin/payments/{pid}/approve", headers=OH).status_code == 400  # credited once only
     c.cookies.set("lf_session", member_cookie)
     me = c.get("/api/m/me").json()
-    assert me["offer"] == "pro" and "robots" in me["entitlements"]
+    assert me["offer"] == "pro_trader" and "ea_one" in me["entitlements"]
     assert me["offer_expires_at"] == pytest.approx(time.time() + 360 * 86_400, abs=60)
     assert op.post(f"/api/admin/payments/{pid2}/reject", json={"reason": "introuvable"}, headers=OH).json()["status"] == "rejected"
 
@@ -146,28 +149,28 @@ def test_checkout_refused_when_wave_not_configured(site_app):
     c, _, _ = site_app(manual=False)
     _, H = register(c)
     assert c.get("/api/site").json()["wave"] == "off"
-    assert "pas encore configuré" in c.post("/api/m/checkout", json={"offer": "pro", "months": 1}, headers=H).json()["detail"]
+    assert "pas encore configuré" in c.post("/api/m/checkout", json={"offer": "pro_trader", "months": 1}, headers=H).json()["detail"]
 
 
 # ---------------- Wave: checkout API ----------------
 def test_wave_checkout_credited_only_after_api_confirmation(site_app):
     c, _, wave = site_app(wave=True)
     _, H = register(c)
-    r = c.post("/api/m/checkout", json={"offer": "trader", "months": 3}, headers=H).json()
-    assert r["launch_url"].startswith("https://pay.wave.com/") and r["payment"]["amount"] == 45_000
+    r = c.post("/api/m/checkout", json={"offer": "starter", "months": 3}, headers=H).json()
+    assert r["launch_url"].startswith("https://pay.wave.com/") and r["payment"]["amount"] == 51_000
     pid = r["payment"]["id"]
     sid = next(iter(wave.sessions))
     assert wave.sessions[sid]["client_reference"] == pid
     assert c.get(f"/api/m/payments/{pid}").json()["payment"]["status"] == "pending"  # returning from Wave is not proof
     wave.pay(sid)
     body = c.get(f"/api/m/payments/{pid}").json()
-    assert body["payment"]["status"] == "succeeded" and body["me"]["offer"] == "trader" and body["payment"]["transaction_ref"] == "T_cos-1"
+    assert body["payment"]["status"] == "succeeded" and body["me"]["offer"] == "starter" and body["payment"]["transaction_ref"] == "T_cos-1"
     exp = body["me"]["offer_expires_at"]
     c.get(f"/api/m/payments/{pid}")
     assert c.get("/api/m/me").json()["offer_expires_at"] == exp  # idempotent
 
     # renewal of the same offer extends from the current expiry
-    pid2 = c.post("/api/m/checkout", json={"offer": "trader", "months": 1}, headers=H).json()["payment"]["id"]
+    pid2 = c.post("/api/m/checkout", json={"offer": "starter", "months": 1}, headers=H).json()["payment"]["id"]
     wave.pay("cos-2")
     c.get(f"/api/m/payments/{pid2}")
     assert c.get("/api/m/me").json()["offer_expires_at"] == exp + 30 * 86_400
@@ -176,23 +179,23 @@ def test_wave_checkout_credited_only_after_api_confirmation(site_app):
 def test_wave_session_with_wrong_amount_is_not_credited(site_app):
     c, _, wave = site_app(wave=True)
     _, H = register(c)
-    pid = c.post("/api/m/checkout", json={"offer": "elite", "months": 1}, headers=H).json()["payment"]["id"]
+    pid = c.post("/api/m/checkout", json={"offer": "quant_elite", "months": 1}, headers=H).json()["payment"]["id"]
     wave.pay("cos-1", amount="100")
     assert c.get(f"/api/m/payments/{pid}").json()["payment"]["status"] == "failed"
-    assert c.get("/api/m/me").json()["offer"] == "decouverte"
+    assert c.get("/api/m/me").json()["offer"] == "gratuit"
 
 
 def test_wave_webhook_signature_and_refresh(site_app):
     c, _, wave = site_app(wave=True)
     _, H = register(c)
-    pid = c.post("/api/m/checkout", json={"offer": "pro", "months": 1}, headers=H).json()["payment"]["id"]
+    pid = c.post("/api/m/checkout", json={"offer": "pro_trader", "months": 1}, headers=H).json()["payment"]["id"]
     wave.pay("cos-1")
     raw = json.dumps({"id": "AE_1", "type": "checkout.session.completed", "data": {"id": "cos-1"}}).encode()
     anon = TestClient(c.app)
     assert anon.post("/api/webhooks/wave", content=raw, headers={"Wave-Signature": sign("autre", raw)}).status_code == 401
     assert anon.post("/api/webhooks/wave", content=raw, headers={"Wave-Signature": sign("whsec", raw, ts=int(time.time()) - 3600)}).status_code == 401
     assert anon.post("/api/webhooks/wave", content=raw, headers={"Wave-Signature": sign("whsec", raw)}).status_code == 200
-    assert c.get("/api/m/me").json()["offer"] == "pro"
+    assert c.get("/api/m/me").json()["offer"] == "pro_trader"
     assert c.get("/api/m/payments").json()[0]["id"] == pid
 
 
@@ -211,10 +214,10 @@ def test_subscription_expires(site_app):
     op = TestClient(c.app)
     OH = operator(op)
     mid = op.get("/api/admin/members").json()[0]["id"]
-    assert op.post(f"/api/admin/members/{mid}/grant", json={"offer": "elite", "months": 1, "reason": "bêta-testeur"}, headers=OH).status_code == 200
-    assert c.get("/api/m/me").json()["offer"] == "elite"
-    eng.store.execute("UPDATE members SET offer_expires_at = ? WHERE id = ?", (int(time.time()) - 1, mid))
-    assert c.get("/api/m/me").json()["offer"] == "decouverte"
+    assert op.post(f"/api/admin/members/{mid}/grant", json={"offer": "quant_elite", "months": 1, "reason": "bêta-testeur"}, headers=OH).status_code == 200
+    assert c.get("/api/m/me").json()["offer"] == "quant_elite"
+    eng.store.execute("UPDATE member_access SET expires_at = ? WHERE member_id = ?", (int(time.time()) - 1, mid))
+    assert c.get("/api/m/me").json()["offer"] == "gratuit"
     assert op.post(f"/api/admin/members/{mid}/status", json={"status": "suspended"}, headers=OH).status_code == 200
     assert c.get("/api/m/me").status_code == 401
 
@@ -254,7 +257,7 @@ def test_course_admin_access_and_progress(site_app):
     c, _, _ = site_app()
     op = TestClient(c.app)
     OH = operator(op)
-    assert {x["slug"] for x in c.get("/api/site/courses").json()} >= {"debutant", "gestion-du-risque", "methode-ict"}  # planned tracks
+    assert {x["slug"] for x in c.get("/api/site/courses").json()} >= {"victorious-trader", "developpement-ea", "quant-ia"}  # planned tracks
     course = op.post("/api/admin/courses", json={"slug": "methode-ict", "title": "Méthode ICT", "access": "academy_member", "status": "published"}, headers=OH).json()
     cid = course["id"]
     assert op.post("/api/admin/courses", json={"slug": "methode-ict", "title": "Doublon"}, headers=OH).status_code == 400
@@ -273,7 +276,7 @@ def test_course_admin_access_and_progress(site_app):
     assert c.post("/api/m/progress", json={"part_id": p2, "position_s": 10}, headers=H).status_code == 400
     assert c.post("/api/m/progress", json={"part_id": p1, "position_s": 99999 % 86_400, "completed": True}, headers=H).status_code == 200
     mid = op.get("/api/admin/members").json()[0]["id"]
-    op.post(f"/api/admin/members/{mid}/grant", json={"offer": "trader", "months": 1, "reason": "test"}, headers=OH)
+    op.post(f"/api/admin/members/{mid}/grant", json={"offer": "starter", "months": 1, "reason": "test"}, headers=OH)
     full = c.get("/api/site/courses/methode-ict").json()
     assert full["unlocked"] and full["parts"][1]["player"]["src"] == "https://player.mux.com/Xy12AbCdEf34GhIj"
     assert full["parts"][0]["progress"] == {"position_s": 2400, "completed": True}  # clamped to the video length
@@ -335,7 +338,10 @@ def test_copytrading_off(site_app):
 def test_public_endpoints(site_app):
     c, _, _ = site_app()
     info = c.get("/api/site").json()
-    assert info["brand"]["name"] == "Liberté Financière" and [o["key"] for o in info["offers"]][:2] == ["decouverte", "trader"]
+    assert info["brand"]["name"] == "Liberté Financière" and [o["key"] for o in info["products"]][:3] == ["starter", "pro_trader", "quant_elite"]
+    prices = {o["key"]: (o["price_usd"], o["price_xof"], o["purchasable"]) for o in info["products"]}
+    assert prices["starter"] == (29, 17_000, True) and prices["formation_ict"] == (899, 524_000, True) and prices["licence_standard"][2] is False
+    assert info["contact"]["whatsapp"] == "221784260182" and "telegram" not in json.dumps(info).lower().replace("telegram et discord", "")
     robots = c.get("/api/site/robots").json()
     assert [r["status"] for r in robots] == ["beta", "beta", "development"] and robots[0]["timeframes"] == ["1m"]
     q = c.get("/api/site/quotes").json()
@@ -370,3 +376,39 @@ def test_site_pages_csp_and_paths(tmp_path, site_app):
     (site / "index.html").write_text("<html><script>self.a=2</script><script>self.c=3</script></html>")  # site republished
     again = c.get("/").headers["content-security-policy"]
     assert again != first and again.count("'sha256-") == 2
+
+
+def test_formation_for_life_accesses_add_up_and_private_links(site_app):
+    c, eng, _ = site_app()
+    _, H = register(c)
+    op = TestClient(c.app)
+    OH = operator(op)
+    tg, dc = "https://t.me/+exemple-prive", "https://discord.gg/exemple"
+    assert op.put("/api/admin/settings", json={"telegram_url": "https://evil.example/x", "discord_url": ""}, headers=OH).status_code == 400
+    assert op.put("/api/admin/settings", json={"telegram_url": tg, "discord_url": dc}, headers=OH).json()["telegram_url"] == tg
+    assert tg not in json.dumps(eng.recent("operator", 20))  # links never land in the journal
+    assert c.get("/api/m/me").json()["community"] == {}  # free account: no private links
+    assert tg not in c.get("/api/site").text
+
+    # the ICT programme is a one-time purchase, for life
+    r = c.post("/api/m/checkout", json={"offer": "formation_ict", "months": 0}, headers=H).json()
+    assert r["manual"]["amount"] == 524_000
+    c.post(f"/api/m/payments/{r['payment']['id']}/declare", json={"transaction_ref": "ICT-000001"}, headers=H)
+    op.post(f"/api/admin/payments/{r['payment']['id']}/approve", headers=OH)
+    me = c.get("/api/m/me").json()
+    ict = next(a for a in me["access"] if a["product"] == "formation_ict")
+    assert ict["expires_at"] is None and "formation_ict" in me["entitlements"] and me["community"] == {"telegram": tg, "discord": dc}
+    assert me["offer"] == "gratuit"  # a formation is not a subscription
+    assert "déjà accès" in c.post("/api/m/checkout", json={"offer": "formation_ict", "months": 0}, headers=H).json()["detail"]
+
+    # a subscription on top: both accesses add up, and the subscription is shown as the offer
+    mid = op.get("/api/admin/members").json()[0]["id"]
+    op.post(f"/api/admin/members/{mid}/grant", json={"offer": "groupe_elite", "months": 1, "reason": "test"}, headers=OH)
+    op.post(f"/api/admin/members/{mid}/grant", json={"offer": "starter", "months": 1, "reason": "test"}, headers=OH)
+    me = c.get("/api/m/me").json()
+    assert {a["product"] for a in me["access"]} == {"formation_ict", "starter", "groupe_elite"} and me["offer"] == "starter"
+    assert {"elite_group", "analyses", "formation_ict"} <= set(me["entitlements"])
+    ov = op.get("/api/admin/overview").json()
+    assert ov["paying"] == {"formation_ict": 1, "groupe_elite": 1, "starter": 1}
+    # the ICT course is reserved to buyers of the programme (and Quant Elite)
+    assert c.get("/api/site/courses/victorious-trader").json()["access"] == "formation_ict"

@@ -14,7 +14,7 @@ export function AcademyView() {
     <div className="container-x py-14">
       <SectionHead eyebrow="Académie" title={<>Des cours vidéo, <span className="text-gradient">partie par partie</span>.</>}>
         Chaque parcours est découpé en vidéos de plusieurs parties, avec chapitres et reprise automatique. Les premières parties de chaque cours sont
-        gratuites ; le reste est inclus dans les offres Trader, Pro et Elite.
+        gratuites. La formation ICT Victorious Trader est incluse dans son achat et dans Quant Elite ; les cours membres, dans les abonnements.
       </SectionHead>
       <div className="mt-10">
         {loading ? (

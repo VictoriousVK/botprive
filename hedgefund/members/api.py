@@ -47,12 +47,12 @@ class MemberLoginIn(BaseModel):
 
 class LeadIn(BaseModel):
     email: str = Field(min_length=5, max_length=254)
-    interest: Literal["copytrading", "next_bot", "academie", "newsletter"]
+    interest: Literal["copytrading", "next_bot", "academie", "newsletter", "formation", "mentorat", "licence"]
 
 
 class CheckoutIn(BaseModel):
     offer: str = Field(min_length=2, max_length=30)
-    months: int = Field(ge=1, le=24)
+    months: int = Field(ge=0, le=24)  # 0 for a one-time purchase
 
 
 class DeclareIn(BaseModel):
@@ -80,7 +80,7 @@ class CourseIn(BaseModel):
     subtitle: str = Field(default="", max_length=200)
     description: str = Field(default="", max_length=4000)
     level: str = Field(default="", max_length=40)
-    access: Literal["academy_free", "academy_member", "academy_advanced"] = "academy_member"
+    access: Literal["academy_free", "academy_member", "formation_ict", "formation_ea", "formation_quant"] = "academy_member"
     status: Literal["draft", "soon", "published"] = "draft"
     position: int = Field(default=0, ge=0, le=10_000)
 
@@ -116,12 +116,17 @@ class RejectIn(BaseModel):
 
 class GrantIn(BaseModel):
     offer: str = Field(min_length=2, max_length=30)
-    months: int = Field(ge=1, le=24)
+    months: int = Field(ge=0, le=24)  # 0 = for life
     reason: str = Field(min_length=3, max_length=160)
 
 
 class MemberStatusIn(BaseModel):
     status: Literal["active", "suspended"]
+
+
+class SiteSettingsIn(BaseModel):
+    telegram_url: str = Field(default="", max_length=200)
+    discord_url: str = Field(default="", max_length=200)
 
 
 @dataclass
@@ -226,7 +231,8 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
             planned = next((p for p in site.academy.get("planned", []) if p.get("slug") == slug), None)
             if planned is None:
                 raise HTTPException(404, "cours introuvable")
-            return {**planned, "status": "soon", "access": "academy_member", "access_label": ACCESS["academy_member"], "unlocked": False, "parts": [], "description": ""}
+            acc = planned.get("access", "academy_member")
+            return {**planned, "status": "soon", "access": acc, "access_label": ACCESS.get(acc, acc), "unlocked": False, "parts": [], "description": ""}
         return c
 
     @app.post("/api/site/leads")
@@ -392,8 +398,28 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
             **members.stats(), "wave": "api" if members.wave is not None else "manual", "copytrading": copy.mode,
             "bots": [{"id": b["id"], "name": b["name"], "strategy": b["strategy"]} for b in engine.store.list_bots()],
             "labels": {"access": ACCESS, "course_status": STATUSES, "providers": PROVIDERS, "leader_status": LEADER_STATUS},
-            "offers": [o.public() for o in site.offers.values()],
+            "offers": [p.public() for p in site.products.values()],
         }
+
+    @app.get("/api/admin/settings")
+    def admin_settings(s: Session = Depends(op)) -> dict:
+        st = engine.store
+        return {
+            "telegram_url": st.get_setting("site.telegram_url") or "", "discord_url": st.get_setting("site.discord_url") or "",
+            "env_telegram": bool(settings.telegram_url), "env_discord": bool(settings.discord_url),
+        }
+
+    @app.put("/api/admin/settings")
+    def admin_save_settings(body: SiteSettingsIn, s: Session = Depends(op)) -> dict:
+        tg, dc = body.telegram_url.strip(), body.discord_url.strip()
+        if tg and not tg.startswith("https://t.me/"):
+            raise HTTPException(400, "lien Telegram : il doit commencer par https://t.me/")
+        if dc and not (dc.startswith("https://discord.gg/") or dc.startswith("https://discord.com/invite/")):
+            raise HTTPException(400, "lien Discord : il doit commencer par https://discord.gg/ ou https://discord.com/invite/")
+        engine.store.set_setting("site.telegram_url", tg)
+        engine.store.set_setting("site.discord_url", dc)
+        audit("site_settings", operator=s.username, telegram=bool(tg), discord=bool(dc))  # the links themselves stay out of the journal
+        return admin_settings(s)
 
     @app.get("/api/admin/members")
     def admin_members(q: str = "", s: Session = Depends(op)) -> list[dict]:

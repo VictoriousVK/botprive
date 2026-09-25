@@ -23,6 +23,9 @@ $env:LF_WAVE_WEBHOOK_SECRET = ""   # secret du webhook Wave (https://votredomain
 $env:LF_REGISTRATION = "1"         # "0" pour fermer les inscriptions
 $env:LF_COPYTRADING = "demo"       # off | demo (la copie réelle attend l'avis juridique)
 $env:LF_MEDIA_HOSTS = ""           # domaines autorisés pour des fichiers vidéo .mp4 (sinon Bunny/Mux/Vimeo…)
+# Liens d'invitation privés : plutôt dans /admin/ → Réglages (ces variables ne servent que de secours)
+$env:LF_TELEGRAM_URL = ""
+$env:LF_DISCORD_URL = ""
 
 # --- Argent réel ---
 # Laisser à "0" tant que vous n'avez pas validé plusieurs semaines en démo.

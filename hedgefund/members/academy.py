@@ -59,7 +59,13 @@ CREATE TABLE IF NOT EXISTS course_progress (
 );
 """
 
-ACCESS = {"academy_free": "Gratuit", "academy_member": "Membres", "academy_advanced": "Modules avancés"}
+ACCESS = {
+    "academy_free": "Gratuit",
+    "academy_member": "Abonnés",
+    "formation_ict": "Formation ICT Victorious Trader",
+    "formation_ea": "Formation EA MT5",
+    "formation_quant": "Formation Quant et IA",
+}
 STATUSES = {"draft": "Brouillon", "soon": "En préparation", "published": "Publié"}
 PROVIDERS = {"bunny": "Bunny Stream", "cloudflare": "Cloudflare Stream", "mux": "Mux", "vimeo": "Vimeo", "youtube": "YouTube", "file": "Fichier vidéo"}
 # Domains the site may frame (Content-Security-Policy frame-src).
@@ -293,7 +299,8 @@ class Academy:
         taken = {c["slug"] for c in out}
         for p in self.site.academy.get("planned", []):
             if p.get("slug") not in taken:
-                out.append({"slug": p["slug"], "title": p.get("title", ""), "subtitle": p.get("subtitle", ""), "level": p.get("level", ""), "access": "academy_member", "access_label": ACCESS["academy_member"], "status": "soon", "parts": 0, "duration_s": 0, "free_parts": 0, "planned": True})
+                acc = p.get("access", "academy_member")
+                out.append({"slug": p["slug"], "title": p.get("title", ""), "subtitle": p.get("subtitle", ""), "level": p.get("level", ""), "access": acc, "access_label": ACCESS.get(acc, acc), "status": "soon", "parts": 0, "duration_s": 0, "free_parts": 0, "planned": True})
         return out
 
     def course(self, slug: str, entitlements: set[str], member_id: int | None) -> dict[str, Any] | None:

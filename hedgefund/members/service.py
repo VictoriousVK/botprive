@@ -26,8 +26,6 @@ CREATE TABLE IF NOT EXISTS members (
     password_hash TEXT NOT NULL,
     totp_secret TEXT,
     totp_enabled INTEGER NOT NULL DEFAULT 0,
-    offer TEXT NOT NULL DEFAULT 'decouverte',
-    offer_expires_at INTEGER,
     status TEXT NOT NULL DEFAULT 'active',
     terms_version TEXT NOT NULL,
     created_at INTEGER NOT NULL
@@ -62,6 +60,14 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider_id) WHERE provider_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_txn ON payments(transaction_ref) WHERE transaction_ref IS NOT NULL AND status != 'rejected';
 CREATE INDEX IF NOT EXISTS idx_payments_member ON payments(member_id, created_at);
+CREATE TABLE IF NOT EXISTS member_access (
+    member_id INTEGER NOT NULL,
+    product TEXT NOT NULL,
+    starts_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (member_id, product)
+);
 CREATE TABLE IF NOT EXISTS leads (
     email TEXT NOT NULL,
     interest TEXT NOT NULL,
@@ -119,8 +125,8 @@ class Members:
             if self.store.execute("SELECT 1 FROM members WHERE email = ?", (email,)):
                 raise MemberError("un compte existe déjà avec cette adresse")
             self.store.execute(
-                "INSERT INTO members (email, name, phone, password_hash, offer, terms_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (email, name, phone or None, pw, FREE_OFFER, TERMS_VERSION, now),
+                "INSERT INTO members (email, name, phone, password_hash, terms_version, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (email, name, phone or None, pw, TERMS_VERSION, now),
             )
             if ip:
                 self.store.execute("INSERT INTO login_attempts (key, ts, ok) VALUES (?, ?, 1)", (key, now))
@@ -130,24 +136,47 @@ class Members:
         rows = self.store.execute("SELECT * FROM members WHERE id = ?", (member_id,))
         return dict(rows[0]) if rows else None
 
-    def active_offer(self, m: dict[str, Any]) -> str:
-        exp = m.get("offer_expires_at")
-        if m["offer"] != FREE_OFFER and (exp is None or exp > self.now()) and m["offer"] in self.site.offers:
-            return m["offer"]
-        return FREE_OFFER
+    def accesses(self, member_id: int) -> list[dict[str, Any]]:
+        """Products the member currently has (a lifetime purchase has no expiry)."""
+        now = int(self.now())
+        rows = self.store.execute("SELECT * FROM member_access WHERE member_id = ? AND (expires_at IS NULL OR expires_at > ?)", (member_id, now))
+        order = list(self.site.products)
+        out = []
+        for r in rows:
+            p = self.site.products.get(r["product"])
+            if p is not None:
+                out.append({"product": p.key, "label": p.label, "category": p.category, "period": p.period, "starts_at": r["starts_at"], "expires_at": r["expires_at"], "page": p.page})
+        return sorted(out, key=lambda a: order.index(a["product"]))
+
+    def main_offer(self, accesses: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """The member's highest subscription, shown as their offer (the catalogue lists them in rising order)."""
+        subs = [a for a in accesses if a["category"] == "abonnement"]
+        return subs[-1] if subs else None
 
     def entitlements(self, m: dict[str, Any] | None) -> set[str]:
         if not m or m.get("status") != "active":
             return set()
-        return set(self.site.offers[self.active_offer(m)].entitlements)
+        ents = set(self.site.free_entitlements)
+        for a in self.accesses(m["id"]):
+            ents |= self.site.products[a["product"]].entitlements
+        return ents
+
+    def community_links(self, entitlements: set[str]) -> dict[str, str]:
+        """Private invite links, only for members entitled to the community."""
+        if "community_private" not in entitlements:
+            return {}
+        links = {"telegram": self.store.get_setting("site.telegram_url") or self.settings.telegram_url, "discord": self.store.get_setting("site.discord_url") or self.settings.discord_url}
+        return {k: v for k, v in links.items() if v}
 
     def profile(self, m: dict[str, Any]) -> dict[str, Any]:
-        offer = self.active_offer(m)
+        acc = self.accesses(m["id"])
+        main = self.main_offer(acc)
+        ents = self.entitlements(m)
         return {
             "id": m["id"], "email": m["email"], "name": m["name"], "phone": m["phone"],
-            "offer": offer, "offer_label": self.site.offers[offer].label,
-            "offer_expires_at": m["offer_expires_at"] if offer != FREE_OFFER else None,
-            "entitlements": sorted(self.entitlements(m)), "totp_enabled": bool(m["totp_enabled"]), "created_at": m["created_at"],
+            "offer": main["product"] if main else FREE_OFFER, "offer_label": main["label"] if main else self.site.free.get("label", "Compte gratuit"),
+            "offer_expires_at": main["expires_at"] if main else None, "access": acc,
+            "entitlements": sorted(ents), "community": self.community_links(ents), "totp_enabled": bool(m["totp_enabled"]), "created_at": m["created_at"],
         }
 
     def add_lead(self, email: str, interest: str) -> None:
@@ -158,9 +187,14 @@ class Members:
 
     # ---------------- payments ----------------
     def _check_offer(self, offer: str, months: int) -> int:
-        if offer not in self.site.offers or offer == FREE_OFFER:
+        p = self.site.products.get(offer)
+        if p is None:
             raise MemberError("offre inconnue")
-        if months not in self.site.durations:
+        if not p.purchasable:
+            raise MemberError("cette offre n'est pas encore en vente" if p.status == "soon" else "cette offre est sur candidature : contactez-nous sur WhatsApp")
+        if p.period == "once" and months != 0:
+            raise MemberError("paiement unique : pas de durée à choisir")
+        if p.period == "month" and months not in self.site.durations:
             raise MemberError("durée non proposée")
         return self.site.price(offer, months)
 
@@ -180,7 +214,7 @@ class Members:
 
     def public_payment(self, p: dict[str, Any]) -> dict[str, Any]:
         return {
-            "id": p["id"], "offer": p["offer"], "offer_label": self.site.offers[p["offer"]].label if p["offer"] in self.site.offers else p["offer"],
+            "id": p["id"], "offer": p["offer"], "offer_label": self.site.products[p["offer"]].label if p["offer"] in self.site.products else p["offer"],
             "months": p["months"], "amount": p["amount"], "currency": p["currency"], "method": p["method"], "method_label": METHOD_LABEL.get(p["method"], p["method"]),
             "status": p["status"], "status_label": PAYMENT_STATUS.get(p["status"], p["status"]), "transaction_ref": p["transaction_ref"],
             "launch_url": p["launch_url"] if p["status"] == "pending" else None, "created_at": p["created_at"], "applied_at": p["applied_at"],
@@ -192,6 +226,8 @@ class Members:
     def checkout(self, member_id: int, offer: str, months: int) -> dict[str, Any]:
         """Starts a payment: a Wave checkout session if the API is configured, else a manual transfer."""
         self._check_offer(offer, months)
+        if self.site.products[offer].period == "once" and any(a["product"] == offer for a in self.accesses(member_id)):
+            raise MemberError("vous avez déjà accès à cette formation")
         open_count = self.store.execute("SELECT COUNT(*) AS n FROM payments WHERE member_id = ? AND status IN ('pending', 'declared') AND created_at > ?", (member_id, int(self.now()) - 86_400))[0]["n"]
         if open_count >= 5:
             raise MemberError("trop de paiements en attente : terminez ou attendez la validation des précédents")
@@ -221,19 +257,25 @@ class Members:
         )
 
     def _apply(self, payment_id: str, transaction_ref: str | None = None, note: str | None = None) -> bool:
-        """Credits a payment exactly once and extends the member's subscription."""
+        """Credits a payment exactly once: grants the product for life, or extends it by the months paid."""
         with self.store.atomic():
             p = self.payment(payment_id)
-            if p is None or p["applied_at"] is not None:
-                return False
-            m = self.get(p["member_id"])
-            if m is None:
+            if p is None or p["applied_at"] is not None or self.get(p["member_id"]) is None:
                 return False
             now = int(self.now())
-            days = p["months"] * self.site.month_days
-            current = m["offer_expires_at"] or 0
-            start = current if (m["offer"] == p["offer"] and current > now) else now
-            self.store.execute("UPDATE members SET offer = ?, offer_expires_at = ? WHERE id = ?", (p["offer"], start + days * 86_400, m["id"]))
+            rows = self.store.execute("SELECT * FROM member_access WHERE member_id = ? AND product = ?", (p["member_id"], p["offer"]))
+            cur = dict(rows[0]) if rows else None
+            if p["months"] == 0:  # one-time purchase: access for life
+                expires = None
+            else:
+                base = cur["expires_at"] if cur and cur["expires_at"] and cur["expires_at"] > now else now
+                expires = None if cur and cur["expires_at"] is None else base + p["months"] * self.site.month_days * 86_400
+            self.store.execute(
+                "INSERT INTO member_access (member_id, product, starts_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(member_id, product) DO UPDATE SET expires_at = excluded.expires_at, updated_at = excluded.updated_at, "
+                "starts_at = CASE WHEN member_access.expires_at IS NOT NULL AND member_access.expires_at <= ? THEN excluded.starts_at ELSE member_access.starts_at END",
+                (p["member_id"], p["offer"], now, expires, now, now),
+            )
             self.store.execute(
                 "UPDATE payments SET status = 'succeeded', applied_at = ?, updated_at = ?, transaction_ref = COALESCE(?, transaction_ref), note = COALESCE(?, note) WHERE id = ?",
                 (now, now, transaction_ref, note, payment_id),
@@ -304,7 +346,9 @@ class Members:
         self._set_status(payment_id, "rejected", note=f"refusé par {operator} : {reason[:160]}")
 
     def grant(self, member_id: int, offer: str, months: int, operator: str, reason: str) -> dict[str, Any]:
-        if offer not in self.site.offers or offer == FREE_OFFER or not 1 <= months <= 24:
+        """Access given by the team (beta testers, co-founders, a mentoring paid outside the site).
+        months = 0 grants for life."""
+        if offer not in self.site.products or not 0 <= months <= 24:
             raise MemberError("offre ou durée invalide")
         if self.get(member_id) is None:
             raise MemberError("membre introuvable")
@@ -338,7 +382,10 @@ class Members:
 
     def stats(self) -> dict[str, Any]:
         now = int(self.now())
-        paying = self.store.execute("SELECT offer, COUNT(*) AS n FROM members WHERE offer != ? AND offer_expires_at > ? AND status = 'active' GROUP BY offer", (FREE_OFFER, now))
+        paying = self.store.execute(
+            "SELECT a.product AS offer, COUNT(*) AS n FROM member_access a JOIN members m ON m.id = a.member_id WHERE (a.expires_at IS NULL OR a.expires_at > ?) AND m.status = 'active' GROUP BY a.product",
+            (now,),
+        )
         revenue = self.store.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE status = 'succeeded' AND applied_at > ?", (now - 30 * 86_400,))[0]["s"]
         return {
             "members": self.store.execute("SELECT COUNT(*) AS n FROM members")[0]["n"],

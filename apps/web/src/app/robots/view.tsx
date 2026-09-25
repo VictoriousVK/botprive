@@ -42,11 +42,31 @@ export function RobotsView() {
           ))}
         </div>
       </section>
+      <section className="mt-20 grid gap-4 md:grid-cols-2">
+        <Reveal>
+          <div className="card h-full p-6">
+            <h3 className="font-semibold">Courtiers compatibles</h3>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              Tout courtier qui propose MetaTrader 5. Les noms des actifs varient selon le courtier (XAUUSD, GOLD, NAS100, USTEC…) : la plateforme lit la liste
+              de votre courtier. La liste des courtiers que nous avons testés sera publiée ici.
+            </p>
+          </div>
+        </Reveal>
+        <Reveal delay={0.06}>
+          <div className="card h-full p-6">
+            <h3 className="font-semibold">Connexion à MT5</h3>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              L&apos;EA tourne sur votre propre terminal MetaTrader 5, sur votre PC ou un VPS Windows : vos fonds restent chez votre courtier. La connexion de
+              votre compte MT5 à votre espace membre (dashboard de performance, journal) arrive avec l&apos;offre Pro Trader.
+            </p>
+          </div>
+        </Reveal>
+      </section>
       <section className="mt-20 grid items-center gap-8 lg:grid-cols-2">
         <div>
-          <SectionHead eyebrow="Licence" title="Inclus dans les offres Pro et Elite." />
+          <SectionHead eyebrow="Licence" title="Inclus dans Pro Trader et Quant Elite." />
           <ul className="mt-6 grid gap-3 text-sm">
-            {["Pro : une licence au choix (ICT Pro v6.20 ou ICT v6)", "Elite : tous les robots, et le prochain en accès anticipé", "Mises à jour des robots incluses pendant l'abonnement"].map((t) => (
+            {["Pro Trader : accès à 1 EA (ICT Pro v6.20 ou ICT v6)", "Quant Elite : tous les EA, et le prochain en accès anticipé", "Licences EA à l'achat : ouvertes quand les performances seront vérifiées"].map((t) => (
               <li key={t} className="flex gap-2.5"><CircleCheck className="mt-0.5 size-4 shrink-0 text-up-400" /> {t}</li>
             ))}
           </ul>

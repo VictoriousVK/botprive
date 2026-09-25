@@ -11,12 +11,12 @@ type Overview = {
   members: number; paying: Record<string, number>; to_review: number; revenue_30d_xof: number; leads: number; wave: string; copytrading: string;
   bots: { id: string; name: string; strategy: string }[];
   labels: { access: Record<string, string>; course_status: Record<string, string>; providers: Record<string, string>; leader_status: Record<string, string> };
-  offers: { key: string; label: string; price_xof: number }[];
+  offers: { key: string; label: string; price_xof: number | null; category: string; period: string; purchasable: boolean }[];
 };
 type AdminPart = { id: string; position: number; title: string; summary: string; duration_s: number; provider: string; provider_label: string; video_ref: string; chapters: { t: number; title: string }[]; free_preview: number; player: { kind: string; src: string } | null };
 type AdminCourse = { id: string; slug: string; title: string; subtitle: string; description: string; level: string; access: string; status: string; position: number; parts: AdminPart[] | number; duration_s?: number };
 
-const TABS = [["overview", "Vue d'ensemble"], ["payments", "Paiements"], ["members", "Membres"], ["academy", "Académie"], ["copy", "Copytrading"], ["leads", "Prospects"]] as const;
+const TABS = [["overview", "Vue d'ensemble"], ["payments", "Paiements"], ["members", "Membres"], ["academy", "Académie"], ["copy", "Copytrading"], ["leads", "Prospects"], ["settings", "Réglages"]] as const;
 type Tab = (typeof TABS)[number][0];
 const op = <T,>(path: string, method = "GET", body?: unknown) => api<T>(path, { method, body, as: "operator" });
 
@@ -74,7 +74,7 @@ export function AdminView() {
         </div>
       </div>
       <div className="mt-8">
-        {!ov ? <Spinner /> : tab === "overview" ? <OverviewTab ov={ov} /> : tab === "payments" ? <PaymentsTab onChange={loadOv} /> : tab === "members" ? <MembersTab ov={ov} /> : tab === "academy" ? <AcademyTab ov={ov} /> : tab === "copy" ? <CopyTab ov={ov} /> : <LeadsTab />}
+        {!ov ? <Spinner /> : tab === "overview" ? <OverviewTab ov={ov} /> : tab === "payments" ? <PaymentsTab onChange={loadOv} /> : tab === "members" ? <MembersTab ov={ov} /> : tab === "academy" ? <AcademyTab ov={ov} /> : tab === "copy" ? <CopyTab ov={ov} /> : tab === "leads" ? <LeadsTab /> : <SettingsTab />}
       </div>
     </div>
   );
@@ -129,9 +129,9 @@ function OverviewTab({ ov }: { ov: Overview }) {
         </div>
       </div>
       <div className="card p-6">
-        <div className="font-semibold">Abonnés par offre</div>
+        <div className="font-semibold">Accès actifs par offre</div>
         <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {ov.offers.filter((o) => o.price_xof > 0).map((o) => <Stat key={o.key} label={o.label} value={ov.paying[o.key] ?? 0} />)}
+          {ov.offers.filter((o) => o.purchasable || ov.paying[o.key]).map((o) => <Stat key={o.key} label={o.label} value={ov.paying[o.key] ?? 0} />)}
         </div>
       </div>
     </div>
@@ -173,7 +173,7 @@ function PaymentsTab({ onChange }: { onChange: () => void }) {
                 <tr key={p.id}>
                   <td className="num text-muted">{dateFr(p.created_at)}</td>
                   <td><div>{p.name}</div><div className="text-xs text-faint">{p.email}</div></td>
-                  <td>{p.offer_label} · {p.months} mois</td>
+                  <td>{p.offer_label}{p.months ? ` · ${p.months} mois` : " · à vie"}</td>
                   <td className="num">{p.amount ? fcfa(p.amount) : "—"}</td>
                   <td>{p.method_label}</td>
                   <td className="num text-xs">{p.transaction_ref ?? "—"}<div className="text-faint">{p.id}</div></td>
@@ -221,12 +221,16 @@ function MembersTab({ ov }: { ov: Overview }) {
                 <tr key={m.id}>
                   <td><div>{m.name}</div><div className="text-xs text-faint">{m.email}</div></td>
                   <td className="num text-xs">{m.phone ?? "—"}</td>
-                  <td>{m.offer_label}{m.offer_expires_at && <div className="text-xs text-faint">jusqu&apos;au {dateFr(m.offer_expires_at)}</div>}</td>
+                  <td>
+                    {m.access.length === 0 ? <span className="text-muted">Compte gratuit</span> : m.access.map((a) => (
+                      <div key={a.product}>{a.label} <span className="text-xs text-faint">{a.expires_at ? `jusqu'au ${dateFr(a.expires_at)}` : "à vie"}</span></div>
+                    ))}
+                  </td>
                   <td className="num text-muted">{dateFr(m.created_at)}</td>
                   <td><span className={`chip ${m.status === "active" ? "chip-green" : "chip-red"}`}>{m.status === "active" ? "Actif" : "Suspendu"}</span></td>
                   <td className="text-right">
                     <div className="flex justify-end gap-2">
-                      <button className="btn btn-ghost btn-sm" onClick={() => setGrant({ id: m.id, offer: "pro", months: 1, reason: "" })}>Attribuer</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setGrant({ id: m.id, offer: "pro_trader", months: 1, reason: "" })}>Attribuer</button>
                       <button className="btn btn-ghost btn-sm" onClick={() => run(() => op(`/api/admin/members/${m.id}/status`, "POST", { status: m.status === "active" ? "suspended" : "active" })).then(load)}>
                         {m.status === "active" ? "Suspendre" : "Réactiver"}
                       </button>
@@ -242,10 +246,10 @@ function MembersTab({ ov }: { ov: Overview }) {
         <div className="card mt-5 grid gap-4 p-6 md:grid-cols-4">
           <label className="field"><span>Offre</span>
             <select className="input" value={grant.offer} onChange={(e) => setGrant({ ...grant, offer: e.target.value })}>
-              {ov.offers.filter((o) => o.price_xof > 0).map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+              {ov.offers.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
             </select>
           </label>
-          <label className="field"><span>Mois</span><input className="input" type="number" min={1} max={24} value={grant.months} onChange={(e) => setGrant({ ...grant, months: Number(e.target.value) })} /></label>
+          <label className="field"><span>Mois (0 = à vie)</span><input className="input" type="number" min={0} max={24} value={grant.months} onChange={(e) => setGrant({ ...grant, months: Number(e.target.value) })} /></label>
           <label className="field md:col-span-2"><span>Motif (journal)</span><input className="input" placeholder="bêta-testeur, cofondateur…" value={grant.reason} onChange={(e) => setGrant({ ...grant, reason: e.target.value })} /></label>
           <div className="flex gap-2 md:col-span-4">
             <button className="btn btn-primary btn-sm" onClick={async () => { if (await run(() => op(`/api/admin/members/${grant.id}/grant`, "POST", grant), "Accès attribué.")) { setGrant(null); load(); } }}>Attribuer l&apos;accès</button>
@@ -467,13 +471,39 @@ function CopyTab({ ov }: { ov: Overview }) {
   );
 }
 
+// ---------------- settings ----------------
+function SettingsTab() {
+  const [f, setF] = useState<{ telegram_url: string; discord_url: string; env_telegram?: boolean; env_discord?: boolean } | null>(null);
+  const { run, view } = useAction();
+  useEffect(() => {
+    op<{ telegram_url: string; discord_url: string; env_telegram: boolean; env_discord: boolean }>("/api/admin/settings").then(setF);
+  }, []);
+  if (!f) return <Spinner />;
+  const save = () => run(async () => setF(await op("/api/admin/settings", "PUT", { telegram_url: f.telegram_url, discord_url: f.discord_url })), "Réglages enregistrés.");
+  return (
+    <div className="max-w-2xl">
+      {view}
+      <div className="card grid gap-4 p-6">
+        <h2 className="font-semibold">Liens de la communauté privée</h2>
+        <p className="text-sm text-muted">
+          Montrés uniquement aux membres qui y ont droit (Starter et plus, groupe Elite, acheteurs de la formation ICT), dans leur espace membre. Ils sont
+          enregistrés sur votre serveur, jamais dans le code publié.
+        </p>
+        <label className="field"><span>Lien d&apos;invitation Telegram (https://t.me/…)</span><input className="input" value={f.telegram_url} onChange={(e) => setF({ ...f, telegram_url: e.target.value })} /></label>
+        <label className="field"><span>Lien d&apos;invitation Discord (https://discord.gg/…)</span><input className="input" value={f.discord_url} onChange={(e) => setF({ ...f, discord_url: e.target.value })} /></label>
+        <div><button className="btn btn-primary btn-sm" onClick={save}><Save className="size-4" /> Enregistrer</button></div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- leads ----------------
 function LeadsTab() {
   const [rows, setRows] = useState<{ email: string; interest: string; created_at: number }[] | null>(null);
   useEffect(() => {
     op<{ email: string; interest: string; created_at: number }[]>("/api/admin/leads").then(setRows);
   }, []);
-  const label: Record<string, string> = { copytrading: "Copytrading", next_bot: "Nouveau robot", academie: "Académie", newsletter: "Newsletter" };
+  const label: Record<string, string> = { copytrading: "Copytrading", next_bot: "Nouveau robot", academie: "Académie", newsletter: "Newsletter", formation: "Formations", mentorat: "Mentorat", licence: "Licences EA" };
   return (
     <div className="card scroll-x">
       {!rows ? <div className="p-6"><Spinner /></div> : rows.length === 0 ? <p className="p-6 text-sm text-muted">Aucun prospect pour le moment.</p> : (

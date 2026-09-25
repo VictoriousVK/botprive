@@ -130,3 +130,10 @@
   .prose-lf h2 { font-family: var(--font-display); font-weight: 700; font-size: 1.25rem; margin-top: 1.8rem; color: var(--color-fg); }
   .prose-lf ul { list-style: disc; padding-left: 1.2rem; color: var(--color-muted); line-height: 1.7; }
 }
+
+@layer components {
+  .text-gold { background: linear-gradient(180deg, #fff3cf 0%, #e8c77e 38%, #c9a45c 62%, #8a6a2c 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .btn-gold { background: linear-gradient(180deg, #f0d48f, #c9a45c 55%, #a8812f); color: #1a1205; box-shadow: 0 10px 34px -12px rgb(201 164 92 / .8), inset 0 1px 0 rgb(255 255 255 / .35); }
+  .btn-gold:hover { box-shadow: 0 12px 40px -8px rgb(201 164 92 / .95), inset 0 1px 0 rgb(255 255 255 / .4); }
+  .card-gold { background: linear-gradient(180deg, rgb(201 164 92 / .08), rgb(9 16 27 / .75)); border: 1px solid rgb(212 179 116 / .28); border-radius: var(--radius-card); }
+}
