@@ -13,4 +13,4 @@ Deterministic code (``policy``, ``risk``, ``execution``, ``portfolio``) owns eve
 decision that moves capital. No model output can size a position or override a limit.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

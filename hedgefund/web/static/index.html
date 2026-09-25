@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>HedgeFund – Plateforme de trading</title>
-  <link rel="icon" href="data:,">
+  <title>Alpha Edge · Console de trading · Liberté Financière</title>
+  <link rel="icon" href="/static/emblem.svg">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/charts.js" defer></script>
   <script src="/static/app.js" defer></script>
@@ -14,8 +14,12 @@
   <!-- ================= LOGIN ================= -->
   <div id="login-view" class="login hidden">
     <form id="login-form" class="login-card" autocomplete="on">
-      <h1>HedgeFund</h1>
-      <p class="muted">Connexion à votre plateforme de trading</p>
+      <div class="login-brand">
+        <img src="/static/emblem.svg" alt="">
+        <div class="brand-name"><strong>ALPHA EDGE</strong><small>Liberté Financière</small></div>
+      </div>
+      <h1>Console de trading</h1>
+      <p class="muted">Accès réservé aux opérateurs. Vous êtes membre ? <a href="/compte/">Espace membre</a></p>
       <label for="lg-user">Nom d'utilisateur</label>
       <input id="lg-user" name="username" autocomplete="username" required maxlength="60">
       <label for="lg-pass">Mot de passe</label>
@@ -31,7 +35,7 @@
   <div id="app-view" class="hidden">
     <header class="topbar">
       <div class="topbar-inner">
-        <span class="brand">HedgeFund</span>
+        <a class="brand" href="/" title="Site Liberté Financière"><img src="/static/emblem.svg" alt=""><span class="brand-name"><strong>ALPHA EDGE</strong><small>Liberté Financière</small></span></a>
         <span id="mode-badge" class="badge">—</span>
         <span id="conn-badge" class="badge"><span class="dot"></span><span>—</span></span>
         <nav class="tabs" role="tablist" aria-label="Sections">
@@ -41,6 +45,7 @@
           <button class="tab-btn" role="tab" data-tab="settings" aria-selected="false">Réglages</button>
         </nav>
         <span class="spacer"></span>
+        <a class="btn ghost small" href="/admin/" title="Administration du site : paiements, membres, cours, copytrading">Admin site</a>
         <button id="kill-btn" class="btn danger small" type="button">Arrêt d'urgence</button>
         <button id="theme-btn" class="btn ghost small" type="button" aria-label="Changer de thème">Thème</button>
         <button id="logout-btn" class="btn ghost small" type="button">Déconnexion</button>

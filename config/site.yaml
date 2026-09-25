@@ -1,0 +1,131 @@
+# Contenu public du site Liberté Financière (landing, offres, robots, académie, copytrading).
+# Ce fichier ne contient AUCUN secret : les clés Wave et l'URL publique se règlent par variables
+# d'environnement (voir docs/SITE.md). Redémarrez la plateforme après modification.
+#
+# Règles : n'affichez jamais de performance, de témoignage ou de partenaire inventés, et ne
+# promettez jamais de gains. Les prix ci-dessous sont les HYPOTHÈSES du blueprint ALPHA EDGE, à
+# valider par les cofondateurs avant la mise en ligne.
+
+brand:
+  name: "Liberté Financière"
+  platform: "Alpha Edge"            # nom de l'espace de trading (robots, console, laboratoire)
+  tagline: "Trader avec méthode. Investir avec discipline."
+  pitch: >-
+    Robots de trading pour MetaTrader 5, formation vidéo et copytrading encadré :
+    une plateforme africaine pensée par des traders, pour des traders.
+  country: "Sénégal"
+  contact_email: ""                 # ex. contact@votredomaine.com
+
+founders:
+  - name: "Khalifa Diop"
+    role: "Cofondateur · Trader expert"
+    initials: "KD"
+    bio: "Trader expert. Il conçoit les méthodes enseignées et supervise l'analyse des marchés."
+  - name: "Victor Faye"
+    role: "Cofondateur · Trader, data scientist, entrepreneur"
+    initials: "VF"
+    mark: vf                        # affiche le monogramme VF
+    bio: "Trader et data scientist. Il développe les robots, la plateforme et les outils quantitatifs."
+
+# Offres d'abonnement, payées en FCFA (XOF). period: durée d'un « mois » facturé, en jours.
+offers:
+  decouverte:
+    label: "Découverte"
+    price_xof: 0
+    summary: "Pour découvrir la méthode"
+    highlights:
+      - "Parcours débutant (extraits gratuits)"
+      - "Analyse du jour résumée"
+      - "Copytrading en démo"
+      - "Communauté publique"
+    entitlements: [academy_free, copy_demo]
+  trader:
+    label: "Trader"
+    price_xof: 15000
+    summary: "Se former et analyser ses trades"
+    highlights:
+      - "Académie complète hors modules avancés"
+      - "Analyses complètes Or et Nasdaq"
+      - "Analyse d'un compte MT5"
+      - "Groupes privés Telegram et Discord"
+    entitlements: [academy_free, academy_member, analyses, community_private, copy_demo]
+  pro:
+    label: "Pro"
+    price_xof: 45000
+    summary: "Automatiser avec les robots"
+    featured: true
+    highlights:
+      - "Tout Trader, plus les modules avancés"
+      - "1 licence de robot (ICT Pro v6.20 ou ICT v6)"
+      - "Copytrading dès son ouverture"
+      - "Laboratoire de backtest"
+      - "Webinaires en direct"
+    entitlements: [academy_free, academy_member, academy_advanced, analyses, community_private, robots, copy_demo, copy_live, lab]
+  elite:
+    label: "Elite"
+    price_xof: 120000
+    summary: "L'accompagnement complet"
+    highlights:
+      - "Tout Pro, tous les robots"
+      - "Accès anticipé au prochain robot"
+      - "Session de groupe mensuelle avec les cofondateurs"
+      - "Support prioritaire"
+    entitlements: [academy_free, academy_member, academy_advanced, analyses, community_private, robots, robots_all, early_access, copy_demo, copy_live, lab, coaching]
+
+billing:
+  currency: XOF
+  month_days: 30
+  durations: [1, 3, 12]             # durées proposées, en mois
+  free_months: {12: 2}              # l'annuel offre deux mois (payé 10 mois sur 12)
+  wave:
+    # Mode manuel (utilisable tout de suite) : le membre paie votre compte Wave, saisit l'ID de
+    # transaction, et un administrateur valide. Renseignez au moins l'un des deux champs.
+    manual_number: ""               # ex. "+221 77 000 00 00" (numéro Wave marchand)
+    manual_link: ""                 # ex. lien de paiement ou QR marchand fourni par Wave Business
+
+# Robots proposés sur le site. `template` renvoie aux stratégies de la console.
+robots:
+  - key: ict_pro
+    template: ict_pro
+    name: "ICT Ultimate Pro v6.20"
+    status: beta
+    headline: "Silver Bullet + Macro Breaker, gestion complète du trade"
+    markets: "Or (XAUUSD) et indices US, en M1"
+    access: robots
+  - key: ict_v6
+    template: ict_v6
+    name: "ICT Ultimate Pro v6"
+    status: beta
+    headline: "Croisement EMA + Silver Bullet sur fenêtres horaires"
+    markets: "Or et indices, en M5 à H1"
+    access: robots
+  - key: next_bot
+    name: "Nouveau robot haute performance"
+    status: development
+    headline: "En développement : il rejoindra le catalogue après validation sur compte démo vérifié."
+    markets: "À annoncer"
+    access: early_access
+
+# Parcours prévus, affichés « en préparation » tant qu'aucun cours publié ne porte le même slug.
+academy:
+  planned:
+    - slug: debutant
+      title: "Parcours débutant"
+      subtitle: "Comprendre les marchés, MT5 et la gestion d'un compte"
+      level: "Débutant"
+    - slug: gestion-du-risque
+      title: "Gestion du risque"
+      subtitle: "Taille de position, drawdown, plan de trading"
+      level: "Tous niveaux"
+    - slug: methode-ict
+      title: "Méthode ICT"
+      subtitle: "Liquidité, structure, FVG, Silver Bullet et Macro Breaker"
+      level: "Avancé"
+
+community:
+  telegram: ""                      # lien d'invitation (réservé aux membres selon l'offre)
+  discord: ""
+  whatsapp: ""
+
+# Bandeau de cotations de la page d'accueil (noms tels qu'affichés par votre broker).
+ticker: [XAUUSD, NAS100, US500, GER40, EURUSD, BTCUSD, USOIL]

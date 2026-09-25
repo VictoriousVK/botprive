@@ -99,10 +99,19 @@ class Session:
 
 
 class AuthService:
-    def __init__(self, store: Any, session_hours: int = SESSION_HOURS, idle_minutes: int = IDLE_MINUTES):
+    """Logins for one population of accounts.
+
+    Operators use the ``users``/``sessions`` tables (accounts created from the server console
+    only); members of the public site use ``members``/``member_sessions`` with their e-mail as
+    login. The two never share a table, a cookie or a session.
+    """
+
+    def __init__(self, store: Any, session_hours: int = SESSION_HOURS, idle_minutes: int = IDLE_MINUTES, users: str = "users", sessions: str = "sessions", login_column: str = "username", attempt_prefix: str = ""):
         self.store = store
         self.session_s = session_hours * 3600
         self.idle_s = idle_minutes * 60
+        # Table and column names are fixed by the code, never user input.
+        self.users, self.sessions, self.login_col, self.prefix = users, sessions, login_column, attempt_prefix
 
     # users
     def create_user(self, username: str, password: str) -> int:
@@ -115,14 +124,14 @@ class AuthService:
         return self.store.execute("SELECT id FROM users WHERE username = ?", (username,))[0]["id"]
 
     def user_count(self) -> int:
-        return self.store.execute("SELECT COUNT(*) AS n FROM users")[0]["n"]
+        return self.store.execute(f"SELECT COUNT(*) AS n FROM {self.users}")[0]["n"]
 
     def set_password(self, user_id: int, password: str) -> None:
-        self.store.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
-        self.store.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        self.store.execute(f"UPDATE {self.users} SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
+        self.store.execute(f"DELETE FROM {self.sessions} WHERE user_id = ?", (user_id,))
 
     def _user(self, user_id: int):
-        rows = self.store.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        rows = self.store.execute(f"SELECT * FROM {self.users} WHERE id = ?", (user_id,))
         return rows[0] if rows else None
 
     def check_password(self, user_id: int, password: str) -> bool:
@@ -141,17 +150,17 @@ class AuthService:
 
     def locked(self, username: str, ip: str, now: int | None = None) -> bool:
         now = int(now or time.time())
-        return self._failures(f"u:{username}", now) >= MAX_FAILURES or self._failures(f"ip:{ip}", now) >= MAX_FAILURES * 4
+        return self._failures(f"{self.prefix}u:{username}", now) >= MAX_FAILURES or self._failures(f"{self.prefix}ip:{ip}", now) >= MAX_FAILURES * 4
 
     def _record(self, username: str, ip: str, ok: bool, now: int) -> None:
-        for key in (f"u:{username}", f"ip:{ip}"):
+        for key in (f"{self.prefix}u:{username}", f"{self.prefix}ip:{ip}"):
             self.store.execute("INSERT INTO login_attempts (key, ts, ok) VALUES (?, ?, ?)", (key, now, int(ok)))
         self.store.execute("DELETE FROM login_attempts WHERE ts < ?", (now - 7 * 86_400,))
 
     def login(self, username: str, password: str, totp_code: str | None, ip: str, user_agent: str) -> tuple[str, Session] | None:
         """Returns (token, session) or None. Always does the same amount of hashing work."""
         now = int(time.time())
-        rows = self.store.execute("SELECT * FROM users WHERE username = ?", (username.strip(),))
+        rows = self.store.execute(f"SELECT * FROM {self.users} WHERE {self.login_col} = ?", (username.strip(),))
         u = rows[0] if rows else None
         ok = verify_password(password, u["password_hash"] if u else DUMMY_HASH) and u is not None
         if ok and u["totp_enabled"]:
@@ -161,10 +170,10 @@ class AuthService:
             return None
         token, csrf = new_token(), new_token()
         self.store.execute(
-            "INSERT INTO sessions (token_hash, user_id, csrf, created_at, last_seen, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO {self.sessions} (token_hash, user_id, csrf, created_at, last_seen, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (token_hash(token), u["id"], csrf, now, now, now + self.session_s, ip, user_agent[:200]),
         )
-        return token, Session(u["id"], u["username"], csrf, bool(u["totp_enabled"]))
+        return token, Session(u["id"], u[self.login_col], csrf, bool(u["totp_enabled"]))
 
     def session(self, token: str | None) -> Session | None:
         if not token:
@@ -172,30 +181,30 @@ class AuthService:
         now = int(time.time())
         th = token_hash(token)
         rows = self.store.execute(
-            "SELECT s.*, u.username, u.totp_enabled FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?", (th,)
+            f"SELECT s.*, u.{self.login_col} AS login, u.totp_enabled FROM {self.sessions} s JOIN {self.users} u ON u.id = s.user_id WHERE s.token_hash = ?", (th,)
         )
         if not rows:
             return None
         r = rows[0]
         if r["expires_at"] < now or r["last_seen"] < now - self.idle_s:
-            self.store.execute("DELETE FROM sessions WHERE token_hash = ?", (th,))
+            self.store.execute(f"DELETE FROM {self.sessions} WHERE token_hash = ?", (th,))
             return None
-        self.store.execute("UPDATE sessions SET last_seen = ? WHERE token_hash = ?", (now, th))
-        return Session(r["user_id"], r["username"], r["csrf"], bool(r["totp_enabled"]))
+        self.store.execute(f"UPDATE {self.sessions} SET last_seen = ? WHERE token_hash = ?", (now, th))
+        return Session(r["user_id"], r["login"], r["csrf"], bool(r["totp_enabled"]))
 
     def logout(self, token: str | None) -> None:
         if token:
-            self.store.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
+            self.store.execute(f"DELETE FROM {self.sessions} WHERE token_hash = ?", (token_hash(token),))
 
     # TOTP enrolment
     def begin_totp(self, user_id: int) -> str:
         secret = new_totp_secret()
-        self.store.execute("UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?", (secret, user_id))
+        self.store.execute(f"UPDATE {self.users} SET totp_secret = ?, totp_enabled = 0 WHERE id = ?", (secret, user_id))
         return secret
 
     def enable_totp(self, user_id: int, code: str) -> bool:
         u = self._user(user_id)
         if not u or not u["totp_secret"] or not verify_totp(u["totp_secret"], code):
             return False
-        self.store.execute("UPDATE users SET totp_enabled = 1 WHERE id = ?", (user_id,))
+        self.store.execute(f"UPDATE {self.users} SET totp_enabled = 1 WHERE id = ?", (user_id,))
         return True

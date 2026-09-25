@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +54,22 @@ class PlatformStore:
     def execute(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(sql, args).fetchall()
+
+    def executescript(self, sql: str) -> None:
+        with self._lock:
+            self._conn.executescript(sql)
+
+    @contextmanager
+    def atomic(self) -> Iterator["PlatformStore"]:
+        """Runs the enclosed statements as one transaction, and exclusively of other threads."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
 
     # ---- settings ----
     def get_setting(self, key: str, default: Any = None) -> Any:

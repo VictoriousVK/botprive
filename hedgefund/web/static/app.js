@@ -66,7 +66,7 @@
   function applyTheme(t) {
     if (t) document.documentElement.setAttribute("data-theme", t); else document.documentElement.removeAttribute("data-theme");
   }
-  try { applyTheme(localStorage.getItem("hf-theme")); } catch (e) { /* storage unavailable */ }
+  try { applyTheme(localStorage.getItem("hf-theme") || "dark"); } catch (e) { applyTheme("dark"); }
   function toggleTheme() {
     var cur = document.documentElement.getAttribute("data-theme");
     var dark = cur ? cur === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;

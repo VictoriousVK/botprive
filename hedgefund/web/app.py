@@ -16,8 +16,11 @@ Security model:
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
 import os
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -34,12 +37,58 @@ from hedgefund.bots.engine import BotEngine, EngineError
 from hedgefund import __version__
 from hedgefund.bots.templates import DIRECTIONS, TEMPLATES, TIMEFRAMES, new_bot_id, validate_bot
 from hedgefund.core.ledger import Kind
+from hedgefund.members.academy import FRAME_SOURCES, Academy
+from hedgefund.members.api import SiteContext, mount_members
+from hedgefund.members.copytrading import Copytrading
+from hedgefund.members.service import Members
+from hedgefund.members.site import MemberSettings, SiteConfig, load_site
 from hedgefund.mt5.catalog import CATEGORY_LABELS
 from hedgefund.web.security import AuthService, Session, totp_uri
 
-STATIC = Path(__file__).parent / "static"
+STATIC = Path(__file__).parent / "static"  # operator console
+SITE = Path(__file__).parent / "site"  # public site (Next.js static export of apps/web)
 COOKIE = "hf_session"
 REAL_CONFIRMATION = "JE COMPRENDS LE RISQUE"
+CONSOLE_CSP = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+_INLINE_SCRIPT = re.compile(rb"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
+
+
+class SitePages:
+    """Serves the exported site. Next.js pages carry small inline scripts, so each page gets a
+    Content-Security-Policy allowing exactly those scripts (by hash) and nothing else."""
+
+    def __init__(self, root: Path, media_hosts: tuple[str, ...] = ()):
+        self.root = root.resolve()
+        media = " ".join(["'self'", *(f"https://{h}" for h in media_hosts)])
+        self.base = (
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; "
+            f"frame-src {' '.join(FRAME_SOURCES)}; media-src {media}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+        )
+        self._csp: dict[Path, tuple[int, str]] = {}
+
+    @property
+    def available(self) -> bool:
+        return (self.root / "index.html").is_file()
+
+    def resolve(self, path: str) -> Path | None:
+        path = path.strip("/")
+        candidates = [self.root / path / "index.html", self.root / f"{path}.html", self.root / path] if path else [self.root / "index.html"]
+        for c in candidates:
+            try:
+                c = c.resolve()
+            except OSError:
+                continue
+            if c.is_file() and c.is_relative_to(self.root):
+                return c
+        return None
+
+    def csp(self, page: Path) -> str:
+        mtime = page.stat().st_mtime_ns  # a republished site takes effect without a restart
+        hit = self._csp.get(page)
+        if hit is None or hit[0] != mtime:
+            hashes = " ".join(f"'sha256-{base64.b64encode(hashlib.sha256(m).digest()).decode()}'" for m in _INLINE_SCRIPT.findall(page.read_bytes()) if m.strip())
+            hit = self._csp[page] = (mtime, f"{self.base}; script-src 'self' {hashes}".rstrip())
+        return hit[1]
 
 
 @dataclass(frozen=True)
@@ -121,8 +170,19 @@ class RealTradingIn(ReauthIn):
     confirmation: str = ""
 
 
-def create_app(engine: BotEngine, auth: AuthService, settings: WebSettings | None = None, start_engine: bool = True) -> FastAPI:
+def create_app(
+    engine: BotEngine,
+    auth: AuthService,
+    settings: WebSettings | None = None,
+    start_engine: bool = True,
+    site: SiteConfig | None = None,
+    member_settings: MemberSettings | None = None,
+    site_dir: Path | None = None,
+) -> FastAPI:
     settings = settings or WebSettings.from_env()
+    site = site or load_site()
+    member_settings = member_settings or MemberSettings.from_env()
+    pages = SitePages(site_dir or SITE, member_settings.media_hosts)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -139,15 +199,18 @@ def create_app(engine: BotEngine, auth: AuthService, settings: WebSettings | Non
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
         h = response.headers
-        h["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+        h.setdefault("Content-Security-Policy", CONSOLE_CSP)  # site pages set their own
         h["X-Content-Type-Options"] = "nosniff"
         h["X-Frame-Options"] = "DENY"
         h["Referrer-Policy"] = "no-referrer"
         h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
         h["Cross-Origin-Opener-Policy"] = "same-origin"
-        if request.url.path.startswith("/api/"):
+        path = request.url.path
+        if path.startswith("/api/"):
             h["Cache-Control"] = "no-store"
-        elif request.url.path.startswith("/static/") or request.url.path == "/":
+        elif path.startswith("/_next/static/"):
+            h["Cache-Control"] = "public, max-age=31536000, immutable"  # content-hashed file names
+        else:
             h["Cache-Control"] = "no-cache"  # revalidate, so an update is picked up at once
         if settings.hsts:
             h["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -160,23 +223,27 @@ def create_app(engine: BotEngine, auth: AuthService, settings: WebSettings | Non
                 return fwd.split(",")[0].strip()[:64]
         return request.client.host if request.client else "unknown"
 
+    def check_write(request: Request, csrf: str) -> None:
+        """Origin + CSRF checks for every state-changing call (console and member area)."""
+        origin = request.headers.get("origin")
+        if origin:
+            allowed = {request.headers.get("host", "").lower()}
+            if settings.public_host:
+                allowed.add(settings.public_host)
+            if settings.trust_proxy and request.headers.get("x-forwarded-host"):
+                allowed.add(request.headers["x-forwarded-host"].lower())
+            if origin.split("://", 1)[-1].lower() not in allowed:
+                raise HTTPException(403, "origine refusée")
+        token = request.headers.get("x-csrf-token", "")
+        if not token or not hmac.compare_digest(token, csrf):
+            raise HTTPException(403, "jeton CSRF invalide")
+
     def session(request: Request) -> Session:
         s = auth.session(request.cookies.get(COOKIE))
         if s is None:
             raise HTTPException(401, "non authentifié")
         if request.method not in ("GET", "HEAD", "OPTIONS"):
-            origin = request.headers.get("origin")
-            if origin:
-                allowed = {request.headers.get("host", "").lower()}
-                if settings.public_host:
-                    allowed.add(settings.public_host)
-                if settings.trust_proxy and request.headers.get("x-forwarded-host"):
-                    allowed.add(request.headers["x-forwarded-host"].lower())
-                if origin.split("://", 1)[-1].lower() not in allowed:
-                    raise HTTPException(403, "origine refusée")
-            token = request.headers.get("x-csrf-token", "")
-            if not token or not hmac.compare_digest(token, s.csrf):
-                raise HTTPException(403, "jeton CSRF invalide")
+            check_write(request, s.csrf)
         return s
 
     def reauth(s: Session, body: ReauthIn) -> None:
@@ -199,8 +266,9 @@ def create_app(engine: BotEngine, auth: AuthService, settings: WebSettings | Non
     # ---------------- static ----------------
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-    @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
+    @app.get("/console", include_in_schema=False)
+    @app.get("/console/", include_in_schema=False)
+    def console() -> FileResponse:
         return FileResponse(STATIC / "index.html")
 
     @app.get("/api/health")
@@ -414,5 +482,34 @@ def create_app(engine: BotEngine, auth: AuthService, settings: WebSettings | Non
             raise HTTPException(400, f"tapez exactement : {REAL_CONFIRMATION}")
         run(engine.set_real_trading, body.enabled, s.username)
         return {"ok": True, "unlocked": engine.real_trading_enabled()}
+
+    # ---------------- public site: members, payments, academy, copytrading ----------------
+    members = Members(engine.store, site, member_settings)
+    mount_members(app, SiteContext(
+        engine=engine, site=site, settings=member_settings, members=members,
+        academy=Academy(engine.store, site, member_settings), copy=Copytrading(engine.store, engine, member_settings.copytrading),
+        cookie_secure=settings.cookie_secure, client_ip=client_ip, operator=session, check_write=check_write,
+    ))
+    app.state.members = members
+
+    @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE"], include_in_schema=False)
+    def api_not_found(rest: str) -> None:
+        raise HTTPException(404, "route inconnue")
+
+    # Site pages last, so they never shadow the API or the console.
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    def site_page(path: str):
+        if not pages.available:
+            if path in ("", "index.html"):
+                return FileResponse(STATIC / "index.html")  # site not built: the console stays at /
+            raise HTTPException(404, "page introuvable")
+        page = pages.resolve(path)
+        if page is None:
+            missing = pages.resolve("404")
+            if missing is None:
+                raise HTTPException(404, "page introuvable")
+            return FileResponse(missing, status_code=404, headers={"Content-Security-Policy": pages.csp(missing)})
+        headers = {"Content-Security-Policy": pages.csp(page)} if page.suffix == ".html" else {}
+        return FileResponse(page, headers=headers)
 
     return app

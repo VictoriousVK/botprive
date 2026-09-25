@@ -11,7 +11,13 @@ This repository holds three things:
   **Guide in French: [docs/PLATFORM.md](docs/PLATFORM.md).** Quick start on Windows:
   `.\deploy\windows\install.ps1`, then
   `.\.venv\Scripts\python.exe -m hedgefund.web create-user --username YOU`, then
-  `.\deploy\windows\start.ps1`, and open http://127.0.0.1:8000.
+  `.\deploy\windows\start.ps1`, and open http://127.0.0.1:8000/console.
+- **Liberté Financière site** (`apps/web`, served by the same platform at `/`): landing page,
+  robot catalogue, demo copytrading, video academy (multi-part courses), offers paid with
+  Wave (checkout API or manual transfer), member area and site administration
+  (`hedgefund/members`). Next.js + TypeScript + Tailwind + Framer Motion, exported
+  statically into `hedgefund/web/site` so Node.js isn't needed at runtime.
+  **Guide in French: [docs/SITE.md](docs/SITE.md).**
 - **`hedgefund/`** is a one-person, 24/7 AI hedge fund. Claude Opus 5.5 does the research,
   an orchestrated set of workflows runs the operation, Jev makes fast typed decisions, and
   deterministic code owns risk and execution. The full design, build plan and risk analysis

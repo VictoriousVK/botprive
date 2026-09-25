@@ -1,6 +1,11 @@
-# Plateforme HedgeFund pour MetaTrader 5 : guide complet
+# Console Alpha Edge (plateforme de trading MetaTrader 5) : guide complet
 
-La plateforme web pilote vos bots de trading sur MT5, depuis un navigateur (ordinateur ou
+> **Nouveau (v0.3.0).** La même adresse sert désormais le **site Liberté Financière** (accueil,
+> robots, copytrading, académie vidéo, offres, paiement Wave, espace membre) à la racine `/`,
+> et la **console de trading** décrite ici à **`/console`**. Guide du site :
+> [docs/SITE.md](SITE.md).
+
+La console pilote vos bots de trading sur MT5, depuis un navigateur (ordinateur ou
 téléphone). Elle sert à :
 
 - **choisir l'actif** : or, argent, Nasdaq, S&P 500, DAX, Bitcoin, Ethereum, forex,
@@ -84,7 +89,9 @@ ceux du broker.
    ```powershell
    .\deploy\windows\start.ps1
    ```
-7. Ouvrez **http://127.0.0.1:8000** dans le navigateur du PC et connectez-vous.
+7. Ouvrez **http://127.0.0.1:8000/console** dans le navigateur du PC et connectez-vous
+   (le site Liberté Financière est à **http://127.0.0.1:8000**, l'administration du site à
+   **http://127.0.0.1:8000/admin/** une fois connecté à la console).
 
 ### Mettre à jour la plateforme (nouvelle version reçue en zip)
 
@@ -298,6 +305,8 @@ Ce que la plateforme fait déjà :
 | « Historique insuffisant » | Augmentez « Nombre max. de barres dans le graphique » dans MT5 (Outils → Options → Graphiques), ou choisissez une unité de temps plus longue |
 | « trop de tentatives » à la connexion | Attendez 15 minutes |
 | Mot de passe oublié | Sur le PC : `.\.venv\Scripts\python.exe -m hedgefund.web reset-password --username vic` |
+| Un membre du site a oublié son mot de passe | `.\.venv\Scripts\python.exe -m hedgefund.web member-password --email membre@exemple.com` |
+| J'arrive sur le site au lieu de la console | La console est maintenant à `/console` (le site est à `/`) |
 | Je ne vois pas mes stratégies ICT | Vous utilisez encore l'ancienne version : suivez « Mettre à jour la plateforme » (§4). Elles apparaissent dans **Bots → Stratégies disponibles** et dans la liste « Stratégie » du formulaire. Elles ne s'affichent **pas dans MT5** : le calcul se fait dans la plateforme, MT5 ne voit que les ordres (commentaire `hf…`) |
 | « spread … > 0.15 ATR M5 » (bot ICT) | Spread du broker trop large par rapport à la volatilité (souvent la nuit ou avant les annonces) : c'est le filtre de l'EA. Réglable dans les paramètres avancés |
 | « hors fenêtre Silver Bullet et hors macro » | Normal : le bot ICT Pro ne cherche des setups que dans les fenêtres et macros de New York |

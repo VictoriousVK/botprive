@@ -1,7 +1,8 @@
 """python -m hedgefund.web <command>
 
-  create-user --username NAME     create a login (password asked twice, >= 12 characters)
-  reset-password --username NAME  set a new password and revoke that user's sessions
+  create-user --username NAME     create a console login (password asked twice, >= 12 characters)
+  reset-password --username NAME  set a new console password and revoke that user's sessions
+  member-password --email EMAIL   set a new password for a site member and revoke their sessions
   serve [--host 127.0.0.1] [--port 8000]
 """
 
@@ -38,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("create-user", "reset-password"):
         p = sub.add_parser(name)
         p.add_argument("--username", required=True)
+    p = sub.add_parser("member-password")
+    p.add_argument("--email", required=True)
     p = sub.add_parser("serve")
     p.add_argument("--host", default=os.environ.get("HF_HOST", "127.0.0.1"))
     p.add_argument("--port", type=int, default=int(os.environ.get("HF_PORT", "8000")))
@@ -63,6 +66,21 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             sys.exit(str(e))
         print("mot de passe changé ; toutes les sessions de cet utilisateur sont fermées")
+        return 0
+
+    if args.cmd == "member-password":
+        from hedgefund.members.service import SCHEMA, member_auth
+
+        store = _store(args)
+        store.executescript(SCHEMA)
+        rows = store.execute("SELECT id FROM members WHERE email = ?", (args.email.strip().lower(),))
+        if not rows:
+            sys.exit("membre inconnu")
+        try:
+            member_auth(store).set_password(rows[0]["id"], _ask_password())
+        except ValueError as e:
+            sys.exit(str(e))
+        print("mot de passe du membre changé ; ses sessions sont fermées")
         return 0
 
     import uvicorn
