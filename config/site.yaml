@@ -1,0 +1,233 @@
+# Contenu public du site Liberté Financière (landing, offres, robots, académie, copytrading).
+# Ce fichier est dans le dépôt : il ne contient AUCUN secret ni lien privé. Les clés Wave et
+# l'URL publique se règlent par variables d'environnement, les liens Telegram et Discord dans
+# /admin/ → Réglages (voir docs/SITE.md). Redémarrez la plateforme après modification.
+#
+# Règles : n'affichez jamais de performance, de témoignage ou de partenaire inventés, et ne
+# promettez jamais de gains. Prix fixés par Victor Faye (septembre 2026).
+
+brand:
+  name: "Liberté Financière"
+  platform: "Alpha Edge"            # nom de l'espace de trading (robots, console, laboratoire)
+  tagline: "Trader avec méthode. Investir avec discipline."
+  pitch: >-
+    Robots de trading pour MetaTrader 5, formation vidéo et copytrading encadré :
+    une plateforme africaine pensée par des traders, pour des traders.
+  country: "Sénégal"
+  contact_email: ""                 # ex. contact@votredomaine.com
+
+founders:
+  - name: "Khalifa Diop"
+    role: "Cofondateur · Trader expert"
+    initials: "KD"
+    bio: "Trader expert. Il conçoit les méthodes enseignées et supervise l'analyse des marchés."
+  - name: "Victor Faye"
+    role: "Cofondateur · Trader, data scientist, entrepreneur"
+    initials: "VF"
+    mark: vf                        # affiche le monogramme VF
+    bio: "Trader et data scientist. Il développe les robots, la plateforme et les outils quantitatifs."
+
+# Compte gratuit : ce que tout membre inscrit reçoit, sans payer.
+free:
+  label: "Compte gratuit"
+  summary: "Découvrir la méthode et la plateforme"
+  entitlements: [academy_free, copy_demo]
+
+# Catalogue. category: abonnement | formation | mentorat | licence
+# period: month (payé au mois, prolongeable) | once (paiement unique, accès à vie)
+# status: available (achetable avec Wave) | soon (liste d'attente) | contact (sur candidature, WhatsApp)
+# price_usd sert à l'affichage ; le montant payé avec Wave est price_xof, ou price_usd x usd_xof
+# arrondi (voir billing). Un point marqué `soon: true` s'affiche avec la mention « bientôt ».
+products:
+  starter:
+    category: abonnement
+    label: "Starter"
+    period: month
+    price_usd: 29
+    price_xof: 17000
+    summary: "La communauté et les analyses du jour"
+    audience: ["Débutants", "Traders manuels"]
+    highlights:
+      - "Accès à la communauté privée"
+      - "Analyses Gold et Nasdaq"
+      - "Commentaires quotidiens"
+      - {text: "Calendrier économique", soon: true}
+      - "Webinaires mensuels"
+    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, copy_demo]
+  pro_trader:
+    category: abonnement
+    label: "Pro Trader"
+    period: month
+    price_usd: 79
+    price_xof: 46000
+    featured: true
+    summary: "Automatiser avec un EA et suivre ses résultats"
+    audience: ["Traders intermédiaires"]
+    highlights:
+      - "Tout Starter"
+      - "Accès à 1 EA"
+      - {text: "Dashboard de performance", soon: true}
+      - {text: "Journal de trading", soon: true}
+      - {text: "Connexion MT5", soon: true}
+      - {text: "Statistiques avancées", soon: true}
+    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, performance, mt5_connect, copy_demo, copy_live, lab]
+  quant_elite:
+    category: abonnement
+    label: "Quant Elite"
+    period: month
+    price_usd: 199
+    price_xof: 116000
+    summary: "Tout l'écosystème, formations comprises"
+    audience: ["Traders sérieux", "Comptes financés"]
+    highlights:
+      - "Tout Pro Trader"
+      - "Tous les EA"
+      - {text: "IA Trading Coach", soon: true}
+      - "Formation complète ICT (Victorious Trader)"
+      - {text: "Formation EA", soon: true}
+      - "Support prioritaire"
+      - "Futures nouvelles fonctionnalités"
+    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, ea_all, performance, mt5_connect, coach_ia, formation_ict, formation_ea, priority_support, early_access, copy_demo, copy_live, lab]
+
+  formation_ict:
+    category: formation
+    label: "Victorious Trader : formation ICT"
+    period: once
+    price_usd: 899
+    page: /formation-ict/
+    summary: "Le programme officiel en 16 modules, par Victor Faye"
+    audience: ["Traders qui veulent maîtriser la méthode ICT"]
+    highlights:
+      - "16 modules : IPDA, AMD, Silver Bullet, MMXM, SMT, NWOG/NDOG…"
+      - "Cas réels sur NAS100, XAUUSD et EURUSD"
+      - "Accompagnement personnalisé"
+      - "Accès à vie au groupe de traders d'élite"
+      - "Échanges directs avec Victor Faye"
+    entitlements: [academy_free, formation_ict, community_private]
+  formation_ea:
+    category: formation
+    label: "Développement EA MT5"
+    period: once
+    status: soon
+    price_range_usd: [499, 799]
+    summary: "Créer, tester et déployer ses propres robots"
+    highlights: ["MQL5", "Backtesting", "Optimisation", "Déploiement sur VPS"]
+    entitlements: [formation_ea]
+  formation_quant:
+    category: formation
+    label: "Quant et IA Trading"
+    period: once
+    status: soon
+    price_usd: 999
+    summary: "La finance quantitative appliquée au trading"
+    highlights: ["Python", "Machine learning", "Finance quantitative", "Construction de stratégies", "Analyse statistique"]
+    entitlements: [formation_quant]
+
+  groupe_elite:
+    category: mentorat
+    label: "Groupe privé Elite"
+    period: month
+    price_usd: 99
+    summary: "Les lives et l'accès direct à Victor Faye"
+    highlights: ["Lives hebdomadaires", "Débrief des marchés", "Questions-réponses", "Accès direct à Victor Faye"]
+    entitlements: [academy_free, community_private, elite_group, copy_demo]
+  mentorat_individuel:
+    category: mentorat
+    label: "Mentorat individuel"
+    period: month
+    status: contact
+    price_range_usd: [499, 999]
+    summary: "Un accompagnement sur mesure, sur candidature"
+    highlights: ["Accompagnement personnalisé", "Analyse de votre journal de trading", "Construction de votre plan de trading", "Sessions privées"]
+    entitlements: [mentorat, elite_group, community_private]
+
+  licence_standard:
+    category: licence
+    label: "Licence EA Standard"
+    period: once
+    status: soon
+    price_usd: 399
+    alt_price: "ou 49 $/mois"
+    summary: "Disponible quand les performances de l'EA seront vérifiées"
+    highlights: ["Licence d'un EA sur votre compte MT5", "Mises à jour incluses"]
+    entitlements: [ea_one]
+  licence_premium:
+    category: licence
+    label: "Licence EA Premium"
+    period: once
+    status: soon
+    price_usd: 999
+    alt_price: "ou 99 $/mois"
+    summary: "Disponible quand les performances de l'EA seront vérifiées"
+    highlights: ["Tous les EA", "Mises à jour et support prioritaire"]
+    entitlements: [ea_all, priority_support]
+
+billing:
+  usd_xof: 583                      # taux indicatif (29 $ ≈ 17 000 FCFA) pour les produits sans price_xof
+  round_xof: 1000                   # arrondi des montants convertis
+  month_days: 30
+  durations: [1, 3, 12]             # durées proposées pour les abonnements, en mois
+  free_months: {}                   # ex. {12: 2} pour offrir deux mois sur l'annuel
+  wave:
+    # Mode manuel (utilisable tout de suite) : le membre paie ce numéro Wave, saisit l'ID de la
+    # transaction, et un administrateur valide dans /admin/.
+    manual_number: "+221 78 426 01 82"
+    manual_link: ""                 # ex. lien de paiement ou QR marchand fourni par Wave Business
+
+payment_methods:
+  - {name: "Wave", status: available}
+  - {name: "Orange Money", status: soon}
+  - {name: "Carte bancaire (Stripe)", status: soon}
+  - {name: "PayPal", status: soon}
+
+contact:
+  whatsapp: "+221 78 426 01 82"
+  email: ""
+
+# Les liens d'invitation Telegram et Discord ne vont PAS ici (ce fichier est dans le dépôt) :
+# saisissez-les dans /admin/ → Réglages. Ils ne sont montrés qu'aux membres qui y ont droit.
+
+# Robots proposés sur le site. `template` renvoie aux stratégies de la console.
+robots:
+  - key: ict_pro
+    template: ict_pro
+    name: "ICT Ultimate Pro v6.20"
+    status: beta
+    headline: "Silver Bullet + Macro Breaker, gestion complète du trade"
+    markets: "Or (XAUUSD) et indices US, en M1"
+    access: ea_one
+  - key: ict_v6
+    template: ict_v6
+    name: "ICT Ultimate Pro v6"
+    status: beta
+    headline: "Croisement EMA + Silver Bullet sur fenêtres horaires"
+    markets: "Or et indices, en M5 à H1"
+    access: ea_one
+  - key: next_bot
+    name: "Nouveau robot haute performance"
+    status: development
+    headline: "En développement : il rejoindra le catalogue après validation sur compte démo vérifié."
+    markets: "À annoncer"
+    access: early_access
+
+# Parcours prévus, affichés « en préparation » tant qu'aucun cours publié ne porte le même slug.
+academy:
+  planned:
+    - slug: victorious-trader
+      access: formation_ict
+      title: "Victorious Trader : formation ICT"
+      subtitle: "16 modules, de l'IPDA au Friday Model, par Victor Faye"
+      level: "Tous niveaux"
+    - slug: developpement-ea
+      access: formation_ea
+      title: "Développement EA MT5"
+      subtitle: "MQL5, backtesting, optimisation, déploiement VPS"
+      level: "Intermédiaire"
+    - slug: quant-ia
+      access: formation_quant
+      title: "Quant et IA Trading"
+      subtitle: "Python, machine learning, finance quantitative"
+      level: "Avancé"
+
+# Bandeau de cotations de la page d'accueil (noms tels qu'affichés par votre broker).
+ticker: [XAUUSD, NAS100, US500, GER40, EURUSD, BTCUSD, USOIL]
