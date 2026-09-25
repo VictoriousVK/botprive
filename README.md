@@ -18,6 +18,7 @@ This repository holds three things:
   (`hedgefund/members`). Next.js + TypeScript + Tailwind + Framer Motion, exported
   statically into `hedgefund/web/site` so Node.js isn't needed at runtime.
   **Guide in French: [docs/SITE.md](docs/SITE.md).**
+- **Step-by-step local setup (French): [docs/DEMARRAGE.md](docs/DEMARRAGE.md).**
 - **`hedgefund/`** is a one-person, 24/7 AI hedge fund. Claude Opus 5.5 does the research,
   an orchestrated set of workflows runs the operation, Jev makes fast typed decisions, and
   deterministic code owns risk and execution. The full design, build plan and risk analysis

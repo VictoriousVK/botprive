@@ -211,6 +211,7 @@ pour faire tourner la plateforme.** Pour modifier le site :
 cd apps/web
 npm ci
 npm run dev            # http://localhost:3000, l'API est relayée vers la plateforme sur :8000
+                       # (lancez la plateforme avec HF_PUBLIC_HOST=localhost:3000)
 npm run publish-site   # compile et copie le résultat dans hedgefund/web/site
 ```
 

@@ -12,7 +12,11 @@ const config: NextConfig = {
   poweredByHeader: false,
   devIndicators: false,
   ...(dev
-    ? { rewrites: async () => [{ source: "/api/:path*", destination: `${api}/api/:path*` }, { source: "/console", destination: `${api}/console` }, { source: "/static/:path*", destination: `${api}/static/:path*` }] }
+    ? {
+        // Keep /api/... exactly as written (no trailing-slash redirect) so it reaches the platform unchanged.
+        skipTrailingSlashRedirect: true,
+        rewrites: async () => [{ source: "/api/:path*", destination: `${api}/api/:path*` }, { source: "/console", destination: `${api}/console` }, { source: "/static/:path*", destination: `${api}/static/:path*` }],
+      }
     : { output: "export" as const }),
 };
 
