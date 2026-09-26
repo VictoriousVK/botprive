@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-MODULES: list[str] = []
+MODULES: list[str] = ["journal"]
 
 
 def install_all(saas: Any) -> None:

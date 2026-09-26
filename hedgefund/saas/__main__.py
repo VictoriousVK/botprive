@@ -7,6 +7,7 @@
   eval [--suite NAME]          run the scorecard (exit code 1 on any catastrophic failure)
   mcp SERVER                   run an MCP server on stdio (journal, ict-engine, knowledge, market-data, backtest)
   purge-jobs --days N          delete finished jobs older than N days
+  bridge [--every-min 15]      MT5 read-only bridge for accounts in investor mode (Windows host)
 
 The database comes from HF_SAAS_DB (default: SQLite in the data directory).
 """
@@ -50,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("server")
     p.add_argument("--tenant", default="")
     p.add_argument("--user", type=int, default=0)
+    p = sub.add_parser("bridge")
+    p.add_argument("--every-min", type=int, default=15)
+    p.add_argument("--once", action="store_true")
     p = sub.add_parser("purge-jobs")
     p.add_argument("--days", type=int, default=30)
     args = ap.parse_args(argv)
@@ -82,6 +86,18 @@ def main(argv: list[str] | None = None) -> int:
             pass
         s.shutdown()
         return 0
+    if args.cmd == "bridge":
+        import MetaTrader5 as mt5  # type: ignore[import-not-found]
+
+        from hedgefund.saas.bridge import run_once
+
+        s = _saas(args)
+        while True:
+            for line in run_once(s, mt5):
+                print(line)
+            if args.once:
+                return 0
+            time.sleep(max(5, args.every_min) * 60)
     if args.cmd == "purge-jobs":
         s = _saas(args)
         n = s.queue.purge(int(time.time() * 1000) - args.days * 86_400_000)

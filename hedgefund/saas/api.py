@@ -35,6 +35,14 @@ class ApiContext:
     operator: Callable[..., Any]  # dependency -> console Session
     profile: Callable[[dict[str, Any]], dict[str, Any]]  # member dict -> public profile (offer, entitlements)
     client_ip: Callable[[Request], str]
+    member_by_id: Callable[[int], dict[str, Any] | None] = lambda _id: None
+
+    def plan_of(self, member_id: int) -> str:
+        """Main offer of a member, for machine routes that act on the member's behalf."""
+        m = self.member_by_id(member_id)
+        if not m or m.get("status") != "active":
+            return "gratuit"
+        return self.profile(m).get("offer", "gratuit")
 
     def access(self, sm: Any) -> Access:
         _s, m = sm
