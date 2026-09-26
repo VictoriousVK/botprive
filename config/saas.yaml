@@ -1,0 +1,50 @@
+# Alpha Edge SaaS : fonctions, droits d'accès et plafonds mensuels par offre.
+#
+# Les droits (entitlements) viennent du catalogue (config/site.yaml) : une fonction est ouverte
+# si le membre a le droit indiqué. Les plafonds limitent le coût IA par membre (≤ 10 % du prix
+# de l'offre en usage typique, voir docs/SAAS.md). Tous les chiffres sont des hypothèses de
+# départ, à recaler après la bêta.
+
+features:
+  journal:      {entitlement: journal,        label: "Journal et statistiques"}
+  mt5_sync:     {entitlement: mt5_connect,    label: "Synchronisation MT5 (EA Journal Sync)"}
+  coach:        {entitlement: journal,        label: "Coach IA (revue du journal)"}
+  analysis:     {entitlement: analyses,       label: "Analyste de setup ICT"}
+  prop_guard:   {entitlement: performance,    label: "Garde-fou prop firm et alertes"}
+  tradingview:  {entitlement: performance,    label: "Alertes TradingView"}
+  mentor:       {entitlement: academy_member, label: "Mentor IA sur les contenus de Victor"}
+  briefing:     {entitlement: calendar,       label: "Briefing de pré-session"}
+  lab:          {entitlement: lab,            label: "Laboratoire de validation"}
+  ea_factory:   {entitlement: ea_factory,     label: "Usine EA"}
+  public_api:   {entitlement: api,            label: "API (lecture seule)"}
+
+# Plafonds mensuels. La clé est l'offre principale du membre (config/site.yaml) ; « gratuit »
+# s'applique à tout compte sans abonnement.
+plans:
+  gratuit:     {trades_per_month: 100, coach: 5,   analysis: 0,   mentor: 0,   backtest: 0,   ea_run: 0, briefing: 0}
+  starter:     {trades_per_month: 0,   coach: 60,  analysis: 20,  mentor: 30,  backtest: 0,   ea_run: 0, briefing: 60}
+  pro_trader:  {trades_per_month: 0,   coach: 120, analysis: 100, mentor: 80,  backtest: 20,  ea_run: 0, briefing: 60}
+  quant_elite: {trades_per_month: 0,   coach: 300, analysis: 300, mentor: 200, backtest: 100, ea_run: 4, briefing: 60}
+# trades_per_month : 0 = illimité.
+
+journal:
+  min_trades_for_stats: 20        # sous ce seuil : INSUFFICIENT_DATA, pas de conclusion
+  sample_warning_below: 30        # avertissement « échantillon faible »
+  bootstrap_samples: 2000
+  default_plan:                   # plan de trading par défaut, modifiable par le membre
+    markets: [XAUUSD, NAS100]
+    killzones: [London, NY_AM]
+    risk_per_trade_pct: 1.0
+    max_daily_loss_pct: 3.0
+    max_trades_per_day: 3
+    revenge_minutes: 15
+    size_up_factor: 1.5
+    min_rr: 2.0
+    setups: [SilverBullet, MacroBreaker]
+
+analysis:
+  approval_expiry_min: 120        # une carte de décision expire au bout de 2 h
+  symbols: [XAUUSD, NAS100, US30, US500, EURUSD, GBPUSD, XAGUSD, GER40]
+
+workers:
+  threads: 2                      # workers dans le processus web ; 0 si un worker séparé tourne

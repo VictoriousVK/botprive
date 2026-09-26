@@ -178,6 +178,7 @@ def create_app(
     site: SiteConfig | None = None,
     member_settings: MemberSettings | None = None,
     site_dir: Path | None = None,
+    saas: Any = None,
 ) -> FastAPI:
     settings = settings or WebSettings.from_env()
     site = site or load_site()
@@ -188,7 +189,11 @@ def create_app(
     async def lifespan(_app: FastAPI):
         if start_engine:
             engine.start()
+            if saas is not None:
+                saas.start()
         yield
+        if saas is not None:
+            saas.shutdown()
         engine.shutdown()
 
     app = FastAPI(title="HedgeFund", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -485,12 +490,19 @@ def create_app(
 
     # ---------------- public site: members, payments, academy, copytrading ----------------
     members = Members(engine.store, site, member_settings)
-    mount_members(app, SiteContext(
+    member_dep = mount_members(app, SiteContext(
         engine=engine, site=site, settings=member_settings, members=members,
         academy=Academy(engine.store, site, member_settings), copy=Copytrading(engine.store, engine, member_settings.copytrading),
         cookie_secure=settings.cookie_secure, client_ip=client_ip, operator=session, check_write=check_write,
     ))
     app.state.members = members
+
+    # ---------------- Alpha Edge SaaS: journal, analysis, risk, AI agents ----------------
+    if saas is not None:
+        from hedgefund.saas.api import ApiContext, mount_saas
+
+        mount_saas(ApiContext(app=app, saas=saas, member=member_dep, operator=session, profile=members.profile, client_ip=client_ip))
+        app.state.saas = saas
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE"], include_in_schema=False)
     def api_not_found(rest: str) -> None:

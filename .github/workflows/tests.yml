@@ -7,13 +7,33 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # A NON-superuser role: superusers bypass row-level security.
+      HF_TEST_PG_URL: postgresql+psycopg://ae_app:ae_app@localhost:5432/ae_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[research,web,dev]"
-      - run: ruff check hedgefund tests --select F,E9,B --ignore B905,B008
+      - run: pip install -e ".[research,web,saas,dev]"
+      - name: PostgreSQL role for the RLS tests
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -c "CREATE ROLE ae_app LOGIN PASSWORD 'ae_app'"
+          psql -h localhost -U postgres -c "CREATE DATABASE ae_test OWNER ae_app"
+      - run: python scripts/check_secrets.py
+      - run: ruff check hedgefund tests scripts --select F,E9,B --ignore B905,B008
       - run: python -m hedgefund validate
       - run: pytest -q
 

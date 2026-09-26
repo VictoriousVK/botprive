@@ -143,7 +143,8 @@ class SiteContext:
     check_write: Callable[[Request, str], None]  # Origin + CSRF check for a state-changing call
 
 
-def mount_members(app: FastAPI, ctx: SiteContext) -> None:
+def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session, dict]]:
+    """Mounts the routes; returns the member-session dependency (reused by the SaaS routes)."""
     members, academy, copy, site, settings, engine = ctx.members, ctx.academy, ctx.copy, ctx.site, ctx.settings, ctx.engine
     quotes_cache: dict[str, Any] = {"t": 0.0, "data": []}
 
@@ -539,3 +540,5 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
             raise fail(e) from e
         audit("leader_update", operator=s.username, leader=out["id"], status=out["status"])
         return out
+
+    return member

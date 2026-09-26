@@ -47,4 +47,9 @@ def build_platform(config_path: str | None = None, data_dir: str | None = None, 
     price_feed, client = make_feed(feed or os.environ.get("HF_FEED", "auto"))
     engine = BotEngine(cfg, store, price_feed, mt5_client=client, data_dir=data, allow_real_env=settings.allow_real_trading)
     auth = AuthService(store, session_hours=settings.session_hours)
-    return create_app(engine, auth, settings, start_engine=start_engine), engine, auth
+    saas = None
+    if os.environ.get("HF_SAAS", "1").strip().lower() not in ("0", "false", "no"):
+        from hedgefund.saas.service import build_saas
+
+        saas = build_saas(feed=price_feed, clock=engine.clock.now_ms, data_dir=data)
+    return create_app(engine, auth, settings, start_engine=start_engine, saas=saas), engine, auth

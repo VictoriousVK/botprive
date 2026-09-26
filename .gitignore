@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env.ps1
+*.egg-info/
