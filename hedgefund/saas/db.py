@@ -188,6 +188,7 @@ journal_entries = _tenant_table(
     Column("notes", Text, nullable=False, default=""),
     Column("rating", Integer),
     Column("updated_at", BigInteger, nullable=False),
+    Column("field_times", Json),  # per-field update times for offline sync (GMI Journal)
 )
 trading_plans = _tenant_table(
     "trading_plans",
@@ -362,6 +363,16 @@ notifications = _tenant_table(
     Column("link", String(200)),
     Column("read_at", BigInteger),
     Column("created_at", BigInteger, nullable=False),
+)
+notify_channels = _tenant_table(
+    "notify_channels",
+    Column("user_id", Integer, primary_key=True),
+    Column("kind", String(12), primary_key=True),  # telegram
+    Column("address", String(80)),  # chat id, once linked
+    Column("link_code", String(20)),
+    Column("verified_at", BigInteger),
+    Column("prefs", Json, nullable=False),
+    tenant_pk=True,
 )
 ea_telemetry = _tenant_table(
     "ea_telemetry",

@@ -44,6 +44,14 @@ class ApiContext:
             return "gratuit"
         return self.profile(m).get("offer", "gratuit")
 
+    def access_for_member(self, member_id: int) -> Access | None:
+        """Access of an active member, for machine routes acting on their behalf (webhooks)."""
+        m = self.member_by_id(member_id)
+        if not m or m.get("status") != "active":
+            return None
+        p = self.profile(m)
+        return self.saas.access(m, p.get("offer", "gratuit"), set(p.get("entitlements", [])))
+
     def access(self, sm: Any) -> Access:
         _s, m = sm
         p = self.profile(m)

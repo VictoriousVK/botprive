@@ -467,7 +467,13 @@ class Journal:
         with self.db.tenant(acc.tenant_id) as s:
             if s.one(trades, {"id": trade_id, "user_id": acc.member_id}) is None:
                 raise LookupError("trade introuvable")
-            vals = {**body.model_dump(), "user_id": acc.member_id, "updated_at": now_ms()}
+            ts = now_ms()
+            cur = s.one(journal_entries, {"trade_id": trade_id})
+            times = dict((cur or {}).get("field_times") or {})
+            sent = body.model_dump(exclude_unset=True)
+            times.update({k: ts for k in sent})  # web edits win over older offline edits (GMI sync)
+            merged = {**{k: (cur or {}).get(k) for k in JournalEntryIn.model_fields}, **sent}
+            vals = {**JournalEntryIn.model_validate({k: v for k, v in merged.items() if v is not None}).model_dump(), "user_id": acc.member_id, "updated_at": ts, "field_times": times}
             s.upsert(journal_entries, {"trade_id": trade_id}, vals)
             if body.setup_model:
                 s.update(trades, {"id": trade_id}, {"setup_model": body.setup_model[:30]})

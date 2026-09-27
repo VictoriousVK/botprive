@@ -121,6 +121,7 @@ class SaaSSettings:
     public_url: str = ""
     telegram_bot_token: str = ""
     telegram_bot_name: str = ""
+    telegram_webhook_secret: str = ""
 
     @classmethod
     def from_env(cls, data_dir: str | Path | None = None, cfg: dict[str, Any] | None = None) -> "SaaSSettings":
@@ -132,6 +133,7 @@ class SaaSSettings:
             public_url=os.environ.get("HF_PUBLIC_URL", "").strip().rstrip("/"),
             telegram_bot_token=os.environ.get("HF_TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_bot_name=os.environ.get("HF_TELEGRAM_BOT_NAME", "").strip(),
+            telegram_webhook_secret=os.environ.get("HF_TELEGRAM_WEBHOOK_SECRET", "").strip(),
         )
 
 
@@ -150,6 +152,7 @@ class SaaS:
         self.prompts = load_prompts()
         self.features = {k: v["entitlement"] for k, v in self.config.get("features", {}).items()}
         self.modules: dict[str, Any] = {}
+        self.platform: Any = None  # the trading platform engine (store, feed, backtests), when mounted in it
         self.worker: Worker | None = None
         self.manifest: VersionManifest = self._manifest()
         db.create_all()

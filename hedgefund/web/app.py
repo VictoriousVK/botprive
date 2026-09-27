@@ -501,6 +501,7 @@ def create_app(
     if saas is not None:
         from hedgefund.saas.api import ApiContext, mount_saas
 
+        saas.platform = engine
         mount_saas(ApiContext(app=app, saas=saas, member=member_dep, operator=session, profile=members.profile, client_ip=client_ip, member_by_id=members.get))
         app.state.saas = saas
 
