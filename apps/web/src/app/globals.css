@@ -137,3 +137,6 @@
   .btn-gold:hover { box-shadow: 0 12px 40px -8px rgb(201 164 92 / .95), inset 0 1px 0 rgb(255 255 255 / .4); }
   .card-gold { background: linear-gradient(180deg, rgb(201 164 92 / .08), rgb(9 16 27 / .75)); border: 1px solid rgb(212 179 116 / .28); border-radius: var(--radius-card); }
 }
+
+/* Trading space: grid items may shrink below their content (wide tables scroll inside their card). */
+.app-space .grid > * { min-width: 0; }

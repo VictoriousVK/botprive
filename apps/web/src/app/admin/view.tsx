@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp, Check, CircleX, Plus, RefreshCw, Save, SquarePen, T
 import { useCallback, useEffect, useState } from "react";
 import { Emblem } from "@/components/brand";
 import { Notice, Spinner, Stat } from "@/components/ui";
+import { SaasTab } from "./saas";
 import { api, ApiError, clock, dateFr, duration, fcfa, setCsrf, type Leader, type Me, type Payment } from "@/lib/api";
 
 type Overview = {
@@ -16,7 +17,7 @@ type Overview = {
 type AdminPart = { id: string; position: number; title: string; summary: string; duration_s: number; provider: string; provider_label: string; video_ref: string; chapters: { t: number; title: string }[]; free_preview: number; player: { kind: string; src: string } | null };
 type AdminCourse = { id: string; slug: string; title: string; subtitle: string; description: string; level: string; access: string; status: string; position: number; parts: AdminPart[] | number; duration_s?: number };
 
-const TABS = [["overview", "Vue d'ensemble"], ["payments", "Paiements"], ["members", "Membres"], ["academy", "Académie"], ["copy", "Copytrading"], ["leads", "Prospects"], ["settings", "Réglages"]] as const;
+const TABS = [["overview", "Vue d'ensemble"], ["payments", "Paiements"], ["members", "Membres"], ["academy", "Académie"], ["copy", "Copytrading"], ["leads", "Prospects"], ["saas", "SaaS IA"], ["settings", "Réglages"]] as const;
 type Tab = (typeof TABS)[number][0];
 const op = <T,>(path: string, method = "GET", body?: unknown) => api<T>(path, { method, body, as: "operator" });
 
@@ -74,7 +75,7 @@ export function AdminView() {
         </div>
       </div>
       <div className="mt-8">
-        {!ov ? <Spinner /> : tab === "overview" ? <OverviewTab ov={ov} /> : tab === "payments" ? <PaymentsTab onChange={loadOv} /> : tab === "members" ? <MembersTab ov={ov} /> : tab === "academy" ? <AcademyTab ov={ov} /> : tab === "copy" ? <CopyTab ov={ov} /> : tab === "leads" ? <LeadsTab /> : <SettingsTab />}
+        {!ov ? <Spinner /> : tab === "overview" ? <OverviewTab ov={ov} /> : tab === "payments" ? <PaymentsTab onChange={loadOv} /> : tab === "members" ? <MembersTab ov={ov} /> : tab === "academy" ? <AcademyTab ov={ov} /> : tab === "copy" ? <CopyTab ov={ov} /> : tab === "leads" ? <LeadsTab /> : tab === "saas" ? <SaasTab /> : <SettingsTab />}
       </div>
     </div>
   );

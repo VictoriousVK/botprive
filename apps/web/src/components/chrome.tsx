@@ -94,7 +94,7 @@ export function Nav() {
         </div>
         <div className="hidden items-center gap-2 md:flex">
           {me ? (
-            <Link href="/compte/" className="btn btn-ghost btn-sm">
+            <Link href="/app/" className="btn btn-ghost btn-sm">
               <User className="size-4" /> {me.name.split(" ")[0]}
               <span className="chip chip-blue !px-2 !py-0 text-[10px]">{me.offer !== "gratuit" ? me.offer_label : me.access?.length ? "Membre" : "Gratuit"}</span>
             </Link>
@@ -130,7 +130,10 @@ export function Nav() {
               ))}
               <div className="mt-4 grid gap-2">
                 {me ? (
-                  <Link href="/compte/" className="btn btn-primary">Mon espace ({me.offer_label})</Link>
+                  <>
+                    <Link href="/app/" className="btn btn-primary">Mon espace de trading</Link>
+                    <Link href="/compte/" className="btn btn-ghost">Mon compte ({me.offer_label})</Link>
+                  </>
                 ) : (
                   <>
                     <Link href="/compte/?vue=inscription" className="btn btn-primary">Commencer gratuitement</Link>
@@ -172,7 +175,7 @@ export function Footer() {
           </div>
         </div>
         <FooterCol title="Plateforme" links={[["Formation ICT Victorious Trader", "/formation-ict/"], ["Robots", "/robots/"], ["Copytrading", "/copytrading/"], ["Académie", "/academie/"], ["Offres et paiement Wave", "/tarifs/"]]} />
-        <FooterCol title="Compte" links={[["Espace membre", "/compte/"], ["Créer un compte", "/compte/?vue=inscription"], ["Console de trading", "/console"]]} />
+        <FooterCol title="Compte" links={[["Espace de trading", "/app/"], ["Espace membre", "/compte/"], ["Créer un compte", "/compte/?vue=inscription"], ["Console de trading", "/console"]]} />
         <FooterCol title="Informations" links={[["Avertissement sur les risques", "/risques/"], ["Conditions d'utilisation", "/risques/#conditions"], ["Confidentialité", "/risques/#confidentialite"]]} />
       </div>
       <div className="border-t border-white/5">

@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, CircleCheck, Copy, ExternalLink, GraduationCap, LogOut, RefreshCw, Smartphone, Wallet } from "lucide-react";
+import { ArrowRight, CircleCheck, Copy, ExternalLink, GraduationCap, LayoutDashboard, LogOut, RefreshCw, Smartphone, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -175,6 +175,7 @@ function Dashboard({ me, params }: { me: Me; params: URLSearchParams }) {
           </div>
         </div>
         <div className="grid gap-3">
+          <QuickLink href="/app/" icon={LayoutDashboard} title="Espace de trading" text="Journal, Coach IA, analyse ICT, risque" />
           <QuickLink href="/academie/" icon={GraduationCap} title="Académie" text="Reprendre mes cours" />
           <QuickLink href="/copytrading/" icon={Copy} title="Copytrading" text="Mes copies démo" />
           <QuickLink href="/robots/" icon={Wallet} title="Robots" text="Catalogue et licences" />
