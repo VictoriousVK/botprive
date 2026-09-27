@@ -99,7 +99,7 @@ ADVICE = [
     r"\b(je|j') ?(dois|devrais) (acheter|vendre|entrer|shorter|prendre|couper|fermer)",
     r"\b(c'est|est-ce) (le )?(bon )?moment (pour|d')? ?(acheter|vendre|entrer)",
     r"(je|j') (achete|vends|entre|shorte) (ou pas|maintenant|ou)",
-    r"(donne|envoie|file|passe)[- ]?(moi|nous)? (un |des |le )?(signal|signaux|entree)",
+    r"(donne|envoie|file|passe)[sz]?[- ]?(moi|nous)? (un |une |des |le |la |les |tes |vos |ton |votre )?(signal|signaux|entree|entrees|trades?|setups? du jour)",
     r"(combien|quel|quels) (de )?(lots?|taille) (je )?(dois|devrais|mettre|prendre)",
     r"(achat|vente|buy|sell) (ou|or) (vente|achat|sell|buy) ",
     r"(ou|where) (mettre|placer|put) (mon|le|my) (sl|stop|tp) (pour|sur|on) (ce|cet|this|mon)",
@@ -168,7 +168,7 @@ INSTRUCTION = [
     r"\b(buy|sell) now\b", r"\bgo (long|short) (now|here)\b", r"\bmettez (\d|un|votre) (lot|stop)", r"\bcoupez (votre|la|ta) position maintenant",
 ]
 PSYCH = [
-    r"\b(vous etes|tu es|you are|you're|il est|elle est) (trop |tres |un peu |plutot |vraiment )?(anxieu|impulsi|emoti|avide|cupide|peureu|faible|stresse|nerveu|irrationnel|immature|paresseu|indiscipline|narciss|egoiste|compulsi|joueur|accro|addict|lache)",
+    r"\b(vous etes|tu es|you are|you're|il est|elle est) (un |une |a |an )?(trop |tres |un peu |plutot |vraiment )?(anxieu|impulsi|emoti|avide|cupide|peureu|faible|stresse|nerveu|irrationnel|immature|paresseu|indiscipline|narciss|egoiste|compulsi|joueur|accro|addict|lache)",
     r"\b(depression|depressif|bipolaire|narcissique|pathologique|tdah|adhd|trouble (anxieux|de la personnalite|obsessionnel|du jeu)|addiction au jeu|joueur compulsif|gambling disorder|personality disorder)\b",
     r"\bvotre (personnalite|psychologie|profil psychologique|caractere) (est|montre|revele)",
     r"\b(vous|tu) (manquez|manques) de (courage|volonte|maturite|caractere)",

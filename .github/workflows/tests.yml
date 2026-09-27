@@ -36,6 +36,8 @@ jobs:
       - run: ruff check hedgefund tests scripts --select F,E9,B --ignore B905,B008
       - run: python -m hedgefund validate
       - run: pytest -q
+      - name: Scorecard (a catastrophic failure blocks the merge)
+        run: python -m hedgefund.saas eval
 
   web:
     runs-on: ubuntu-latest
