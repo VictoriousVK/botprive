@@ -31,7 +31,7 @@ founders:
 free:
   label: "Compte gratuit"
   summary: "Découvrir la méthode et la plateforme"
-  entitlements: [academy_free, copy_demo]
+  entitlements: [academy_free, copy_demo, journal]
 
 # Catalogue. category: abonnement | formation | mentorat | licence
 # period: month (payé au mois, prolongeable) | once (paiement unique, accès à vie)
@@ -87,7 +87,7 @@ products:
       - {text: "Formation EA", soon: true}
       - "Support prioritaire"
       - "Futures nouvelles fonctionnalités"
-    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, ea_all, performance, mt5_connect, coach_ia, formation_ict, formation_ea, priority_support, early_access, copy_demo, copy_live, lab]
+    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, ea_all, performance, mt5_connect, coach_ia, formation_ict, formation_ea, priority_support, early_access, copy_demo, copy_live, lab, ea_factory, api]
 
   formation_ict:
     category: formation

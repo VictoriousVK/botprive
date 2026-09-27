@@ -35,6 +35,9 @@ ENTITLEMENTS = {
     "copy_demo": "Copytrading (démo)",
     "copy_live": "Copytrading réel (après ouverture)",
     "lab": "Laboratoire de backtest",
+    "journal": "Journal de trading, statistiques et Coach IA (plafonné selon l'offre)",
+    "ea_factory": "Usine EA (génération et validation d'EA)",
+    "api": "API en lecture seule",
 }
 CATEGORIES = {
     "abonnement": "Abonnements mensuels",
