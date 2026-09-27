@@ -18,6 +18,15 @@ This repository holds three things:
   (`hedgefund/members`). Next.js + TypeScript + Tailwind + Framer Motion, exported
   statically into `hedgefund/web/site` so Node.js isn't needed at runtime.
   **Guide in French: [docs/SITE.md](docs/SITE.md).**
+- **Alpha Edge SaaS** (`hedgefund/saas`, pages at `/app/`): each member's trading space. It
+  includes a trading journal fed by MetaTrader 5 (report import, read-only sync EA or investor
+  password), statistics with confidence intervals, and an AI Coach whose lessons the member
+  approves. An ICT setup analyst reads a deterministic engine, and a risk gate enforces prop-firm
+  limits. A cited Mentor, a validation lab, an MQL5 EA factory and TradingView alerts complete it,
+  with a read-only API. Engines compute; agents (Claude, via LangGraph) explain; no order ever
+  leaves the SaaS. PostgreSQL with row-level security per tenant, durable job queue, a scorecard
+  that blocks delivery.
+  **Guide in French: [docs/SAAS.md](docs/SAAS.md).**
 - **Step-by-step local setup (French): [docs/DEMARRAGE.md](docs/DEMARRAGE.md).**
 - **`hedgefund/`** is a one-person, 24/7 AI hedge fund. Claude Opus 5.5 does the research,
   an orchestrated set of workflows runs the operation, Jev makes fast typed decisions, and
@@ -32,8 +41,9 @@ This repository holds three things:
 ## Quickstart
 
 ```bash
-pip install -e ".[research,web,dev]"
+pip install -e ".[research,web,saas,dev]"
 pytest -q                                   # all tests
+python -m hedgefund.saas eval               # SaaS delivery scorecard (red team, isolation, grounding)
 python -m hedgefund validate                # config + 5 strategy specs
 python -m hedgefund org                     # departments and workflows
 python -m hedgefund backtest --stress       # synthetic backtest of all strategies + stress scenarios

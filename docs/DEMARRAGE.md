@@ -6,7 +6,8 @@ Le projet contient trois choses qui tournent ensemble dans **un seul programme P
 |---|---|
 | http://127.0.0.1:8000 | le site **Liberté Financière** (accueil, formation ICT, offres, espace membre) |
 | http://127.0.0.1:8000/console | la **console de trading Alpha Edge** (vos bots MT5) |
-| http://127.0.0.1:8000/admin/ | l'**administration du site** (paiements Wave, membres, cours, réglages) |
+| http://127.0.0.1:8000/app/ | l'**espace de trading** des membres (journal, Coach IA, analyse ICT, risque, Mentor) |
+| http://127.0.0.1:8000/admin/ | l'**administration du site** (paiements Wave, membres, cours, réglages, SaaS IA) |
 
 Le site est déjà compilé dans le projet : **pas besoin de Node.js** pour le faire tourner.
 Node.js ne sert que si vous voulez modifier le design du site (étape C).
@@ -63,6 +64,7 @@ Choisissez votre cas :
 9. **Ouvrez votre navigateur** :
    - http://127.0.0.1:8000 : le site ;
    - http://127.0.0.1:8000/console : connectez-vous avec le compte de l'étape 5 ;
+   - http://127.0.0.1:8000/app/ : l'espace de trading (avec un compte membre) ;
    - http://127.0.0.1:8000/admin/ : l'administration (après la connexion à la console).
 
 ### Premiers réglages (5 minutes)
@@ -75,7 +77,12 @@ Choisissez votre cas :
    Ensuite, suspendez ce membre de test dans `/admin/` → **Membres**.
 3. `/admin/` → **Académie** : créez le cours avec l'adresse `victorious-trader` et l'accès
    « Formation ICT Victorious Trader », puis ajoutez les vidéos (voir `docs/SITE.md` §3).
-4. `/console` → **Réglages** : mode **Papier** d'abord (prix MT5, aucun ordre envoyé), puis
+4. Espace de trading : avec le compte membre de test, ouvrez `/app/` → **Journal** → **Comptes et
+   import**. Créez un compte (avec son solde de départ) et importez le rapport HTML de MT5 : onglet
+   Historique → clic droit → Rapport → HTML. Lancez ensuite une revue dans **Coach**. Sans
+   `ANTHROPIC_API_KEY`, la revue est rédigée par les règles (mêmes chiffres, sans narration IA) ;
+   voir `docs/SAAS.md` pour ajouter la clé et la clé de chiffrement `HF_SECRET_KEY`.
+5. `/console` → **Réglages** : mode **Papier** d'abord (prix MT5, aucun ordre envoyé), puis
    **Bots** → créez un bot ICT Pro v6.20 sur l'or, **Backtester**, **Enregistrer**,
    **Démarrer**.
 
@@ -95,7 +102,7 @@ Il faut seulement **Python 3.11+**.
 **Windows (PowerShell)**, dans le dossier du projet :
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[web]"
+.\.venv\Scripts\python.exe -m pip install -e ".[web,saas,research]"
 .\.venv\Scripts\python.exe -m hedgefund.web create-user --username victor
 $env:HF_FEED = "simulation"; $env:HF_COOKIE_SECURE = "0"
 .\.venv\Scripts\python.exe -m hedgefund.web serve
@@ -104,7 +111,7 @@ $env:HF_FEED = "simulation"; $env:HF_COOKIE_SECURE = "0"
 **Mac / Linux (Terminal)**, dans le dossier du projet :
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[web]"
+.venv/bin/pip install -e ".[web,saas,research]"
 .venv/bin/python -m hedgefund.web create-user --username victor
 HF_FEED=simulation HF_COOKIE_SECURE=0 .venv/bin/python -m hedgefund.web serve
 ```
@@ -154,9 +161,10 @@ Les textes, prix, offres, numéro Wave et WhatsApp se changent sans Node.js, dan
 ## Vérifier que tout fonctionne (développeurs)
 
 ```bash
-pip install -e ".[research,web,dev]"
-pytest -q                      # tous les tests Python
+pip install -e ".[research,web,saas,dev]"
+python -m pytest -q            # tous les tests Python
 python -m hedgefund validate   # configuration
+python -m hedgefund.saas eval  # scorecard du SaaS : LIVRABLE ou BLOQUÉ
 ```
 
 ## En cas de problème
@@ -172,5 +180,8 @@ python -m hedgefund validate   # configuration
 | Mot de passe opérateur oublié | `.\.venv\Scripts\python.exe -m hedgefund.web reset-password --username victor` |
 | Mot de passe d'un membre oublié | `.\.venv\Scripts\python.exe -m hedgefund.web member-password --email membre@exemple.com` |
 
-Pour aller plus loin : `docs/PLATFORM.md` (console, MT5, mise en ligne en HTTPS, compte réel)
-et `docs/SITE.md` (site, Wave, académie, copytrading, offres).
+Pour aller plus loin :
+
+- `docs/PLATFORM.md` : console, MT5, mise en ligne en HTTPS, compte réel ;
+- `docs/SITE.md` : site, Wave, académie, copytrading, offres ;
+- `docs/SAAS.md` : espace de trading, agents IA, Docker, pont MT5, n8n, évaluation.
