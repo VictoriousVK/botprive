@@ -53,6 +53,9 @@ Choisissez votre cas :
    $env:HF_COOKIE_SECURE = "0"
    ```
    (à remettre à `"1"` le jour où le site sera en ligne en HTTPS).
+   Facultatif, dans la section « Espace de trading » du même fichier : `HF_SECRET_KEY` (la ligne
+   au-dessus donne la commande qui la génère) et `ANTHROPIC_API_KEY` (texte rédigé par l'IA).
+   Sans elles, l'espace de trading fonctionne, avec des textes rédigés par les règles.
 7. Dans **MetaTrader 5** : connectez-vous au compte démo et activez le bouton
    **« Algo Trading »** (il doit être vert).
 8. **Démarrez** :

@@ -34,5 +34,13 @@ $env:HF_ALLOW_REAL_TRADING = "0"
 # --- Alertes (optionnel) : URL de webhook Slack/Discord-compatible ({"text": ...}) ---
 $env:ALERT_WEBHOOK_URL = ""
 
-# --- Recherche Opus (optionnel, payant) ---
+# --- Espace de trading des membres (SaaS, voir docs/SAAS.md) ---
+$env:HF_SAAS = "1"            # "0" pour désactiver l'espace de trading (/app/)
+$env:HF_PUBLIC_URL = ""       # ex. "https://trading.mondomaine.com" : adresse donnée à l'EA Journal Sync et à TradingView
+# Clé de chiffrement des mots de passe investisseur. Générez-la UNE fois et gardez-la (sans elle, ils sont illisibles) :
+#   .\.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+$env:HF_SECRET_KEY = ""
+
+# --- Modèles Claude (optionnel, payant) ---
+# Sans clé, le Coach, l'Analyste et le Mentor répondent avec les règles (mêmes chiffres, sans texte rédigé par l'IA).
 # $env:ANTHROPIC_API_KEY = "sk-ant-..."
