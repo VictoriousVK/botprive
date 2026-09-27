@@ -24,7 +24,7 @@ from hedgefund.saas import guardrails as GR
 from hedgefund.saas.api import ROUTERS, ApiContext, guard
 from hedgefund.saas.db import agent_runs, journal_entries, lessons, memories_episodic, new_id, now_ms
 from hedgefund.saas.graphs import RunContext, make_checkpointer, node, resume_graph, run_graph
-from hedgefund.saas.harness import Budget, write_audit
+from hedgefund.saas.harness import Budget, queue_run, write_audit
 from hedgefund.saas.llm import LLMError
 from hedgefund.saas.schemas import CoachLLMOut
 from hedgefund.saas.service import Access, SaaS
@@ -358,6 +358,7 @@ class Coach:
         self.saas.consume(acc, "coach")
         trace = new_id("tr")
         payload = {"tenant_id": acc.tenant_id, "user_id": acc.member_id, "days": days, "question": question, "trace_id": trace, "plan": acc.plan, "entitlements": sorted(acc.entitlements)}
+        queue_run(self.saas.db, acc.tenant_id, acc.member_id, "G3", {"days": days}, self.saas.manifest.fingerprint, trace)
         self.saas.queue.enqueue("g3_review", payload, tenant_id=acc.tenant_id, priority=0, idem_key=f"g3:{trace}")
         if self.saas.worker is None:
             self.saas.run_inline()

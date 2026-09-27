@@ -16,6 +16,7 @@ from sqlalchemy import and_, select
 from hedgefund.saas.api import ROUTERS, ApiContext
 from hedgefund.saas.coach import iso_week
 from hedgefund.saas.db import broker_accounts, notifications, now_ms, tenant_members, trades
+from hedgefund.saas.harness import queue_run
 from hedgefund.saas.service import SaaS
 
 
@@ -43,6 +44,7 @@ def weekly_reviews(saas: SaaS, access_for: Any) -> dict[str, int]:
             skipped += 1
             continue
         payload = {"tenant_id": tenant, "user_id": user, "days": 7, "question": None, "trace_id": f"tr_w{week.replace('-', '')}_{user}", "plan": acc.plan, "entitlements": sorted(acc.entitlements)}
+        queue_run(saas.db, tenant, user, "G3", {"days": 7}, saas.manifest.fingerprint, payload["trace_id"])
         saas.queue.enqueue("g3_review", payload, tenant_id=tenant, priority=2, idem_key=f"g3w:{tenant}:{week}")
         queued += 1
     return {"queued": queued, "skipped": skipped}

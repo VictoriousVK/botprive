@@ -20,7 +20,7 @@ from hedgefund.saas import guardrails as GR
 from hedgefund.saas.api import ROUTERS, ApiContext, guard
 from hedgefund.saas.db import agent_runs, briefings, new_id, now_ms, setup_analyses
 from hedgefund.saas.graphs import RunContext, context, make_checkpointer, node, resume_graph, run_graph
-from hedgefund.saas.harness import Budget, write_audit
+from hedgefund.saas.harness import Budget, queue_run, write_audit
 from hedgefund.saas.llm import LLMError
 from hedgefund.saas.schemas import AnalysteLLMOut, DebateSideOut, JudgeOut, SetupRequest
 from hedgefund.saas.service import Access, SaaS
@@ -349,6 +349,7 @@ class Analyste:
         self.saas.consume(acc, "analysis")
         trace = new_id("tr")
         payload = {"tenant_id": acc.tenant_id, "user_id": acc.member_id, "request": req.model_dump(), "trace_id": trace, "plan": acc.plan, "entitlements": sorted(acc.entitlements)}
+        queue_run(self.saas.db, acc.tenant_id, acc.member_id, "G1", {"request": payload["request"]}, self.saas.manifest.fingerprint, trace)
         self.saas.queue.enqueue("g1_analysis", payload, tenant_id=acc.tenant_id, priority=0, idem_key=idem_key or f"g1:{trace}")
         if self.saas.worker is None:
             self.saas.run_inline()

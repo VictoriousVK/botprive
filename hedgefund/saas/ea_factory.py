@@ -26,7 +26,7 @@ from sqlalchemy import desc
 from hedgefund.saas.api import ROUTERS, ApiContext, guard
 from hedgefund.saas.db import agent_runs, lab_reports, new_id, now_ms, strategy_specs
 from hedgefund.saas.graphs import RunContext, make_checkpointer, node, resume_graph, run_graph
-from hedgefund.saas.harness import Budget, write_audit
+from hedgefund.saas.harness import Budget, queue_run, write_audit
 from hedgefund.saas.service import Access, SaaS
 
 MAX_ROUNDS = 6
@@ -286,6 +286,7 @@ class EAFactory:
             raise LookupError("spécification introuvable")
         self.saas.consume(acc, "ea_run")
         trace = new_id("tr")
+        queue_run(self.saas.db, acc.tenant_id, acc.member_id, "G2", {"spec_id": spec_id}, self.saas.manifest.fingerprint, trace)
         self.saas.queue.enqueue("g2_ea", {"tenant_id": acc.tenant_id, "user_id": acc.member_id, "spec_id": spec_id, "spec": spec["body"], "trace_id": trace, "plan": acc.plan,
                                           "entitlements": sorted(acc.entitlements)}, tenant_id=acc.tenant_id, priority=2, idem_key=f"g2:{trace}", max_attempts=1)
         if self.saas.worker is None:

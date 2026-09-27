@@ -272,11 +272,24 @@ def current_tracer() -> Tracer | None:
 
 
 # ---------------------------------------------------------------- runs and audit
+def queue_run(db: Database, tenant_id: str, user_id: int | None, graph: str, payload: dict[str, Any], manifest: str, trace_id: str) -> str:
+    """Records a run as soon as its job is queued, so the member can follow it before a worker
+    takes it (``start_run`` then moves it to running)."""
+    ts = now_ms()
+    with db.tenant(tenant_id) as s:
+        if s.one(agent_runs, {"id": trace_id}) is None:
+            s.insert(agent_runs, {"id": trace_id, "user_id": user_id, "graph": graph, "status": "queued", "input": payload, "manifest": manifest, "created_at": ts, "updated_at": ts})
+    return trace_id
+
+
 def start_run(db: Database, tenant_id: str, user_id: int | None, graph: str, payload: dict[str, Any], manifest: str, trace_id: str | None = None) -> str:
     tid = trace_id or new_id("tr")
     ts = now_ms()
     with db.tenant(tenant_id) as s:
-        s.insert(agent_runs, {"id": tid, "user_id": user_id, "graph": graph, "status": "running", "input": payload, "manifest": manifest, "created_at": ts, "updated_at": ts})
+        if trace_id and s.one(agent_runs, {"id": tid}) is not None:  # queued earlier, or a retried job
+            s.update(agent_runs, {"id": tid}, {"status": "running", "input": payload, "manifest": manifest, "error": None, "updated_at": ts})
+        else:
+            s.insert(agent_runs, {"id": tid, "user_id": user_id, "graph": graph, "status": "running", "input": payload, "manifest": manifest, "created_at": ts, "updated_at": ts})
     return tid
 
 

@@ -69,7 +69,8 @@ class JobQueue:
         with self.db.system() as conn:
             conn.execute(update(jobs).where(jobs.c.id == job_id).values(status="done", result=result, error=None, locked_by=None, updated_at=now_ms()))
 
-    def fail(self, job: dict[str, Any], error: str, retry: bool = True) -> None:
+    def fail(self, job: dict[str, Any], error: str, retry: bool = True) -> bool:
+        """Returns True when the job will be retried, False when it is dead."""
         ts = now_ms()
         again = retry and job["attempts"] < job["max_attempts"]
         vals: dict[str, Any] = {"error": error[:2000], "locked_by": None, "updated_at": ts}
@@ -79,6 +80,7 @@ class JobQueue:
             vals.update(status="failed")
         with self.db.system() as conn:
             conn.execute(update(jobs).where(jobs.c.id == job["id"]).values(**vals))
+        return again
 
     def counts(self) -> dict[str, int]:
         from sqlalchemy import func
@@ -98,8 +100,9 @@ class PermanentError(RuntimeError):
 
 
 class Worker:
-    def __init__(self, queue: JobQueue, handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any] | None]], name: str | None = None):
-        self.queue, self.handlers = queue, handlers
+    def __init__(self, queue: JobQueue, handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any] | None]], name: str | None = None,
+                 on_dead: Callable[[dict[str, Any], str], None] | None = None):
+        self.queue, self.handlers, self.on_dead = queue, handlers, on_dead
         self.name = name or f"{socket.gethostname()}:{os.getpid()}"
         self.stop = threading.Event()
         self.threads: list[threading.Thread] = []
@@ -112,11 +115,19 @@ class Worker:
         try:
             self.queue.complete(job["id"], fn(job) or {})
         except PermanentError as e:
-            self.queue.fail(job, str(e), retry=False)
+            self._dead(job, str(e), self.queue.fail(job, str(e), retry=False))
         except Exception as e:  # noqa: BLE001
             log.exception("job %s (%s) failed", job["id"], job["kind"])
-            self.queue.fail(job, f"{type(e).__name__}: {e}")
+            self._dead(job, f"{type(e).__name__}: {e}", self.queue.fail(job, f"{type(e).__name__}: {e}"))
         return True
+
+    def _dead(self, job: dict[str, Any], error: str, retried: bool) -> None:
+        if retried or self.on_dead is None:
+            return
+        try:
+            self.on_dead(job, error)
+        except Exception:  # noqa: BLE001 - reporting a dead job never kills the worker
+            log.exception("on_dead for job %s", job["id"])
 
     def drain(self, max_jobs: int = 100) -> int:
         n = 0

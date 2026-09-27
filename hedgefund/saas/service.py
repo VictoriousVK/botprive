@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 import yaml
 
-from hedgefund.saas.db import Database, default_url, ensure_personal_tenant, usage
+from hedgefund.saas.db import Database, agent_runs, default_url, ensure_personal_tenant, usage
 from hedgefund.saas.harness import VersionManifest, build_manifest, store_manifest
 from hedgefund.saas.jobs import JobQueue, Worker
 from hedgefund.saas.llm import LLM, ModelRegistry, make_llm
@@ -202,13 +202,25 @@ class SaaS:
     # ---- worker ----
     def run_inline(self, max_jobs: int = 20) -> int:
         """Runs queued jobs in the calling thread (no background worker: tests, single user)."""
-        return Worker(self.queue, self.handlers, name="inline").drain(max_jobs)
+        return Worker(self.queue, self.handlers, name="inline", on_dead=self._job_dead).drain(max_jobs)
 
     def start(self, threads: int | None = None) -> None:
         n = self.settings.worker_threads if threads is None else threads
         if n > 0 and self.worker is None:
-            self.worker = Worker(self.queue, self.handlers)
+            self.worker = Worker(self.queue, self.handlers, on_dead=self._job_dead)
             self.worker.start(n)
+
+    def _job_dead(self, job: dict[str, Any], error: str) -> None:
+        """A job that will not be retried: its run (if any) must not stay queued forever."""
+        from hedgefund.saas.harness import finish_run
+
+        p = job.get("payload") or {}
+        tenant, trace = p.get("tenant_id") or job.get("tenant_id"), p.get("trace_id")
+        if tenant and trace:
+            with self.db.tenant(tenant) as s:
+                run = s.one(agent_runs, {"id": trace})
+            if run is not None and run["status"] in ("queued", "running"):
+                finish_run(self.db, tenant, trace, "failed", None, error=f"tâche abandonnée : {error}")
 
     def shutdown(self) -> None:
         if self.worker is not None:
