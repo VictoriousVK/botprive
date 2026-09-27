@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-MODULES: list[str] = ["journal", "stats", "ict", "risk", "coach", "analyste", "router", "mentor", "notify", "tradingview", "research", "scheduler", "lab", "sync", "ea_factory", "publicapi"]
+MODULES: list[str] = ["journal", "stats", "ict", "risk", "coach", "analyste", "router", "mentor", "notify", "tradingview", "research", "scheduler", "lab", "sync", "ea_factory", "publicapi", "overview"]
 
 
 def install_all(saas: Any) -> None:

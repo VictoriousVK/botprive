@@ -300,13 +300,19 @@ class EAFactory:
         self.saas.add_cost(p["tenant_id"], "ea_run", budget.cost_usd)
         return {"trace_id": tid, "status": status}
 
+    def runs(self, acc: Access, limit: int = 20) -> list[dict[str, Any]]:
+        with self.saas.db.tenant(acc.tenant_id) as s:
+            rows = s.select(agent_runs, {"user_id": acc.member_id, "graph": "G2"}, order_by=desc(agent_runs.c.created_at), limit=limit)
+        return [{"id": r["id"], "status": r["status"], "created_at": r["created_at"], "verdict": (r["output"] or {}).get("verdict"), "error": r["error"]} for r in rows]
+
     def get(self, acc: Access, trace_id: str) -> dict[str, Any]:
         with self.saas.db.tenant(acc.tenant_id) as s:
             run = s.one(agent_runs, {"id": trace_id, "user_id": acc.member_id, "graph": "G2"})
             rep = s.one(lab_reports, {"id": trace_id})
         if run is None:
             raise LookupError("exécution introuvable")
-        return {"id": trace_id, "status": run["status"], "error": run["error"], "report": rep["body"] if rep else None, "cost_usd": run["cost_usd"]}
+        report = {**rep["body"], "approval": (run["output"] or {}).get("approval")} if rep else None
+        return {"id": trace_id, "status": run["status"], "error": run["error"], "report": report, "cost_usd": run["cost_usd"]}
 
     def approve(self, acc: Access, trace_id: str, decision: str) -> dict[str, Any]:
         self.get(acc, trace_id)
@@ -343,6 +349,10 @@ def mount(ctx: ApiContext) -> None:
     @app.post("/api/app/ea/runs")
     def start(body: StartIn, acc: Access = Depends(acc_dep)) -> dict:  # noqa: B008
         return guard(lambda: f.start(acc, body.spec_id))
+
+    @app.get("/api/app/ea/runs")
+    def runs(acc: Access = Depends(acc_dep)) -> list[dict]:  # noqa: B008
+        return f.runs(acc)
 
     @app.get("/api/app/ea/runs/{trace_id}")
     def get(trace_id: str, acc: Access = Depends(acc_dep)) -> dict:  # noqa: B008

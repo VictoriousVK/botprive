@@ -10,7 +10,7 @@ python --version
 
 if (-not (Test-Path .venv)) { python -m venv .venv }
 & .\.venv\Scripts\python.exe -m pip install --upgrade pip
-& .\.venv\Scripts\python.exe -m pip install -e ".[web,mt5,research]"
+& .\.venv\Scripts\python.exe -m pip install -e ".[web,saas,mt5,research]"
 
 if (-not (Test-Path .env.ps1)) {
     Copy-Item deploy\windows\env.example.ps1 .env.ps1

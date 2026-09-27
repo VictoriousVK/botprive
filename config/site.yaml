@@ -51,7 +51,9 @@ products:
       - "Accès à la communauté privée"
       - "Analyses Gold et Nasdaq"
       - "Commentaires quotidiens"
-      - {text: "Calendrier économique", soon: true}
+      - "Journal de trading et Coach IA (60 revues par mois)"
+      - "Analyste de setup ICT (20 analyses par mois)"
+      - "Briefings de pré-session et calendrier économique"
       - "Webinaires mensuels"
     entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, copy_demo]
   pro_trader:
@@ -66,11 +68,11 @@ products:
     highlights:
       - "Tout Starter"
       - "Accès à 1 EA"
-      - {text: "Dashboard de performance", soon: true}
-      - {text: "Journal de trading", soon: true}
-      - {text: "Connexion MT5", soon: true}
-      - {text: "Statistiques avancées", soon: true}
-    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, performance, mt5_connect, copy_demo, copy_live, lab]
+      - "Synchronisation MT5 (EA Journal Sync, lecture seule)"
+      - "Garde-fou prop firm et calculateur de taille"
+      - "Alertes TradingView analysées par les règles ICT"
+      - "Laboratoire : Monte Carlo, rapport démo / réel, robustesse"
+    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, performance, mt5_connect, copy_demo, lab]
   quant_elite:
     category: abonnement
     label: "Quant Elite"
@@ -82,12 +84,13 @@ products:
     highlights:
       - "Tout Pro Trader"
       - "Tous les EA"
-      - {text: "IA Trading Coach", soon: true}
+      - "Coach IA (300 revues par mois) et Mentor IA (200 questions par mois)"
+      - "Usine EA (génération, revue et compilation MQL5)"
       - "Formation complète ICT (Victorious Trader)"
       - {text: "Formation EA", soon: true}
       - "Support prioritaire"
       - "Futures nouvelles fonctionnalités"
-    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, ea_all, performance, mt5_connect, coach_ia, formation_ict, formation_ea, priority_support, early_access, copy_demo, copy_live, lab, ea_factory, api]
+    entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, ea_one, ea_all, performance, mt5_connect, coach_ia, formation_ict, formation_ea, priority_support, early_access, copy_demo, lab, ea_factory, api]
 
   formation_ict:
     category: formation

@@ -140,6 +140,13 @@ def mount(ctx: ApiContext) -> None:
             raise HTTPException(429, "trop d'analyses : attendez une minute")
         return guard(lambda: ict.analyze(symbol[:20], tf, htf))
 
+    @app.get("/api/app/bars/{symbol}")
+    def bars(symbol: str, tf: str = "M5", n: int = 150, acc: Access = Depends(acc_dep)) -> dict:  # noqa: B008
+        guard(lambda: acc.require("analysis", "Analyse ICT"))
+        if tf not in ("M1", "M5", "M15", "H1"):
+            raise HTTPException(400, "unité de temps non prise en charge")
+        return guard(lambda: ict.snapshot(symbol[:20], tf, None, max(40, min(n, 400))))
+
     # ---- operators: golden set ----
     @app.post("/api/admin/golden/snapshot")
     def snapshot(body: SnapshotIn, s=Depends(ctx.operator)) -> dict:  # noqa: B008

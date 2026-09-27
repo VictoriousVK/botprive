@@ -78,8 +78,12 @@ def test_g2_loop_fixes_review_then_compiles_and_waits_for_approval(tmp_path):
     assert "compilé, non testé" in rep["model_card"] and "Aucune performance" in rep["model_card"]
     second = saas.llm.client.requests[1]["messages"][0]["content"]
     assert "Lot normalisé" in second and "<code>" in second  # the evaluator's feedback reached the generator
+    assert [(r["id"], r["status"]) for r in c.get("/api/app/ea/runs").json()] == [(tid, "waiting")]
+    steps = c.get(f"/api/app/runs/{tid}").json()["steps"]
+    assert steps[-1]["name"] == "approbation pour la démo" and steps[-1]["status"] == "waiting"  # an interrupt is not an error
     done = c.post(f"/api/app/ea/runs/{tid}/approve", json={"decision": "approved"}, headers=h).json()
-    assert done["status"] == "done"
+    assert done["status"] == "done" and done["report"]["approval"]["decision"] == "approved"
+    assert c.get("/api/app/ea/runs").json()[0]["verdict"] == "READY_FOR_DEMO"
 
 
 def test_g2_stops_on_no_progress(tmp_path):

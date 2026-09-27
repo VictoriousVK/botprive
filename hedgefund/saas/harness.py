@@ -233,8 +233,11 @@ class Tracer:
         try:
             yield rec["attrs"]
         except Exception as e:
-            rec["status"] = "error"
-            rec["attrs"]["error"] = str(e)[:300]
+            if any(c.__name__ == "GraphBubbleUp" for c in type(e).__mro__):
+                rec["status"] = "waiting"  # LangGraph interrupt: the run waits for a human decision
+            else:
+                rec["status"] = "error"
+                rec["attrs"]["error"] = str(e)[:300]
             raise
         finally:
             _parent.reset(tok_p)
