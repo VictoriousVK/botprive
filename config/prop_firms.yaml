@@ -1,0 +1,79 @@
+# Profils de règles des prop firms (skill .claude/skills/prop-firm-profiles).
+#
+# ATTENTION : valeurs de départ À VÉRIFIER sur le règlement officiel de chaque firme avant de
+# s'y fier. Tant que `verified_at` est vide, le garde-fou affiche « profil à vérifier ».
+# Les règles changent : revue mensuelle, et nouvelle version à chaque changement.
+#
+# daily_loss_ref : base du montant de perte journalière autorisée (initial_balance = % du capital
+#   initial ; start_of_day = % du solde du début de journée).
+# daily_loss_base : niveau à partir duquel la perte du jour se mesure (balance_start_of_day ou
+#   max_balance_equity_start_of_day).
+# max_loss_type : static (plancher fixe sous le capital initial) ou trailing (sous le plus haut).
+# reset : heure de début de journée de la firme : ny_17 (17:00 New York), cet_0 (minuit CE(S)T), utc_0.
+
+profiles:
+  generic:
+    label: "Plan personnel (sans prop firm)"
+    version: 1
+    source: null
+    verified_at: null
+    daily_loss_pct: plan          # la limite du plan de trading du membre
+    daily_loss_ref: start_of_day
+    daily_loss_base: balance_start_of_day
+    includes_floating: true
+    max_loss_pct: null
+    max_loss_type: static
+    reset: ny_17
+    news_minutes: 0
+
+  ftmo_2step:
+    label: "FTMO — Challenge 2 étapes"
+    version: 1
+    source: "https://ftmo.com/en/trading-objectives/"
+    verified_at: null
+    daily_loss_pct: 5
+    daily_loss_ref: initial_balance
+    daily_loss_base: balance_start_of_day
+    includes_floating: true
+    max_loss_pct: 10
+    max_loss_type: static
+    profit_target_pct: [10, 5]
+    min_trading_days: 4
+    reset: cet_0
+    news_minutes: 0              # restrictions selon le type de compte : à vérifier
+    ea_allowed: true
+    copy_signals_forbidden: true
+
+  fundednext_2step:
+    label: "FundedNext — Stellar 2 étapes"
+    version: 1
+    source: "https://fundednext.com/"
+    verified_at: null
+    daily_loss_pct: 5
+    daily_loss_ref: start_of_day
+    daily_loss_base: max_balance_equity_start_of_day
+    includes_floating: true
+    max_loss_pct: 10
+    max_loss_type: static
+    profit_target_pct: [8, 5]
+    min_trading_days: 5
+    reset: ny_17
+    news_minutes: 0
+    ea_allowed: true
+    copy_signals_forbidden: true
+
+  trailing_generic:
+    label: "Prop firm à drawdown suiveur (générique)"
+    version: 1
+    source: null
+    verified_at: null
+    daily_loss_pct: 4
+    daily_loss_ref: initial_balance
+    daily_loss_base: balance_start_of_day
+    includes_floating: true
+    max_loss_pct: 6
+    max_loss_type: trailing
+    reset: ny_17
+    news_minutes: 2
+    ea_allowed: true
+    copy_signals_forbidden: true
