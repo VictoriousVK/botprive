@@ -197,6 +197,10 @@ class SaaS:
             s.upsert(usage, {"month": month, "key": key}, {"count": row["count"] if row else 0, "cost_usd": (row["cost_usd"] if row else 0.0) + cost_usd})
 
     # ---- worker ----
+    def run_inline(self, max_jobs: int = 20) -> int:
+        """Runs queued jobs in the calling thread (no background worker: tests, single user)."""
+        return Worker(self.queue, self.handlers, name="inline").drain(max_jobs)
+
     def start(self, threads: int | None = None) -> None:
         n = self.settings.worker_threads if threads is None else threads
         if n > 0 and self.worker is None:
