@@ -44,6 +44,7 @@ journal:
 
 analysis:
   approval_expiry_min: 120        # une carte de décision expire au bout de 2 h
+  debate: false                   # débat contradictoire (Quant Elite) : à activer après mesure de son effet
   symbols: [XAUUSD, NAS100, US30, US500, EURUSD, GBPUSD, XAGUSD, GER40]
 
 workers:

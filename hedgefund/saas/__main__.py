@@ -8,6 +8,8 @@
   mcp SERVER                   run an MCP server on stdio (journal, ict-engine, knowledge, market-data, backtest)
   purge-jobs --days N          delete finished jobs older than N days
   bridge [--every-min 15]      MT5 read-only bridge for accounts in investor mode (Windows host)
+  compile-server --metaeditor PATH --experts DIR [--port 8765]
+                               MQL5 compilation service for the EA factory (Windows host, token HF_MQL_COMPILER_TOKEN)
 
 The database comes from HF_SAAS_DB (default: SQLite in the data directory).
 """
@@ -54,6 +56,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("bridge")
     p.add_argument("--every-min", type=int, default=15)
     p.add_argument("--once", action="store_true")
+    p = sub.add_parser("compile-server")
+    p.add_argument("--metaeditor", required=True)
+    p.add_argument("--experts", required=True)
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
     p = sub.add_parser("purge-jobs")
     p.add_argument("--days", type=int, default=30)
     args = ap.parse_args(argv)
@@ -98,6 +105,19 @@ def main(argv: list[str] | None = None) -> int:
             if args.once:
                 return 0
             time.sleep(max(5, args.every_min) * 60)
+    if args.cmd == "compile-server":
+        import os
+
+        import uvicorn
+
+        from hedgefund.saas.ea_factory import compile_server_app
+
+        token = os.environ.get("HF_MQL_COMPILER_TOKEN", "").strip()
+        if len(token) < 24:
+            print("HF_MQL_COMPILER_TOKEN manquant ou trop court (24 caractères minimum)")
+            return 1
+        uvicorn.run(compile_server_app(args.metaeditor, args.experts, token), host=args.host, port=args.port, log_level="info", server_header=False)
+        return 0
     if args.cmd == "purge-jobs":
         s = _saas(args)
         n = s.queue.purge(int(time.time() * 1000) - args.days * 86_400_000)

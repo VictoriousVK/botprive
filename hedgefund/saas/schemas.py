@@ -309,3 +309,13 @@ class EpisodicMemory(BaseModel):
     what_didnt_work: str
     key_points: list[str]
     strength: float = 1.0
+
+
+# ================================================================ debate (optional, G1)
+class DebateSideOut(BaseModel):
+    arguments: list[str] = Field(max_length=4)
+
+
+class JudgeOut(BaseModel):
+    decision: Literal["maintain", "downgrade"]
+    reasons: list[str] = Field(max_length=4)

@@ -1,0 +1,80 @@
+# Alpha Edge — déploiement Linux (ADR-004) : API, worker, PostgreSQL (+ pgvector, RLS), n8n et
+# Caddy (HTTPS). Pas de Redis à ce stade : la file de tâches vit dans PostgreSQL (SKIP LOCKED) et
+# les limites de débit en mémoire (une seule instance d'API) ; à ajouter pour plusieurs instances. Secrets dans .env (voir deploy/docker/env.example), jamais dans le dépôt.
+#
+#   cp deploy/docker/env.example .env   # puis remplir
+#   docker compose up -d --build
+#   docker compose exec api python -m hedgefund.web create-user --username victor
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?à définir dans .env}
+      POSTGRES_DB: postgres
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?à définir dans .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/docker/init-db.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Rôle applicatif NON superutilisateur : la row-level security s'applique à lui.
+      HF_SAAS_DB: postgresql+psycopg://alphaedge:${APP_DB_PASSWORD}@postgres:5432/alphaedge
+      HF_SAAS_WORKERS: "0"          # les tâches tournent dans le service worker
+      HF_TRUST_PROXY: "1"
+    volumes:
+      - data:/data
+
+  worker:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      HF_SAAS_DB: postgresql+psycopg://alphaedge:${APP_DB_PASSWORD}@postgres:5432/alphaedge
+    command: ["python", "-m", "hedgefund.saas", "worker", "--threads", "4"]
+    volumes:
+      - data:/data
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    environment:
+      ALPHA_EDGE_URL: http://api:8000
+      HF_JOBS_SECRET: ${HF_JOBS_SECRET:?à définir dans .env}
+      GENERIC_TIMEZONE: America/New_York
+      N8N_DIAGNOSTICS_ENABLED: "false"
+    volumes:
+      - n8ndata:/home/node/.n8n
+      - ./workflows/n8n:/workflows:ro
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?à définir dans .env}
+    volumes:
+      - ./deploy/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+
+volumes:
+  pgdata:
+  data:
+  n8ndata:
+  caddydata:

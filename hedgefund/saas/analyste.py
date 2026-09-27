@@ -19,10 +19,10 @@ from sqlalchemy import desc
 from hedgefund.saas import guardrails as GR
 from hedgefund.saas.api import ROUTERS, ApiContext, guard
 from hedgefund.saas.db import agent_runs, briefings, new_id, now_ms, setup_analyses
-from hedgefund.saas.graphs import RunContext, make_checkpointer, node, resume_graph, run_graph
+from hedgefund.saas.graphs import RunContext, context, make_checkpointer, node, resume_graph, run_graph
 from hedgefund.saas.harness import Budget, write_audit
 from hedgefund.saas.llm import LLMError
-from hedgefund.saas.schemas import AnalysteLLMOut, SetupRequest
+from hedgefund.saas.schemas import AnalysteLLMOut, DebateSideOut, JudgeOut, SetupRequest
 from hedgefund.saas.service import Access, SaaS
 
 MODEL_FR = {"SilverBullet": "Silver Bullet", "MacroBreaker": "Macro Breaker"}
@@ -142,6 +142,7 @@ class G1State(BaseModel):
     briefing: Optional[dict[str, Any]] = None
     draft: Optional[dict[str, Any]] = None
     risk_gate: Optional[dict[str, Any]] = None
+    debate: Optional[dict[str, Any]] = None
     card: Optional[dict[str, Any]] = None
     approval: Optional[dict[str, Any]] = None
     output: Optional[dict[str, Any]] = None
@@ -235,6 +236,36 @@ def build_g1(saas: SaaS) -> Any:
         ctx.tracer.event(f"risk gate : {g['decision']}", kind="guardrail", status="ok" if g["decision"] != "BLOCK" else "error")
         return {"risk_gate": g}
 
+    def debate_on(state: G1State) -> str:
+        ctx_ = context(state.trace_id)
+        cand = (state.draft or {}).get("candidate")
+        enabled = bool(saas.config.get("analysis", {}).get("debate")) and "ea_factory" in ctx_.entitlements and saas.llm.available
+        return "debate" if enabled and cand and state.risk_gate and state.risk_gate["decision"] != "BLOCK" else "card"
+
+    @node("débat contradictoire")
+    def debate_node(state: G1State, ctx: RunContext) -> dict[str, Any]:
+        """Bull, bear, then a judge. It can only lower the conviction (never raise it)."""
+        d = state.draft
+        ev = {"candidate": d["candidate"], "ict": compact(state.ict)}
+        dossier = "<dossier>\n" + json.dumps(ev, ensure_ascii=False, default=str) + "\n</dossier>"
+        dspec = saas.models.get("debate")
+        out: dict[str, Any] = {"caveat": "débat entre modèles de la même famille : portée limitée"}
+        try:
+            bull = saas.llm.run(dspec, "Tu défends ce setup ICT avec des arguments tirés uniquement du dossier. Aucun chiffre hors du dossier, aucune instruction de trade.", dossier, DebateSideOut, ctx.budget).data
+            bear = saas.llm.run(dspec, "Tu cherches toutes les raisons pour lesquelles ce setup ICT peut échouer, avec des arguments tirés uniquement du dossier. Aucun chiffre hors du dossier.", dossier, DebateSideOut, ctx.budget).data
+            judge = saas.llm.run(saas.models.get("judge"), "Tu es le juge. Tu peux seulement maintenir le verdict des règles ou le déclasser si les arguments contre sont sérieux. Tu ne peux jamais le relever.",
+                                 dossier + "\n<pour>" + json.dumps(bull.arguments, ensure_ascii=False) + "</pour>\n<contre>" + json.dumps(bear.arguments, ensure_ascii=False) + "</contre>", JudgeOut, ctx.budget).data
+            texts = "\n".join([*bull.arguments, *bear.arguments, *judge.reasons])
+            if GR.ungrounded_numbers(texts, ev) or GR.check_final(texts).action == "BLOCK":
+                out["ignored"] = "débat écarté (chiffres non vérifiés ou formulation interdite)"
+            else:
+                out.update(bull=bull.arguments, bear=bear.arguments, decision=judge.decision, reasons=judge.reasons)
+                if judge.decision == "downgrade" and d["label"] == "VALID_BY_RULES":
+                    d = {**d, "label": "PARTIAL", "caveats": [*d["caveats"], "déclassé par le débat contradictoire : " + "; ".join(judge.reasons)[:200]]}
+        except LLMError as e:
+            out["ignored"] = f"débat indisponible ({str(e)[:80]})"
+        return {"debate": out, "draft": d}
+
     @node("carte de décision")
     def card_node(state: G1State, ctx: RunContext) -> dict[str, Any]:
         d = state.draft
@@ -250,7 +281,7 @@ def build_g1(saas: SaaS) -> Any:
             "summary": d["summary"], "caveats": caveats, "insufficient_evidence": d["label"] == "INSUFFICIENT_EVIDENCE", "trace_id": state.trace_id,
             "narrated_by": d["narrated_by"], "symbol": (ict or {}).get("symbol", state.request["symbol"]), "as_of": (ict or {}).get("as_of", now_ms()),
             "candidate": d["candidate"], "ict": compact(ict) if ict else {}, "risk_gate": g, "stats": (state.stats or {}).get(d["candidate"]["model"]) if d["candidate"] else None,
-            "plan_alignment": d["plan_alignment"], "points_to_check": d["points_to_check"], "expires_at": exp, "disclaimer": GR.DISCLAIMER,
+            "plan_alignment": d["plan_alignment"], "points_to_check": d["points_to_check"], "expires_at": exp, "disclaimer": GR.DISCLAIMER, "debate": state.debate,
             "last_line": f"VERDICT={d['label']};CONFIDENCE={d['confidence']};TRACE={state.trace_id}",
         }
         with saas.db.tenant(ctx.tenant_id) as s:
@@ -281,14 +312,15 @@ def build_g1(saas: SaaS) -> Any:
         return {"output": {**state.card, "decision": decision}}
 
     g = StateGraph(G1State)
-    for name, fn in (("ict", ict_node), ("quant", quant_node), ("research", research_node), ("synth", synth), ("gate", gate_node), ("card", card_node),
+    for name, fn in (("ict", ict_node), ("quant", quant_node), ("research", research_node), ("synth", synth), ("gate", gate_node), ("debate", debate_node), ("card", card_node),
                      ("approval", approval_node), ("audit", audit_node)):
         g.add_node(name, fn)
     for branch in ("ict", "quant", "research"):
         g.add_edge(START, branch)
     g.add_edge(["ict", "quant", "research"], "synth")
     g.add_edge("synth", "gate")
-    g.add_edge("gate", "card")
+    g.add_conditional_edges("gate", debate_on, {"debate": "debate", "card": "card"})
+    g.add_edge("debate", "card")
     g.add_edge("card", "approval")
     g.add_edge("approval", "audit")
     g.add_edge("audit", END)
@@ -324,7 +356,7 @@ class Analyste:
 
     def run_job(self, job: dict[str, Any]) -> dict[str, Any]:
         p = job["payload"]
-        budget = Budget(max_llm_calls=2, max_input_tokens=30_000, max_output_tokens=4_000, deadline_s=60)
+        budget = Budget(max_llm_calls=5, max_input_tokens=60_000, max_output_tokens=8_000, deadline_s=90)
         tid, status, _ = run_graph(self.saas, self.graph, "G1", p["tenant_id"], p["user_id"], {"request": p["request"]}, budget, trace_id=p["trace_id"],
                                    entitlements=frozenset(p.get("entitlements", [])), plan=p.get("plan", "gratuit"))
         self.saas.add_cost(p["tenant_id"], "analysis", budget.cost_usd)
