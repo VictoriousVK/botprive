@@ -23,13 +23,34 @@ en services séparés sous Docker.
 |---|---|---|
 | `/app/` | Tableau de bord : 30 derniers jours, comportements repérés, leçons, garde-fou, dernières analyses, briefing ; champ libre qui oriente vers le bon service | Gratuit |
 | `/app/journal/` | Comptes, import MT5 (rapport HTML ou CSV), saisie manuelle, notes par trade (setup, émotions, erreurs, note), statistiques avec intervalles de confiance | Gratuit (100 trades importés par mois) |
-| `/app/revue/` | Coach IA : revue sur 7, 30 ou 90 jours, leçons à accepter, reformuler ou refuser, mémoire hebdomadaire modifiable | Gratuit (5 revues par mois) |
+| `/app/revue/` | Coach IA : revue sur 7, 30 ou 90 jours, leçons à accepter, reformuler ou refuser, mémoire hebdomadaire modifiable | Gratuit (4 revues par mois) |
 | `/app/analyse/` | Analyste ICT : graphique avec FVG, liquidité, zone d'entrée, invalidation et objectifs ; risk gate ; carte de décision valable 2 h ; briefing et calendrier ; webhooks TradingView | Starter (briefing), Pro Trader (TradingView) |
 | `/app/risque/` | État des limites de perte (journalière, maximale), calculateur de taille, profils de prop firm | Gratuit (plan), Pro Trader (profils prop firm) |
 | `/app/mentor/` | Questions de cours, réponses tirées des contenus avec leurs sources | Starter |
 | `/app/labo/` | Monte Carlo sur vos R, rapport démo / réel, robustesse d'une stratégie (walk-forward, Sharpe déflaté), surveillance des EA | Pro Trader |
 | `/app/ea/` | Usine EA : spécification → code MQL5 → revue par règles → compilation → model card → approbation pour la démo | Quant Elite |
 | `/app/reglages/` | Plan de trading, profil, EA Journal Sync, mot de passe investisseur, Telegram, jetons d'API, export et effacement des données | Gratuit |
+
+**Plafonds mensuels** (`config/saas.yaml`, calibrés sur le coût réel des modèles) :
+
+| Offre | Revues Coach | Analyses | Questions Mentor | Backtests | Générations d'EA | Budget IA |
+|---|---|---|---|---|---|---|
+| Gratuit | 4 | 0 | 0 | 0 | 0 | 0,5 $ |
+| Starter (29 $) | 30 | 40 | 60 | 0 | 0 | 4 $ |
+| Pro Trader (79 $) | 60 | 120 | 120 | 30 | 0 | 10 $ |
+| Quant Elite (199 $) | 150 | 300 | 300 | 100 | 6 | 30 $ |
+
+Coût typique :
+
+- une revue ≈ 0,03 $ ;
+- une analyse ≈ 0,035 $ ;
+- une question au Mentor ≈ 0,02 $ ;
+- une génération d'EA ≈ 1,2 $.
+
+Tous les plafonds atteints coûtent environ 12 % du prix de l'offre. Le **budget IA** est un filet
+de sécurité : au-delà, le membre continue d'utiliser le service, avec des textes rédigés par les
+règles (mêmes chiffres, avertissement visible). Seule l'usine EA attend le mois suivant. Les revues
+hebdomadaires automatiques ne comptent pas dans le plafond.
 
 Les droits viennent du catalogue (`config/site.yaml`, champ `entitlements`) ; la correspondance
 fonction → droit et les plafonds mensuels sont dans `config/saas.yaml`. Les plafonds limitent le coût

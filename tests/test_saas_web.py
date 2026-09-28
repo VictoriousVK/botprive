@@ -11,7 +11,7 @@ def test_member_sees_plan_limits_and_features(tmp_path):
     assert c.get("/api/app/me").status_code == 401
     register(c)
     me = c.get("/api/app/me").json()
-    assert me["plan"] == "gratuit" and me["limits"]["coach"] == 5 and me["ai"] is False
+    assert me["plan"] == "gratuit" and me["limits"]["coach"] == 4 and me["ai"] is False
     assert me["market"] == {"source": "simulation", "synthetic": True}
     op = TestClient(c.app)
     grant(op, operator(op), 1, "pro_trader")

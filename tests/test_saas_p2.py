@@ -147,3 +147,12 @@ def test_mcp_server_scopes_tenant_on_the_command_line(tmp_path):
     assert "journal_query_trades" in names and not any(n.startswith("ict") for n in names)
     out = asyncio.run(server.call_tool("perf_kpis", {"args": {"days": 7}}))
     assert '"ok": true' in out.content[0].text
+
+
+def test_ea_factory_stops_at_the_monthly_ai_ceiling(tmp_path):
+    c, h, saas = _elite(tmp_path, [gen(GOOD)])
+    spec = c.post("/api/app/ea/specs", json=SPEC, headers=h).json()
+    tenant = c.get("/api/app/me").json()["tenant"]
+    saas.add_cost(tenant, "ea_run", 30.0)  # Quant Elite: 30 $ a month
+    r = c.post("/api/app/ea/runs", json={"spec_id": spec["id"]}, headers=h)
+    assert r.status_code == 429 and "budget IA du mois" in r.json()["detail"]

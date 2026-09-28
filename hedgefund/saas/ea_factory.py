@@ -280,6 +280,11 @@ class EAFactory:
         acc.require("ea_factory", "Usine EA")
         if not self.saas.llm.available:
             raise ValueError("usine EA indisponible : aucun modèle configuré")
+        ai_ok, why = self.saas.ai_allowed(acc.tenant_id, acc.plan)
+        if not ai_ok:
+            from hedgefund.saas.service import QuotaExceeded
+
+            raise QuotaExceeded(str(why).split(" :")[0] + " : la prochaine génération sera possible le mois prochain")
         with self.saas.db.tenant(acc.tenant_id) as s:
             spec = s.one(strategy_specs, {"id": spec_id, "user_id": acc.member_id})
         if spec is None:

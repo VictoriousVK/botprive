@@ -20,11 +20,21 @@ features:
 
 # Plafonds mensuels. La clé est l'offre principale du membre (config/site.yaml) ; « gratuit »
 # s'applique à tout compte sans abonnement.
+#
+# Calibrage (prix des modèles au 2026-06 : Sonnet 5 2 $ / 10 $, Opus 5 5 $ / 25 $ par million de
+# jetons en entrée / sortie). Coût typique mesuré sur les budgets des agents :
+#   revue du Coach ≈ 0,03 $ ; analyse de setup ≈ 0,035 $ ; question au Mentor ≈ 0,02 $ ;
+#   génération d'EA ≈ 1,2 $ (2 à 3 tours) ; backtest : pas d'IA (charge serveur seulement).
+# Plafonds utilisés en entier ≈ 12 % du prix de l'offre (Starter 3,5 $ / 29 $, Pro Trader
+# 8,4 $ / 79 $, Quant Elite 28 $ / 199 $). ai_budget_usd est le filet de sécurité : au-delà, le
+# membre continue d'utiliser le service, avec des textes rédigés par les règles (mêmes chiffres).
+# Un trader actif fait 1 à 3 analyses par jour de bourse (≈ 20 jours) : 40 couvre un usage
+# quotidien, 120 un usage intensif. Revues hebdomadaires automatiques : hors plafond.
 plans:
-  gratuit:     {trades_per_month: 100, coach: 5,   analysis: 0,   mentor: 0,   backtest: 0,   ea_run: 0, briefing: 0}
-  starter:     {trades_per_month: 0,   coach: 60,  analysis: 20,  mentor: 30,  backtest: 0,   ea_run: 0, briefing: 60}
-  pro_trader:  {trades_per_month: 0,   coach: 120, analysis: 100, mentor: 80,  backtest: 20,  ea_run: 0, briefing: 60}
-  quant_elite: {trades_per_month: 0,   coach: 300, analysis: 300, mentor: 200, backtest: 100, ea_run: 4, briefing: 60}
+  gratuit:     {trades_per_month: 100, coach: 4,   analysis: 0,   mentor: 0,   backtest: 0,   ea_run: 0, ai_budget_usd: 0.5}
+  starter:     {trades_per_month: 0,   coach: 30,  analysis: 40,  mentor: 60,  backtest: 0,   ea_run: 0, ai_budget_usd: 4}
+  pro_trader:  {trades_per_month: 0,   coach: 60,  analysis: 120, mentor: 120, backtest: 30,  ea_run: 0, ai_budget_usd: 10}
+  quant_elite: {trades_per_month: 0,   coach: 150, analysis: 300, mentor: 300, backtest: 100, ea_run: 6, ai_budget_usd: 30}
 # trades_per_month : 0 = illimité.
 
 journal:

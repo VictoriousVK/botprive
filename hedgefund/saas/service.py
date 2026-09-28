@@ -193,6 +193,21 @@ class SaaS:
                 raise QuotaExceeded(f"plafond mensuel atteint pour « {key} » ({cap} par mois avec votre offre)")
             s.upsert(usage, {"month": month, "key": key}, {"count": used + n, "cost_usd": (row["cost_usd"] if row else 0.0) + cost_usd})
 
+    def ai_allowed(self, tenant_id: str, plan: str) -> tuple[bool, str | None]:
+        """Whether a model may write for this member now: a model is configured and the member's AI
+        spend this month is under their plan's ceiling (ai_budget_usd). Over the ceiling the service
+        keeps working, with the deterministic text and a visible caveat."""
+        if not self.llm.available:
+            return False, "narration IA indisponible : texte rédigé par les règles"
+        ceiling = self.limits(plan).get("ai_budget_usd")
+        if ceiling is None:
+            return True, None
+        with self.db.tenant(tenant_id) as s:
+            spent = sum(float(r["cost_usd"] or 0) for r in s.select(usage, {"month": month_key()}))
+        if spent >= float(ceiling):
+            return False, "budget IA du mois atteint pour votre offre : texte rédigé par les règles, mêmes chiffres"
+        return True, None
+
     def add_cost(self, acc_tenant: str, key: str, cost_usd: float) -> None:
         month = month_key()
         with self.db.tenant(acc_tenant) as s:

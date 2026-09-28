@@ -193,9 +193,10 @@ def build_g1(saas: SaaS) -> Any:
         base = {"label": label, "summary": rules_text(ict, cand, label) if ict else "Analyse impossible : " + "; ".join(state.errors),
                 "plan_alignment": plan_alignment(ict, cand, plan, stats) if ict else [], "points_to_check": points_to_check(ict, cand) if ict else [],
                 "caveats": [], "narrated_by": "rules", "candidate": cand, "confidence": confidence(cand, stats)}
-        if cand is None or not saas.llm.available:
+        ai_ok, why = saas.ai_allowed(ctx.tenant_id, ctx.plan)
+        if cand is None or not ai_ok:
             if cand is not None:
-                base["caveats"].append("explication IA indisponible : texte calculé par les règles")
+                base["caveats"].append("explication IA indisponible : texte calculé par les règles" if not saas.llm.available else str(why))
             return {"draft": base}
         evidence = {"candidate": cand, "ict": compact(ict), "member_stats": stats.get(cand["model"]), "plan": {k: plan.get(k) for k in ("markets", "killzones", "min_rr", "setups", "rules")},
                     "note": GR.redact(state.request.get("note") or "")[0] or None}

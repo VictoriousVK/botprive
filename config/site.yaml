@@ -51,8 +51,8 @@ products:
       - "Accès à la communauté privée"
       - "Analyses Gold et Nasdaq"
       - "Commentaires quotidiens"
-      - "Journal de trading et Coach IA (60 revues par mois)"
-      - "Analyste de setup ICT (20 analyses par mois)"
+      - "Journal de trading et Coach IA (30 revues par mois)"
+      - "Analyste de setup ICT (40 analyses par mois)"
       - "Briefings de pré-session et calendrier économique"
       - "Webinaires mensuels"
     entitlements: [academy_free, academy_member, community_private, analyses, calendar, webinars, copy_demo]
@@ -84,7 +84,7 @@ products:
     highlights:
       - "Tout Pro Trader"
       - "Tous les EA"
-      - "Coach IA (300 revues par mois) et Mentor IA (200 questions par mois)"
+      - "Coach IA (150 revues par mois) et Mentor IA (300 questions par mois)"
       - "Usine EA (génération, revue et compilation MQL5)"
       - "Formation complète ICT (Victorious Trader)"
       - {text: "Formation EA", soon: true}

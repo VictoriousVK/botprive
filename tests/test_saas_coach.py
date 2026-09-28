@@ -109,11 +109,22 @@ def test_prompt_injection_in_notes_is_data(tmp_path):
 def test_quota_router_and_isolation(tmp_path):
     c, h, saas = _setup(tmp_path)
     tid, _ = _review(c, h)
-    for _ in range(4):
+    for _ in range(3):
         _review(c, h)
-    assert c.post("/api/app/coach/review", json={"days": 7}, headers=h).status_code == 429  # free plan: 5 per month
+    assert c.post("/api/app/coach/review", json={"days": 7}, headers=h).status_code == 429  # free plan: 4 per month
     assert c.post("/api/app/ask", json={"message": "Dois-je acheter l'or maintenant ?"}, headers=h).json()["target"] == "refuse"
     assert c.post("/api/app/ask", json={"message": "Revois mon journal de la semaine"}, headers=h).json()["target"] == "coach"
     other = TestClient(c.app)
     register(other, "bob@example.com")
     assert other.get(f"/api/app/coach/reviews/{tid}").status_code == 404 and other.get("/api/app/lessons").json() == []
+
+
+def test_over_the_monthly_ai_ceiling_the_review_is_written_by_the_rules(tmp_path):
+    c, h, saas = _setup(tmp_path, turns=[_llm_turn("Sur la période, 3 trades clôturés.")])
+    tenant = c.get("/api/app/me").json()["tenant"]
+    saas.add_cost(tenant, "coach", 0.6)  # the free plan's ceiling is 0.5 $ a month
+    tid, rv = _review(c, h)
+    v = rv["verdict"]
+    assert v["narrated_by"] == "rules" and any("budget IA du mois" in x for x in v["caveats"])
+    assert saas.llm.client.requests == []  # no model call was made
+    assert c.get("/api/app/me").json()["usage"]["coach"]["count"] == 1  # the review still counts and still works

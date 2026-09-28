@@ -219,8 +219,9 @@ def build_g3(saas: SaaS) -> Any:
         ev = state.evidence or {}
         base = rules_review(ev)
         out, by, caveats = base, "rules", []
-        if not saas.llm.available:
-            caveats.append("narration IA indisponible : revue calculée par les règles")
+        ai_ok, why = saas.ai_allowed(ctx.tenant_id, ctx.plan)
+        if not ai_ok:
+            caveats.append(why.replace("texte rédigé", "revue calculée") if why and "indisponible" in why else why)
         elif (ev["kpis"].get("n") or 0) == 0:
             caveats.append("aucun trade : pas d'appel au modèle")
         else:
