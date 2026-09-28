@@ -54,6 +54,6 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx next build
-      - run: test -f out/index.html && test -f out/compte/index.html && test -f out/admin/index.html && for p in app app/journal app/revue app/analyse app/risque app/mentor app/formation app/labo app/ea app/reglages; do test -f out/$p/index.html || exit 1; done
+      - run: test -f out/index.html && test -f out/compte/index.html && test -f out/admin/index.html && for p in app app/journal app/revue app/analyse app/risque app/bienvenue app/mentor app/formation app/labo app/ea app/reglages; do test -f out/$p/index.html || exit 1; done
       - name: The committed site export is present
         run: test -f ../../hedgefund/web/site/index.html

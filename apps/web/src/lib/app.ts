@@ -36,6 +36,13 @@ export type TradingPlan = {
   markets: string[]; killzones: string[]; risk_per_trade_pct: number; max_daily_loss_pct: number; max_trades_per_day: number; revenge_minutes: number; size_up_factor: number; min_rr: number; setups: string[]; rules: string[];
 };
 export type Profile = { level: string; experience_months: number; goals: string[]; prop_firm: string | null; trades_manually: boolean; uses_eas: boolean; language: "fr" | "en" };
+export type SizeRules = { max_loss?: number; daily_loss?: number; profit_target?: number; max_contracts?: number };
+export type PropProfile = {
+  key: string; label: string; firm?: string | null; market?: "futures" | "cfd" | null; version: string | number | null; source: string | null; retrieved_at?: string | null; verified_at: string | null;
+  daily_loss_pct: number | string | null; daily_loss_ref: string | null; daily_loss_base: string | null; max_loss_pct: number | null; max_loss_type: string | null; trailing_lock?: string | null;
+  profit_target_pct: number[] | number | null; min_trading_days: number | null; reset: string | null; news_minutes: number | null;
+  consistency?: { pct: number; base: string } | null; sizes?: Record<string, SizeRules> | null; notes?: string | null;
+};
 export type Lesson = { id: string; text: string; behavior: string; status: "proposed" | "accepted" | "edited" | "rejected" | "retired"; source_trade_ids: string[]; created_at?: number; effective_strength?: number | null };
 export type Evidence = { source_id: string; field: string; value: string | number; as_of: number };
 export type CoachVerdict = {

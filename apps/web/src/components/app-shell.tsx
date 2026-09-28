@@ -56,7 +56,7 @@ export function AppShell({ title, subtitle, feature, children }: { title: string
           <h1 className="mt-4 font-[family-name:var(--font-display)] text-xl font-bold">Votre espace de trading</h1>
           <p className="mt-2 text-sm text-muted">Journal, Coach IA, analyse ICT et garde-fou de risque : connectez-vous ou créez un compte gratuit.</p>
           <div className="mt-6 flex justify-center gap-3">
-            <Link href="/compte/?vue=connexion" className="btn btn-ghost btn-sm">Connexion</Link>
+            <Link href={`/compte/?vue=connexion&suite=${encodeURIComponent(path ?? "/app/")}`} className="btn btn-ghost btn-sm">Connexion</Link>
             <Link href="/compte/?vue=inscription" className="btn btn-primary btn-sm">Créer un compte</Link>
           </div>
         </div>

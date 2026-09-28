@@ -29,7 +29,9 @@ function Dashboard() {
     <div className="grid gap-5">
       {noAccount && (
         <Notice kind="info">
-          Commencez par déclarer votre compte de trading puis importez votre historique MT5 (rapport HTML ou CSV) : statistiques, Coach et garde-fou se calculent à partir de vos trades.{" "}
+          Commencez par la mise en route (profil, prop firm, plan de risque, premier compte), puis importez votre historique MT5 : statistiques, Coach et garde-fou se calculent à partir de vos trades.{" "}
+          <Link href="/app/bienvenue/" className="font-semibold text-brand-300 underline-offset-2 hover:underline">Mise en route</Link>
+          {" · "}
           <Link href="/app/journal/?vue=comptes" className="font-semibold text-brand-300 underline-offset-2 hover:underline">Ajouter un compte</Link>
         </Notice>
       )}

@@ -5,15 +5,9 @@ import { useEffect, useState } from "react";
 import { AppShell, useApp } from "@/components/app-shell";
 import { Bullets, Gauge, Kv, LabelChip, Section, useAction, useLoad } from "@/components/app-ui";
 import { Empty, Notice, Spinner } from "@/components/ui";
-import { GATE_LABEL, appApi, money, n2, when, type Account, type GuardStatus, type RiskGate } from "@/lib/app";
+import { GATE_LABEL, appApi, money, n2, when, type Account, type GuardStatus, type PropProfile, type RiskGate } from "@/lib/app";
 
-type SizeRules = { max_loss?: number; daily_loss?: number; profit_target?: number; max_contracts?: number };
-type Profile = {
-  key: string; label: string; firm?: string | null; market?: "futures" | "cfd" | null; version: string | number | null; source: string | null; retrieved_at?: string | null; verified_at: string | null;
-  daily_loss_pct: number | string | null; daily_loss_ref: string | null; daily_loss_base: string | null; max_loss_pct: number | null; max_loss_type: string | null; trailing_lock?: string | null;
-  profit_target_pct: number[] | number | null; min_trading_days: number | null; reset: string | null; news_minutes: number | null;
-  consistency?: { pct: number; base: string } | null; sizes?: Record<string, SizeRules> | null; notes?: string | null;
-};
+type Profile = PropProfile;
 
 export function RiskView() {
   return (

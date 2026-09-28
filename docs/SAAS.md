@@ -21,6 +21,8 @@ en services séparés sous Docker.
 
 | Page | Fonction | Offre minimale |
 |---|---|---|
+| `/compte/` | Connexion, et inscription en deux temps (nom et e-mail, puis mot de passe avec jauge de solidité) ; à gauche, l'horloge de New York et ses killzones. Après l'inscription, le membre arrive sur la mise en route ; après la connexion, sur `/app/` (ou la page d'où il venait, `?suite=`) | Gratuit |
+| `/app/bienvenue/` | Mise en route en 4 étapes, chacune enregistrée et facultative : profil et marchés, prop firm (programme, taille, règles suivies avec la mention « à vérifier »), plan de risque (montants calculés sur la taille du compte), premier compte | Gratuit |
 | `/app/` | Tableau de bord : 30 derniers jours, comportements repérés, leçons, garde-fou, dernières analyses, briefing ; champ libre qui oriente vers le bon service | Gratuit |
 | `/app/journal/` | Comptes, import MT5 (rapport HTML ou CSV), saisie manuelle, notes par trade (setup, émotions, erreurs, note), statistiques avec intervalles de confiance | Gratuit (100 trades importés par mois) |
 | `/app/revue/` | Coach IA : revue sur 7, 30 ou 90 jours, leçons à accepter, reformuler ou refuser, mémoire hebdomadaire modifiable | Gratuit (4 revues par mois) |

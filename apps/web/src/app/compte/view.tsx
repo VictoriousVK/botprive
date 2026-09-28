@@ -1,104 +1,20 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { ArrowRight, CircleCheck, Copy, ExternalLink, GraduationCap, LayoutDashboard, LogOut, RefreshCw, Smartphone, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { Emblem } from "@/components/brand";
 import { Notice, Spinner } from "@/components/ui";
 import { api, dateFr, dollars, fcfa, type CheckoutResult, type Me, type Payment } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import { AuthPanel } from "./auth";
 
 export function AccountView() {
   const { me, ready } = useSession();
   const params = useSearchParams();
   if (!ready) return <div className="container-x py-14"><Spinner /></div>;
   return me ? <Dashboard me={me} params={params} /> : <AuthPanel initial={params.get("vue") === "inscription" || params.get("offre") ? "register" : "login"} />;
-}
-
-// ---------------- sign in / sign up ----------------
-function AuthPanel({ initial }: { initial: "login" | "register" }) {
-  const { setMe, site } = useSession();
-  const [tab, setTab] = useState<"login" | "register">(initial);
-  const [f, setF] = useState({ name: "", email: "", phone: "", password: "", totp: "", accept: false });
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [needTotp, setNeedTotp] = useState(false);
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setErr(null);
-    try {
-      const m =
-        tab === "login"
-          ? await api<Me>("/api/m/login", { method: "POST", body: { email: f.email, password: f.password, totp: f.totp || null } })
-          : await api<Me>("/api/m/register", { method: "POST", body: { email: f.email, password: f.password, name: f.name, phone: f.phone, accept_terms: f.accept } });
-      setMe(m);
-    } catch (e2) {
-      const msg = e2 instanceof Error ? e2.message : "Erreur";
-      if (msg.includes("2FA")) setNeedTotp(true);
-      setErr(msg);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="container-x grid min-h-[70vh] place-items-center py-14">
-      <div className="card w-full max-w-md p-7 sm:p-9">
-        <div className="flex items-center gap-3">
-          <Emblem size={44} />
-          <div>
-            <div className="font-[family-name:var(--font-display)] text-lg font-bold">Espace membre</div>
-            <div className="text-xs text-muted">Liberté Financière</div>
-          </div>
-        </div>
-        <div className="mt-7 grid grid-cols-2 rounded-xl border border-white/10 bg-ink-950 p-1" role="tablist">
-          {(["login", "register"] as const).map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} onClick={() => { setTab(t); setErr(null); }} className={`relative rounded-lg py-2 text-sm font-semibold ${tab === t ? "text-white" : "text-muted"}`}>
-              {tab === t && <motion.span layoutId="auth-tab" className="absolute inset-0 rounded-lg bg-white/[0.07]" />}
-              <span className="relative">{t === "login" ? "Connexion" : "Inscription"}</span>
-            </button>
-          ))}
-        </div>
-        {tab === "register" && site && !site.registration_open ? (
-          <Notice className="mt-6">Les inscriptions ouvrent bientôt.</Notice>
-        ) : (
-          <form onSubmit={submit} className="mt-6 grid gap-4">
-            <AnimatePresence initial={false}>
-              {tab === "register" && (
-                <motion.div key="reg" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="grid gap-4 overflow-hidden">
-                  <label className="field"><span>Nom complet</span><input className="input" required minLength={2} maxLength={80} autoComplete="name" value={f.name} onChange={set("name")} /></label>
-                  <label className="field"><span>Téléphone Wave (facultatif)</span><input className="input" type="tel" inputMode="tel" placeholder="+221 77 000 00 00" autoComplete="tel" value={f.phone} onChange={set("phone")} /></label>
-                </motion.div>
-              )}
-            </AnimatePresence>
-            <label className="field"><span>E-mail</span><input className="input" type="email" required autoComplete="email" value={f.email} onChange={set("email")} /></label>
-            <label className="field">
-              <span>Mot de passe {tab === "register" && "(12 caractères minimum)"}</span>
-              <input className="input" type="password" required minLength={tab === "register" ? 12 : 1} autoComplete={tab === "register" ? "new-password" : "current-password"} value={f.password} onChange={set("password")} />
-            </label>
-            {tab === "login" && needTotp && (
-              <label className="field"><span>Code 2FA</span><input className="input num" inputMode="numeric" maxLength={6} value={f.totp} onChange={set("totp")} /></label>
-            )}
-            {tab === "register" && (
-              <label className="flex gap-3 text-sm leading-relaxed text-muted">
-                <input type="checkbox" className="mt-1 size-4 accent-brand-500" checked={f.accept} onChange={set("accept")} required />
-                <span>J&apos;accepte les <Link href="/risques/#conditions" className="text-brand-300 underline">conditions</Link> et j&apos;ai lu l&apos;<Link href="/risques/" className="text-brand-300 underline">avertissement sur les risques</Link>.</span>
-              </label>
-            )}
-            {err && <Notice kind="error">{err}</Notice>}
-            <button className="btn btn-primary mt-1" disabled={busy}>
-              {busy ? <Spinner label="" /> : tab === "login" ? "Se connecter" : "Créer mon compte"}
-            </button>
-          </form>
-        )}
-      </div>
-    </div>
-  );
 }
 
 // ---------------- member dashboard ----------------
