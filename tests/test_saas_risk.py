@@ -127,6 +127,19 @@ def test_futures_account_reads_nq_as_the_contract(tmp_path):
     assert profiles["topstep_combine"]["market"] == "futures" and profiles["topstep_combine"]["sizes"]["50000"]["max_loss"] == 2000
 
 
+def test_plan_markets_keep_futures_roots_and_cover_the_cfd(tmp_path):
+    """The set-up screen offers NQ and ES as futures: the plan keeps them, and on a CFD account
+    the gate reads NQ in the plan as the Nasdaq CFD too."""
+    c, h, saas = _member(tmp_path, offer="pro_trader", balance=None)
+    r = c.put("/api/app/plan", json={"markets": ["NQ", "mnq", "ES", "gold"], "risk_per_trade_pct": 0.5, "killzones": ["NY_AM"]}, headers=h)
+    assert r.status_code == 200 and r.json()["markets"] == ["ES", "MNQ", "NQ", "XAUUSD"]
+    cfd = c.post("/api/app/accounts", json={"label": "FTMO 100K", "kind": "prop", "starting_balance": 100000, "prop_profile": "ftmo_2step"}, headers=h).json()
+    r = c.post("/api/app/risk/size", json={"symbol": "NAS100", "direction": "long", "entry": 20000, "stop": 19990, "account_id": cfd["id"]}, headers=h).json()
+    assert not any("plan" in v and "NAS100" in v for v in r["violations"] + r["warnings"])
+    r = c.post("/api/app/risk/size", json={"symbol": "GER40", "direction": "long", "entry": 20000, "stop": 19990, "account_id": cfd["id"]}, headers=h).json()
+    assert any("GER40" in v for v in r["violations"] + r["warnings"])
+
+
 # ---------------------------------------------------------------- API and G1
 NOW_SB = 1_791_900_000_000 - 7 * 3_600_000 + 15 * 60_000  # 2026-10-13 03:15 New York: London Silver Bullet window
 

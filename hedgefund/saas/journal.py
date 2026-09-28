@@ -73,7 +73,11 @@ class TradingPlan(BaseModel):
     @field_validator("markets")
     @classmethod
     def _norm_markets(cls, v: list[str]) -> list[str]:
-        return sorted({I.normalize_symbol(s) for s in v if s.strip()})
+        from hedgefund.saas.engines.risk import futures_contracts
+
+        # A futures root chosen as such (NQ, ES…) stays the contract; the risk gate reads it as the
+        # CFD too on a CFD account.
+        return sorted({s.strip().upper() if s.strip().upper() in futures_contracts() else I.normalize_symbol(s) for s in v if s.strip()})
 
     @field_validator("rules")
     @classmethod

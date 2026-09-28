@@ -141,6 +141,10 @@ class Risk:
         state, a = self.state(acc.tenant_id, acc.member_id, body.account_id or (a or {}).get("id"), profile.get("reset", "ny_17"))
         now = now_ms()
         events = self.saas.modules["stats"].events(now - 3_600_000, now + 3_600_000) if "stats" in self.saas.modules else []
+        markets = set(plan.get("markets") or [])
+        for m in list(markets):  # NQ in the plan covers the NQ contract and the Nasdaq CFD
+            markets.add(normalize_symbol(m))
+        plan = {**plan, "markets": sorted(markets)} if markets else plan
         p = R.Proposal(symbol, body.direction, body.entry, body.stop, body.target, body.requested_lots, killzone_at(now))
         res = R.gate(p, state, plan, key, profile, self.spec(symbol), events, now)
         res.warnings.extend(notes)
