@@ -133,24 +133,35 @@ dans le journal.
 
 Dès qu'un membre **déclare** un transfert Wave, ou qu'un paiement Wave Checkout est **confirmé**,
 l'équipe reçoit un message. Il contient le nom, l'offre, la durée, le montant et l'identifiant de
-transaction, sans e-mail ni téléphone. Réglage dans **`/admin/` → Réglages → Alertes de
-paiement** :
+transaction, sans l'e-mail ni le téléphone du membre. Tout se règle dans **`/admin/` → Réglages
+→ Alertes de paiement**.
 
-- **Discord** (le plus simple) : dans un salon privé de l'équipe → Modifier le salon →
-  Intégrations → Webhooks → Nouveau webhook → Copier l'URL, puis collez-la dans l'admin. Un
-  webhook Slack fonctionne aussi.
-- **Telegram** : il faut le bot de la plateforme. Créez-le avec @BotFather, puis réglez
-  `HF_TELEGRAM_BOT_TOKEN` et le webhook Telegram (voir `docs/SAAS.md`). Envoyez `/id` au bot, ou
-  dans un groupe où vous l'avez ajouté : il répond avec l'identifiant à coller dans l'admin.
-- **Envoyer un message de test** vérifie les deux canaux.
+**Telegram** (recommandé ; fonctionne sans nom de domaine) :
+
+1. Dans Telegram, ouvrez **@BotFather**, envoyez `/newbot` et choisissez un nom : il vous donne
+   un **jeton**. Collez-le dans l'admin.
+2. Envoyez un message à votre bot (ou ajoutez-le à un groupe de l'équipe et écrivez dans le
+   groupe), puis cliquez **Trouver mon identifiant**. Choisissez votre chat, puis enregistrez.
+
+**E-mail**. Indiquez :
+
+- l'adresse qui reçoit les alertes ;
+- un compte Gmail d'envoi, qui peut être la même adresse ;
+- un **mot de passe d'application** Gmail (pas le mot de passe du compte). Pour le créer :
+  Compte Google → Sécurité → validation en deux étapes → Mots de passe des applications.
+
+**Discord ou Slack** (facultatif) : l'URL d'un webhook de salon privé.
+
+**Envoyer un message de test** vérifie chaque canal. Les jetons, mots de passe et URL restent
+sur le serveur et ne sont jamais réaffichés.
 
 Dans l'admin, l'onglet Paiements affiche le nombre de transferts à valider. Un bandeau le
 rappelle sur les autres onglets, et le titre de l'onglet du navigateur commence par « (1) ». La
 page se met à jour seule toutes les minutes.
 
 Côté membre, la validation ouvre l'accès tout de suite. Le membre reçoit une notification
-« Accès activé » (cloche de l'espace de trading, et Telegram s'il l'a relié). Un refus lui est
-notifié avec le motif que vous saisissez.
+« Accès activé » dans la cloche de l'espace de trading. Un refus lui est notifié avec le motif
+que vous saisissez.
 
 ## 3. Académie : ajouter vos vidéos (même de 40 minutes)
 

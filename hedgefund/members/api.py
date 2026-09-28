@@ -128,8 +128,13 @@ class MemberStatusIn(BaseModel):
 class SiteSettingsIn(BaseModel):
     telegram_url: str = Field(default="", max_length=200)
     discord_url: str = Field(default="", max_length=200)
-    alert_webhook_url: str | None = Field(default=None, max_length=500)  # None: unchanged, "": removed
+    # Payment alerts. None: unchanged, "": removed. Credentials are write-only.
+    alert_webhook_url: str | None = Field(default=None, max_length=500)
     alert_telegram_chat: str | None = Field(default=None, max_length=40)
+    alert_telegram_token: str | None = Field(default=None, max_length=100)
+    alert_email: str | None = Field(default=None, max_length=200)
+    smtp_user: str | None = Field(default=None, max_length=200)
+    smtp_password: str | None = Field(default=None, max_length=100)
 
 
 @dataclass
@@ -428,7 +433,8 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session
             raise HTTPException(400, "lien Discord : il doit commencer par https://discord.gg/ ou https://discord.com/invite/")
         if ctx.alerts is not None:
             try:
-                ctx.alerts.save(body.alert_webhook_url, body.alert_telegram_chat)
+                ctx.alerts.save(webhook_url=body.alert_webhook_url, telegram_chat=body.alert_telegram_chat, telegram_token=body.alert_telegram_token,
+                                email_to=body.alert_email, smtp_user=body.smtp_user, smtp_password=body.smtp_password)
             except ValueError as e:
                 raise HTTPException(400, str(e)) from e
         engine.store.set_setting("site.telegram_url", tg)
@@ -440,10 +446,19 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session
     def admin_alert_test(s: Session = Depends(op)) -> dict:
         if ctx.alerts is None:
             raise HTTPException(400, "alertes indisponibles")
-        res = ctx.alerts.send(f"Test des alertes de paiement Liberté Financière (envoyé par {s.username}). Si vous lisez ceci, les alertes fonctionnent.")
-        if res["webhook"] is None and res["telegram"] is None:
-            raise HTTPException(400, "aucun canal configuré : renseignez un webhook ou un identifiant Telegram, puis enregistrez")
+        res = ctx.alerts.send(f"Test des alertes de paiement Liberté Financière (envoyé par {s.username}). Si vous lisez ceci, les alertes fonctionnent.", "Test des alertes de paiement")
+        if all(v is None for v in res.values()):
+            raise HTTPException(400, "aucun canal configuré : Telegram (jeton et identifiant), e-mail (adresse et compte d'envoi) ou webhook")
         return res
+
+    @app.post("/api/admin/alerts/telegram-chats")
+    def admin_telegram_chats(s: Session = Depends(op)) -> list[dict]:
+        if ctx.alerts is None:
+            raise HTTPException(400, "alertes indisponibles")
+        try:
+            return ctx.alerts.find_chats()
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.get("/api/admin/members")
     def admin_members(q: str = "", s: Session = Depends(op)) -> list[dict]:

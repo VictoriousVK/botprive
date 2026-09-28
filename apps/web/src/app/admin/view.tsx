@@ -491,7 +491,10 @@ function CopyTab({ ov }: { ov: Overview }) {
 }
 
 // ---------------- settings ----------------
-type AlertSettings = { webhook_set: boolean; webhook_from_env: boolean; telegram_chat: string; telegram_bot: boolean };
+type AlertSettings = {
+  webhook_set: boolean; webhook_from_env: boolean; telegram_chat: string; telegram_bot: boolean; telegram_bot_from_env: boolean;
+  email_to: string; smtp_set: boolean; smtp_user: string; smtp_host: string;
+};
 type SiteSettings = { telegram_url: string; discord_url: string; env_telegram?: boolean; env_discord?: boolean; alerts?: AlertSettings | null };
 
 function SettingsTab() {
@@ -522,51 +525,103 @@ function SettingsTab() {
 
 /** Where the team is told, at once, that a member paid (a transfer to validate, or a Wave payment confirmed). */
 function AlertsCard({ alerts, onSaved }: { alerts: AlertSettings; onSaved: (s: SiteSettings) => void }) {
-  const [hook, setHook] = useState("");
+  const [token, setToken] = useState("");
   const [chat, setChat] = useState(alerts.telegram_chat);
-  const [test, setTest] = useState<{ webhook: boolean | null; telegram: boolean | null } | null>(null);
+  const [chats, setChats] = useState<{ id: string; name: string; type: string }[] | null>(null);
+  const [emailTo, setEmailTo] = useState(alerts.email_to);
+  const [smtpUser, setSmtpUser] = useState(alerts.smtp_user);
+  const [smtpPass, setSmtpPass] = useState("");
+  const [hook, setHook] = useState("");
+  const [test, setTest] = useState<Record<string, boolean | null> | null>(null);
   const { run, view } = useAction();
-  const say = (v: boolean | null) => (v === null ? "non configuré" : v ? "message envoyé" : "échec de l'envoi");
-  const save = (body: Record<string, string>) => run(async () => { const s = await op<SiteSettings>("/api/admin/settings", "PUT", body); onSaved(s); setHook(""); }, "Alertes enregistrées.");
+  const save = (body: Record<string, string>, ok = "Alertes enregistrées.") => run(async () => { onSaved(await op<SiteSettings>("/api/admin/settings", "PUT", body)); setToken(""); setSmtpPass(""); setHook(""); }, ok);
+  const say = (v: boolean | null | undefined) => (v == null ? "non configuré" : v ? "envoyé" : "échec");
+  const step = "grid size-6 shrink-0 place-items-center rounded-full bg-brand-400/15 text-xs font-bold text-brand-300";
   return (
-    <div className="card mt-6 grid gap-4 p-6">
-      <h2 className="font-semibold">Alertes de paiement</h2>
-      <p className="text-sm text-muted">
-        Dès qu&apos;un membre déclare un transfert Wave (ou qu&apos;un paiement Wave est confirmé), l&apos;équipe reçoit un message : nom, offre, montant et identifiant de
-        transaction, sans e-mail ni téléphone. Vous vérifiez le transfert dans votre application Wave, puis vous le validez dans Paiements : l&apos;accès s&apos;ouvre et le membre est prévenu.
-      </p>
-      {view}
-      <div className="grid gap-2">
-        <label className="field">
-          <span>Webhook Discord ou Slack {alerts.webhook_set ? "(configuré : collez-en un autre pour le remplacer)" : ""}</span>
-          <input className="input" type="password" autoComplete="off" placeholder="https://discord.com/api/webhooks/…" value={hook} onChange={(e) => setHook(e.target.value)} />
-        </label>
-        <p className="text-xs text-faint">Discord : dans un salon privé de l&apos;équipe → Modifier le salon → Intégrations → Webhooks → Nouveau webhook → Copier l&apos;URL.{alerts.webhook_from_env ? " Actuellement fourni par la variable ALERT_WEBHOOK_URL." : ""}</p>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn btn-primary btn-sm" disabled={!hook.trim()} onClick={() => save({ alert_webhook_url: hook.trim() })}><Save className="size-4" /> Enregistrer le webhook</button>
-          {alerts.webhook_set && !alerts.webhook_from_env && <button className="btn btn-danger btn-sm" onClick={() => save({ alert_webhook_url: "" })}>Retirer</button>}
-        </div>
+    <div className="card mt-6 grid gap-5 p-6">
+      <div>
+        <h2 className="font-semibold">Alertes de paiement</h2>
+        <p className="mt-1 text-sm text-muted">
+          Dès qu&apos;un membre déclare un transfert Wave, vous recevez : nom, offre, montant et identifiant de transaction (sans e-mail ni téléphone du membre).
+          Vérifiez le transfert dans votre application Wave, puis validez-le dans Paiements : l&apos;accès s&apos;ouvre et le membre est prévenu.
+        </p>
       </div>
-      <div className="grid gap-2 border-t border-white/5 pt-4">
+      {view}
+
+      <section className="grid gap-3 rounded-xl border border-white/10 p-4">
+        <h3 className="flex items-center gap-2 font-semibold">Telegram {alerts.telegram_bot && alerts.telegram_chat && <span className="chip chip-green">actif</span>}</h3>
+        <p className="text-xs text-faint">Fonctionne sans nom de domaine : la plateforme envoie les messages, elle n&apos;a pas besoin d&apos;en recevoir.</p>
+        <div className="flex gap-3 text-sm">
+          <span className={step}>1</span>
+          <div className="grid flex-1 gap-2">
+            <span>Dans Telegram, ouvrez <b>@BotFather</b>, envoyez <span className="num">/newbot</span>, choisissez un nom : il vous donne un <b>jeton</b>.</span>
+            {alerts.telegram_bot_from_env ? <span className="chip chip-green justify-self-start">jeton fourni par le serveur</span> : (
+              <div className="flex gap-2">
+                <input className="input" type="password" autoComplete="off" placeholder={alerts.telegram_bot ? "Jeton enregistré (collez-en un autre pour le remplacer)" : "123456789:AA…"} value={token} onChange={(e) => setToken(e.target.value)} aria-label="Jeton du bot Telegram" />
+                <button className="btn btn-primary btn-sm shrink-0" disabled={!token.trim()} onClick={() => save({ alert_telegram_token: token.trim() })}>Enregistrer</button>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex gap-3 text-sm">
+          <span className={step}>2</span>
+          <div className="grid flex-1 gap-2">
+            <span>Ouvrez votre bot et envoyez-lui un message (par exemple « bonjour »). Pour un groupe, ajoutez-y le bot et écrivez dans le groupe.</span>
+            <button className="btn btn-ghost btn-sm justify-self-start" disabled={!alerts.telegram_bot} onClick={() => run(async () => setChats(await op("/api/admin/alerts/telegram-chats", "POST")))}>Trouver mon identifiant</button>
+            {chats && (chats.length ? (
+              <div className="flex flex-wrap gap-2">
+                {chats.map((c) => (
+                  <button key={c.id} className={`chip ${chat === c.id ? "chip-blue" : ""}`} onClick={() => setChat(c.id)}>{c.name || "Sans nom"} · {c.type === "private" ? "vous" : "groupe"} · {c.id}</button>
+                ))}
+              </div>
+            ) : <span className="text-xs text-gold-300">Aucun message reçu par le bot pour l&apos;instant : écrivez-lui, puis réessayez.</span>)}
+          </div>
+        </div>
+        <div className="flex gap-3 text-sm">
+          <span className={step}>3</span>
+          <div className="flex flex-1 gap-2">
+            <input className="input" inputMode="numeric" placeholder="Identifiant du chat" value={chat} onChange={(e) => setChat(e.target.value)} aria-label="Identifiant du chat Telegram" />
+            <button className="btn btn-primary btn-sm shrink-0" disabled={chat.trim() === alerts.telegram_chat} onClick={() => save({ alert_telegram_chat: chat.trim() })}>Enregistrer</button>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-3 rounded-xl border border-white/10 p-4">
+        <h3 className="flex items-center gap-2 font-semibold">E-mail {alerts.smtp_set && alerts.email_to && <span className="chip chip-green">actif</span>}</h3>
+        <label className="field"><span>Adresse qui reçoit les alertes</span><input className="input" type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} placeholder="vous@exemple.com" /></label>
+        <label className="field"><span>Compte Gmail qui envoie (peut être la même adresse)</span><input className="input" type="email" value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} placeholder="votre.adresse@gmail.com" /></label>
         <label className="field">
-          <span>Identifiant du chat Telegram (vous, ou un groupe de l&apos;équipe)</span>
-          <input className="input" inputMode="numeric" placeholder="123456789 ou -100…" value={chat} onChange={(e) => setChat(e.target.value)} />
+          <span>Mot de passe d&apos;application Gmail {alerts.smtp_set ? "(enregistré : collez-en un autre pour le remplacer)" : ""}</span>
+          <input className="input" type="password" autoComplete="off" value={smtpPass} onChange={(e) => setSmtpPass(e.target.value)} placeholder="16 lettres" />
         </label>
         <p className="text-xs text-faint">
-          {alerts.telegram_bot
-            ? "Ouvrez le bot de la plateforme dans Telegram (ou ajoutez-le à un groupe) et envoyez /id : il répond avec l'identifiant à coller ici."
-            : "Le bot Telegram n'est pas configuré (variable HF_TELEGRAM_BOT_TOKEN, créée avec @BotFather) : utilisez le webhook Discord en attendant."}
+          Pas votre mot de passe Gmail : un mot de passe d&apos;application. Compte Google → Sécurité → activez la validation en deux étapes → « Mots de passe des applications » → créez-en un
+          nommé « Liberté Financière ». Vous pourrez le révoquer à tout moment.
         </p>
-        <div><button className="btn btn-primary btn-sm" disabled={chat.trim() === alerts.telegram_chat} onClick={() => save({ alert_telegram_chat: chat.trim() })}><Save className="size-4" /> Enregistrer</button></div>
-      </div>
-      <div className="border-t border-white/5 pt-4">
-        <button className="btn btn-ghost btn-sm" onClick={() => run(async () => {
-          setTest(null);
-          setTest(await op<{ webhook: boolean | null; telegram: boolean | null }>("/api/admin/alerts/test", "POST"));
-        })}>Envoyer un message de test</button>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-primary btn-sm" disabled={!emailTo.trim() || !smtpUser.trim() || (!alerts.smtp_set && !smtpPass.trim())}
+            onClick={() => save({ alert_email: emailTo.trim(), smtp_user: smtpUser.trim(), ...(smtpPass.trim() ? { smtp_password: smtpPass } : {}) })}>Enregistrer l&apos;e-mail</button>
+          {(alerts.email_to || alerts.smtp_set) && <button className="btn btn-danger btn-sm" onClick={() => save({ alert_email: "", smtp_user: "" }, "E-mail retiré.")}>Retirer</button>}
+        </div>
+      </section>
+
+      <details className="rounded-xl border border-white/10 p-4">
+        <summary className="cursor-pointer font-semibold">Discord ou Slack (facultatif) {alerts.webhook_set && <span className="chip chip-green ml-2">actif</span>}</summary>
+        <div className="mt-3 grid gap-2">
+          <input className="input" type="password" autoComplete="off" placeholder="https://discord.com/api/webhooks/…" value={hook} onChange={(e) => setHook(e.target.value)} aria-label="Adresse du webhook" />
+          <p className="text-xs text-faint">Discord : salon privé → Modifier le salon → Intégrations → Webhooks → Copier l&apos;URL.</p>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary btn-sm" disabled={!hook.trim()} onClick={() => save({ alert_webhook_url: hook.trim() })}>Enregistrer</button>
+            {alerts.webhook_set && !alerts.webhook_from_env && <button className="btn btn-danger btn-sm" onClick={() => save({ alert_webhook_url: "" }, "Webhook retiré.")}>Retirer</button>}
+          </div>
+        </div>
+      </details>
+
+      <div>
+        <button className="btn btn-ghost btn-sm" onClick={() => run(async () => { setTest(null); setTest(await op("/api/admin/alerts/test", "POST")); })}>Envoyer un message de test</button>
         {test && (
-          <Notice kind={test.webhook === false || test.telegram === false ? "warn" : "ok"} className="mt-3">
-            Discord / Slack : {say(test.webhook)} · Telegram : {say(test.telegram)}
+          <Notice kind={Object.values(test).some((v) => v === false) ? "warn" : "ok"} className="mt-3">
+            Telegram : {say(test.telegram)} · E-mail : {say(test.email)} · Discord / Slack : {say(test.webhook)}
           </Notice>
         )}
       </div>
