@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 import time
-from typing import Any
+from typing import Any, Callable
 
 from hedgefund.members.site import FREE_OFFER, MemberSettings, SiteConfig
 from hedgefund.members.wave import WaveClient, WaveError
@@ -16,6 +17,7 @@ EMAIL_RE = re.compile(r"^[^@\s<>\"']{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$
 PHONE_RE = re.compile(r"^\+?[0-9 ]{8,20}$")
 TXN_RE = re.compile(r"^[A-Za-z0-9._-]{6,40}$")
 PENDING = ("pending", "declared")
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS members (
@@ -101,6 +103,24 @@ class Members:
         store.executescript(SCHEMA)
         self.auth = member_auth(store)
         self.wave = wave or (WaveClient(settings.wave_api_key, settings.wave_api_base) if settings.wave_api_enabled else None)
+        # Payment events for the team's alerts and the member's notifications:
+        # fn(event, data), event in payment_declared | payment_succeeded | payment_rejected.
+        self.listeners: list[Callable[[str, dict[str, Any]], None]] = []
+
+    def _emit(self, event: str, payment_id: str) -> None:
+        p = self.payment(payment_id)
+        m = self.get(p["member_id"]) if p else None
+        if p is None or m is None:
+            return
+        prod = self.site.products.get(p["offer"])
+        data = {**self.public_payment(p), "member_id": m["id"], "member_name": m["name"], "note": p["note"], "offer_page": prod.page if prod else "",
+                "offer_category": prod.category if prod else "",
+                "expires_at": next((a["expires_at"] for a in self.accesses(m["id"]) if a["product"] == p["offer"]), None)}
+        for fn in list(self.listeners):
+            try:
+                fn(event, data)
+            except Exception:  # noqa: BLE001 - an alert that fails never blocks a payment
+                log.exception("payment listener for %s", event)
 
     # ---------------- accounts ----------------
     def register(self, email: str, password: str, name: str, phone: str = "", ip: str = "") -> int:
@@ -280,6 +300,7 @@ class Members:
                 "UPDATE payments SET status = 'succeeded', applied_at = ?, updated_at = ?, transaction_ref = COALESCE(?, transaction_ref), note = COALESCE(?, note) WHERE id = ?",
                 (now, now, transaction_ref, note, payment_id),
             )
+        self._emit("payment_succeeded", payment_id)
         return True
 
     def refresh(self, payment_id: str) -> dict[str, Any] | None:
@@ -330,6 +351,7 @@ class Members:
         if self.store.execute("SELECT 1 FROM payments WHERE transaction_ref = ? AND id != ? AND status != 'rejected'", (ref, payment_id)):
             raise MemberError("cette transaction a déjà été déclarée")
         self._set_status(payment_id, "declared", transaction_ref=ref)
+        self._emit("payment_declared", payment_id)
         return self.public_payment(self.payment(payment_id))
 
     # ---------------- administration ----------------
@@ -344,6 +366,7 @@ class Members:
         if p is None or p["status"] not in PENDING:
             raise MemberError("ce paiement n'est pas en attente")
         self._set_status(payment_id, "rejected", note=f"refusé par {operator} : {reason[:160]}")
+        self._emit("payment_rejected", payment_id)
 
     def grant(self, member_id: int, offer: str, months: int, operator: str, reason: str) -> dict[str, Any]:
         """Access given by the team (beta testers, co-founders, a mentoring paid outside the site).

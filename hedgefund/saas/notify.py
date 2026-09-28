@@ -8,6 +8,7 @@ import hmac
 import logging
 import secrets
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -82,10 +83,34 @@ class Notifier:
         with self.saas.db.tenant(acc.tenant_id) as s:
             s.delete(notify_channels, {"user_id": acc.member_id, "kind": "telegram"})
 
+    def on_payment(self, access_for: Callable[[int], Access | None], event: str, d: dict[str, Any]) -> None:
+        """The member hears about their payment in their space (and on Telegram if linked)."""
+        if event not in ("payment_succeeded", "payment_rejected"):
+            return
+        acc = access_for(int(d["member_id"]))
+        if acc is None:
+            return
+        amount = f"{int(d.get('amount') or 0):,}".replace(",", " ") + " FCFA"
+        if event == "payment_succeeded":
+            exp = d.get("expires_at")
+            until = f" jusqu'au {datetime.fromtimestamp(int(exp), tz=timezone.utc).strftime('%d/%m/%Y')}" if exp else ""
+            paid = "offert par l'équipe" if d.get("method") == "grant" else f"paiement de {amount} validé"
+            link = "/app/" if d.get("offer_category") == "abonnement" else (d.get("offer_page") or "/compte/")
+            self.notify(acc.tenant_id, acc.member_id, "billing", f"Accès activé : {d['offer_label']}", f"Merci : {paid}. Votre accès {d['offer_label']} est actif{until}.", link)
+        else:
+            note = str(d.get("note") or "")
+            reason = note.split(" : ", 1)[1] if " : " in note else note
+            self.notify(acc.tenant_id, acc.member_id, "billing", "Paiement non validé",
+                        f"Votre déclaration ({d['offer_label']}, {amount}) n'a pas été validée" + (f" : {reason}" if reason else "") + ". Vérifiez l'identifiant de transaction Wave ou contactez l'équipe.", "/compte/")
+
     def on_telegram_update(self, update_: dict[str, Any]) -> bool:
         msg = update_.get("message") or {}
         text = str(msg.get("text") or "").strip()
         chat = (msg.get("chat") or {}).get("id")
+        if chat is not None and text.split("@")[0] in ("/id", "/start") and self.sender:
+            # No code: tell the chat its identifier (the team pastes it in /admin/ to get payment alerts).
+            self.sender(str(chat), f"Identifiant de ce chat : {chat}\nPour recevoir les alertes de paiement, collez-le dans /admin/ → Réglages → Alertes de paiement.")
+            return False
         if not text.startswith("/start") or chat is None:
             return False
         code = text.split(maxsplit=1)[1].strip().upper() if len(text.split()) > 1 else ""

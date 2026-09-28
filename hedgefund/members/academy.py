@@ -12,10 +12,11 @@ host's settings, since an embed link can otherwise be shared.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import secrets
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from hedgefund.members.site import MemberSettings, SiteConfig
@@ -183,6 +184,14 @@ class Academy:
     def __init__(self, store: Any, site: SiteConfig, settings: MemberSettings, now=time.time):
         self.store, self.site, self.settings, self.now = store, site, settings, now
         store.executescript(SCHEMA)
+        self.listeners: list[Callable[[], None]] = []  # called after any course change (the Mentor re-reads the courses)
+
+    def _changed(self) -> None:
+        for fn in list(self.listeners):
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 - a listener never blocks an edit
+                logging.getLogger(__name__).exception("academy listener")
 
     # ---------------- admin: courses ----------------
     def save_course(self, data: dict[str, Any], course_id: str | None = None) -> dict[str, Any]:
@@ -208,6 +217,7 @@ class Academy:
         else:
             course_id = "crs_" + secrets.token_hex(6)
             self.store.execute("INSERT INTO courses (slug, title, subtitle, description, level, access, status, position, created_at, updated_at, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (*fields, now, now, course_id))
+        self._changed()
         return self.course_admin(course_id)
 
     def delete_course(self, course_id: str) -> None:
@@ -217,6 +227,7 @@ class Academy:
                 self.store.execute("DELETE FROM course_progress WHERE part_id = ?", (pid,))
             self.store.execute("DELETE FROM course_parts WHERE course_id = ?", (course_id,))
             self.store.execute("DELETE FROM courses WHERE id = ?", (course_id,))
+        self._changed()
 
     # ---------------- admin: parts ----------------
     def save_part(self, course_id: str, data: dict[str, Any], part_id: str | None = None) -> dict[str, Any]:
@@ -249,6 +260,7 @@ class Academy:
                 (part_id, course_id, pos, title, summary, duration, provider, ref, chapters, free, now, now),
             )
         self.store.execute("UPDATE courses SET updated_at = ? WHERE id = ?", (now, course_id))
+        self._changed()
         return self.course_admin(course_id)
 
     def delete_part(self, course_id: str, part_id: str) -> dict[str, Any]:
@@ -256,6 +268,7 @@ class Academy:
             self.store.execute("DELETE FROM course_progress WHERE part_id = ?", (part_id,))
             self.store.execute("DELETE FROM course_parts WHERE id = ? AND course_id = ?", (part_id, course_id))
             self._renumber(course_id)
+        self._changed()
         return self.course_admin(course_id)
 
     def move_part(self, course_id: str, part_id: str, delta: int) -> dict[str, Any]:
@@ -327,6 +340,24 @@ class Academy:
             "slug": c["slug"], "title": c["title"], "subtitle": c["subtitle"], "description": c["description"], "level": c["level"], "status": c["status"],
             "access": c["access"], "access_label": ACCESS[c["access"]], "unlocked": unlocked, "parts": parts,
         }
+
+    def my_courses(self, entitlements: set[str], member_id: int) -> list[dict[str, Any]]:
+        """The member's courses with their progress, open ones first (the trading space's Formation tab)."""
+        done = {r["part_id"]: dict(r) for r in self.store.execute("SELECT * FROM course_progress WHERE member_id = ?", (member_id,))}
+        out = []
+        for c in self.store.execute("SELECT * FROM courses WHERE status IN ('published', 'soon') ORDER BY position, created_at"):
+            parts = self._parts(c["id"]) if c["status"] == "published" else []
+            unlocked = c["access"] in entitlements
+            open_parts = [p for p in parts if unlocked or p["free_preview"]]
+            completed = [p for p in open_parts if (done.get(p["id"]) or {}).get("completed")]
+            nxt = next((p for p in open_parts if not (done.get(p["id"]) or {}).get("completed")), None)
+            last = max((done[p["id"]]["updated_at"] for p in parts if p["id"] in done), default=None)
+            out.append({
+                "slug": c["slug"], "title": c["title"], "subtitle": c["subtitle"], "level": c["level"], "status": c["status"], "access": c["access"], "access_label": ACCESS[c["access"]],
+                "unlocked": unlocked, "parts": len(parts), "open_parts": len(open_parts), "completed": len(completed), "duration_s": sum(p["duration_s"] or 0 for p in parts),
+                "next": {"id": nxt["id"], "title": nxt["title"], "position": nxt["position"]} if nxt else None, "last_seen": last,
+            })
+        return sorted(out, key=lambda x: (not x["unlocked"], x["status"] != "published", -(x["last_seen"] or 0)))
 
     def save_progress(self, member_id: int, part_id: str, position_s: int, completed: bool, entitlements: set[str]) -> None:
         rows = self.store.execute("SELECT p.free_preview, p.duration_s, c.access, c.status FROM course_parts p JOIN courses c ON c.id = p.course_id WHERE p.id = ?", (part_id,))

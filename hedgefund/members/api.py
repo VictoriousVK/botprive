@@ -21,6 +21,7 @@ from hedgefund import __version__
 from hedgefund.bots.templates import TEMPLATES
 from hedgefund.core.ledger import Kind
 from hedgefund.members.academy import ACCESS, PROVIDERS, STATUSES, Academy, AcademyError
+from hedgefund.members.alerts import OperatorAlerts
 from hedgefund.members.copytrading import LEADER_STATUS, Copytrading, CopyError
 from hedgefund.members.service import MemberError, Members
 from hedgefund.members.site import ROBOT_STATUSES, MemberSettings, SiteConfig
@@ -127,6 +128,8 @@ class MemberStatusIn(BaseModel):
 class SiteSettingsIn(BaseModel):
     telegram_url: str = Field(default="", max_length=200)
     discord_url: str = Field(default="", max_length=200)
+    alert_webhook_url: str | None = Field(default=None, max_length=500)  # None: unchanged, "": removed
+    alert_telegram_chat: str | None = Field(default=None, max_length=40)
 
 
 @dataclass
@@ -141,6 +144,7 @@ class SiteContext:
     client_ip: Callable[[Request], str]
     operator: Callable[..., Session]  # FastAPI dependency: console session (with CSRF check)
     check_write: Callable[[Request, str], None]  # Origin + CSRF check for a state-changing call
+    alerts: OperatorAlerts | None = None  # team alerts on payments (Discord / Slack webhook, Telegram)
 
 
 def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session, dict]]:
@@ -352,6 +356,10 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session
         return {"ok": True}
 
     # ---------------- academy ----------------
+    @app.get("/api/m/courses")
+    def my_courses(sm=Depends(member)) -> list[dict]:
+        return academy.my_courses(members.entitlements(sm[1]), sm[1]["id"])
+
     @app.post("/api/m/progress")
     def progress(body: ProgressIn, sm=Depends(member)) -> dict:
         try:
@@ -408,6 +416,7 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session
         return {
             "telegram_url": st.get_setting("site.telegram_url") or "", "discord_url": st.get_setting("site.discord_url") or "",
             "env_telegram": bool(settings.telegram_url), "env_discord": bool(settings.discord_url),
+            "alerts": ctx.alerts.public_settings() if ctx.alerts else None,
         }
 
     @app.put("/api/admin/settings")
@@ -417,10 +426,24 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session
             raise HTTPException(400, "lien Telegram : il doit commencer par https://t.me/")
         if dc and not (dc.startswith("https://discord.gg/") or dc.startswith("https://discord.com/invite/")):
             raise HTTPException(400, "lien Discord : il doit commencer par https://discord.gg/ ou https://discord.com/invite/")
+        if ctx.alerts is not None:
+            try:
+                ctx.alerts.save(body.alert_webhook_url, body.alert_telegram_chat)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
         engine.store.set_setting("site.telegram_url", tg)
         engine.store.set_setting("site.discord_url", dc)
         audit("site_settings", operator=s.username, telegram=bool(tg), discord=bool(dc))  # the links themselves stay out of the journal
         return admin_settings(s)
+
+    @app.post("/api/admin/alerts/test")
+    def admin_alert_test(s: Session = Depends(op)) -> dict:
+        if ctx.alerts is None:
+            raise HTTPException(400, "alertes indisponibles")
+        res = ctx.alerts.send(f"Test des alertes de paiement Liberté Financière (envoyé par {s.username}). Si vous lisez ceci, les alertes fonctionnent.")
+        if res["webhook"] is None and res["telegram"] is None:
+            raise HTTPException(400, "aucun canal configuré : renseignez un webhook ou un identifiant Telegram, puis enregistrez")
+        return res
 
     @app.get("/api/admin/members")
     def admin_members(q: str = "", s: Session = Depends(op)) -> list[dict]:

@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, BookOpen, Cpu, Crosshair, FlaskConical, GraduationCap, LayoutDashboard, Lock, Settings, ShieldCheck, Sparkles } from "lucide-react";
+import { Bell, BookOpen, Cpu, Crosshair, FlaskConical, GraduationCap, LayoutDashboard, Lock, MonitorPlay, Settings, ShieldCheck, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
@@ -15,6 +15,7 @@ const TABS: [string, string, typeof LayoutDashboard][] = [
   ["/app/analyse/", "Analyse ICT", Crosshair],
   ["/app/risque/", "Risque", ShieldCheck],
   ["/app/mentor/", "Mentor", GraduationCap],
+  ["/app/formation/", "Formation", MonitorPlay],
   ["/app/labo/", "Labo", FlaskConical],
   ["/app/ea/", "Usine EA", Cpu],
   ["/app/reglages/", "Réglages", Settings],

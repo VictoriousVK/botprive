@@ -1,6 +1,7 @@
 "use client";
 
 import { BookMarked, GraduationCap, History } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { AppShell, Usage } from "@/components/app-shell";
 import { Disclaimer, LabelChip, Section, useAction, useLoad } from "@/components/app-ui";
@@ -76,8 +77,10 @@ function Answer({ a }: { a: MentorAnswer & { question?: string } }) {
           <ul className="grid gap-1 text-sm">
             {a.citations.map((c) => (
               <li key={c.chunk_id} className="flex flex-wrap gap-2">
-                <span className="chip chip-blue">{c.title}</span>
-                {c.ref && <span className="text-muted">{c.ref}</span>}
+                {c.ref?.startsWith("course:")
+                  ? <Link href={`/academie/cours/?c=${encodeURIComponent(c.ref.slice(7))}`} className="chip chip-blue hover:border-brand-400/60">{c.title}</Link>
+                  : <span className="chip chip-blue">{c.title}</span>}
+                {c.ref && !c.ref.startsWith("course:") && !c.ref.startsWith("skill:") && <span className="text-muted">{c.ref}</span>}
                 {c.timestamp_s != null && <span className="text-muted">à {fmtTs(c.timestamp_s)}</span>}
               </li>
             ))}

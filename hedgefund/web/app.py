@@ -38,6 +38,7 @@ from hedgefund import __version__
 from hedgefund.bots.templates import DIRECTIONS, TEMPLATES, TIMEFRAMES, new_bot_id, validate_bot
 from hedgefund.core.ledger import Kind
 from hedgefund.members.academy import FRAME_SOURCES, Academy
+from hedgefund.members.alerts import OperatorAlerts
 from hedgefund.members.api import SiteContext, mount_members
 from hedgefund.members.copytrading import Copytrading
 from hedgefund.members.service import Members
@@ -490,20 +491,29 @@ def create_app(
 
     # ---------------- public site: members, payments, academy, copytrading ----------------
     members = Members(engine.store, site, member_settings)
+    academy = Academy(engine.store, site, member_settings)
+    pay_alerts = OperatorAlerts(engine.store, public_url=member_settings.public_url)
+    members.listeners.append(pay_alerts.on_payment)  # the team hears about a payment at once
     member_dep = mount_members(app, SiteContext(
         engine=engine, site=site, settings=member_settings, members=members,
-        academy=Academy(engine.store, site, member_settings), copy=Copytrading(engine.store, engine, member_settings.copytrading),
-        cookie_secure=settings.cookie_secure, client_ip=client_ip, operator=session, check_write=check_write,
+        academy=academy, copy=Copytrading(engine.store, engine, member_settings.copytrading),
+        cookie_secure=settings.cookie_secure, client_ip=client_ip, operator=session, check_write=check_write, alerts=pay_alerts,
     ))
     app.state.members = members
+    app.state.alerts = pay_alerts
 
     # ---------------- Alpha Edge SaaS: journal, analysis, risk, AI agents ----------------
     if saas is not None:
         from hedgefund.saas.api import ApiContext, mount_saas
 
         saas.platform = engine
-        mount_saas(ApiContext(app=app, saas=saas, member=member_dep, operator=session, profile=members.profile, client_ip=client_ip, member_by_id=members.get))
+        saas_ctx = ApiContext(app=app, saas=saas, member=member_dep, operator=session, profile=members.profile, client_ip=client_ip, member_by_id=members.get)
+        mount_saas(saas_ctx)
         app.state.saas = saas
+        # The member is told in their space when a payment is validated or refused; the Mentor
+        # re-reads the courses whenever the team edits the academy.
+        members.listeners.append(lambda event, data: saas.modules["notify"].on_payment(saas_ctx.access_for_member, event, data))
+        academy.listeners.append(lambda: saas.modules["mentor"].kb.reindex())
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE"], include_in_schema=False)
     def api_not_found(rest: str) -> None:

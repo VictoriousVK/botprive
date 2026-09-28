@@ -129,6 +129,29 @@ formation est acquise à vie. Vous pouvez aussi **attribuer** un accès sans
 paiement (bêta-testeurs, cofondateurs) dans `/admin/` → Membres → Attribuer ; c'est tracé
 dans le journal.
 
+### Être prévenu d'un paiement, et ce que voit le membre
+
+Dès qu'un membre **déclare** un transfert Wave, ou qu'un paiement Wave Checkout est **confirmé**,
+l'équipe reçoit un message. Il contient le nom, l'offre, la durée, le montant et l'identifiant de
+transaction, sans e-mail ni téléphone. Réglage dans **`/admin/` → Réglages → Alertes de
+paiement** :
+
+- **Discord** (le plus simple) : dans un salon privé de l'équipe → Modifier le salon →
+  Intégrations → Webhooks → Nouveau webhook → Copier l'URL, puis collez-la dans l'admin. Un
+  webhook Slack fonctionne aussi.
+- **Telegram** : il faut le bot de la plateforme. Créez-le avec @BotFather, puis réglez
+  `HF_TELEGRAM_BOT_TOKEN` et le webhook Telegram (voir `docs/SAAS.md`). Envoyez `/id` au bot, ou
+  dans un groupe où vous l'avez ajouté : il répond avec l'identifiant à coller dans l'admin.
+- **Envoyer un message de test** vérifie les deux canaux.
+
+Dans l'admin, l'onglet Paiements affiche le nombre de transferts à valider. Un bandeau le
+rappelle sur les autres onglets, et le titre de l'onglet du navigateur commence par « (1) ». La
+page se met à jour seule toutes les minutes.
+
+Côté membre, la validation ouvre l'accès tout de suite. Le membre reçoit une notification
+« Accès activé » (cloche de l'espace de trading, et Telegram s'il l'a relié). Un refus lui est
+notifié avec le motif que vous saisissez.
+
 ## 3. Académie : ajouter vos vidéos (même de 40 minutes)
 
 Les vidéos ne sont **pas stockées sur la plateforme** : une vidéo de 40 minutes pèse souvent
@@ -167,6 +190,16 @@ abonnés Quant Elite) y auront accès, et la page `/formation-ict/` y renvoie.
 
 Pour des fichiers `.mp4` hébergés ailleurs (CDN), déclarez le domaine :
 `$env:LF_MEDIA_HOSTS = "videos.votredomaine.com"`.
+
+**Dans l'espace de trading.** L'onglet **Formation** (`/app/formation/`) liste les cours du
+membre avec sa progression. Le bouton « Continuer » ouvre directement la partie suivante ; les
+cours non inclus proposent l'extrait gratuit et « Débloquer ».
+
+**Le Mentor.** Il relit automatiquement un cours dès que vous l'enregistrez : titre,
+description, titres, résumés et chapitres des parties. Ses réponses renvoient au cours cité.
+Pour qu'il réponde sur le contenu parlé des vidéos, ajoutez leurs transcriptions dans
+**`/admin/` → SaaS IA → Base de connaissances**, type « Transcription », avec l'accès du cours.
+Un fichier de sous-titres ou une transcription automatique de l'hébergeur convient.
 
 ## 4. Robots
 

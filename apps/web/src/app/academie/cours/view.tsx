@@ -17,10 +17,11 @@ function withStart(src: string, t: number) {
 }
 
 export function CourseView() {
-  const slug = useSearchParams().get("c") ?? "";
+  const params = useSearchParams();
+  const slug = params.get("c") ?? "";
   const { me } = useSession();
   const { data: course, loading, error, reload } = useApi<Course>(slug ? `/api/site/courses/${encodeURIComponent(slug)}` : null, [me?.id]);
-  const [current, setCurrent] = useState<string | null>(null);
+  const [current, setCurrent] = useState<string | null>(params.get("p"));  // ?p= opens a given part (link "Continuer")
   const [start, setStart] = useState(0);
   const part = useMemo(() => course?.parts.find((p) => p.id === current) ?? course?.parts.find((p) => !p.locked) ?? null, [course, current]);
 

@@ -39,6 +39,18 @@ export function AdminView() {
       .catch(() => setState("out"));
   }, [loadOv]);
 
+  // New payments show up without reloading: the overview is re-read every minute, and the tab
+  // title carries the number of transfers to validate.
+  useEffect(() => {
+    if (state !== "in") return;
+    const t = window.setInterval(loadOv, 60_000);
+    return () => window.clearInterval(t);
+  }, [state, loadOv]);
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\) /, "");
+    document.title = ov && ov.to_review > 0 ? `(${ov.to_review}) ${base}` : base;
+  }, [ov]);
+
   if (state === "loading") return <div className="container-x py-14"><Spinner /></div>;
   if (state === "out")
     return (
@@ -74,6 +86,12 @@ export function AdminView() {
           ))}
         </div>
       </div>
+      {ov && ov.to_review > 0 && tab !== "payments" && (
+        <Notice kind="warn" className="mt-6">
+          {ov.to_review} paiement{ov.to_review > 1 ? "s" : ""} Wave à valider.{" "}
+          <button className="font-semibold text-gold-300 underline-offset-2 hover:underline" onClick={() => setTab("payments")}>Ouvrir les paiements</button>
+        </Notice>
+      )}
       <div className="mt-8">
         {!ov ? <Spinner /> : tab === "overview" ? <OverviewTab ov={ov} /> : tab === "payments" ? <PaymentsTab onChange={loadOv} /> : tab === "members" ? <MembersTab ov={ov} /> : tab === "academy" ? <AcademyTab ov={ov} /> : tab === "copy" ? <CopyTab ov={ov} /> : tab === "leads" ? <LeadsTab /> : tab === "saas" ? <SaasTab /> : <SettingsTab />}
       </div>
@@ -473,11 +491,14 @@ function CopyTab({ ov }: { ov: Overview }) {
 }
 
 // ---------------- settings ----------------
+type AlertSettings = { webhook_set: boolean; webhook_from_env: boolean; telegram_chat: string; telegram_bot: boolean };
+type SiteSettings = { telegram_url: string; discord_url: string; env_telegram?: boolean; env_discord?: boolean; alerts?: AlertSettings | null };
+
 function SettingsTab() {
-  const [f, setF] = useState<{ telegram_url: string; discord_url: string; env_telegram?: boolean; env_discord?: boolean } | null>(null);
+  const [f, setF] = useState<SiteSettings | null>(null);
   const { run, view } = useAction();
   useEffect(() => {
-    op<{ telegram_url: string; discord_url: string; env_telegram: boolean; env_discord: boolean }>("/api/admin/settings").then(setF);
+    op<SiteSettings>("/api/admin/settings").then(setF);
   }, []);
   if (!f) return <Spinner />;
   const save = () => run(async () => setF(await op("/api/admin/settings", "PUT", { telegram_url: f.telegram_url, discord_url: f.discord_url })), "Réglages enregistrés.");
@@ -493,6 +514,61 @@ function SettingsTab() {
         <label className="field"><span>Lien d&apos;invitation Telegram (https://t.me/…)</span><input className="input" value={f.telegram_url} onChange={(e) => setF({ ...f, telegram_url: e.target.value })} /></label>
         <label className="field"><span>Lien d&apos;invitation Discord (https://discord.gg/…)</span><input className="input" value={f.discord_url} onChange={(e) => setF({ ...f, discord_url: e.target.value })} /></label>
         <div><button className="btn btn-primary btn-sm" onClick={save}><Save className="size-4" /> Enregistrer</button></div>
+      </div>
+      {f.alerts && <AlertsCard alerts={f.alerts} onSaved={setF} />}
+    </div>
+  );
+}
+
+/** Where the team is told, at once, that a member paid (a transfer to validate, or a Wave payment confirmed). */
+function AlertsCard({ alerts, onSaved }: { alerts: AlertSettings; onSaved: (s: SiteSettings) => void }) {
+  const [hook, setHook] = useState("");
+  const [chat, setChat] = useState(alerts.telegram_chat);
+  const [test, setTest] = useState<{ webhook: boolean | null; telegram: boolean | null } | null>(null);
+  const { run, view } = useAction();
+  const say = (v: boolean | null) => (v === null ? "non configuré" : v ? "message envoyé" : "échec de l'envoi");
+  const save = (body: Record<string, string>) => run(async () => { const s = await op<SiteSettings>("/api/admin/settings", "PUT", body); onSaved(s); setHook(""); }, "Alertes enregistrées.");
+  return (
+    <div className="card mt-6 grid gap-4 p-6">
+      <h2 className="font-semibold">Alertes de paiement</h2>
+      <p className="text-sm text-muted">
+        Dès qu&apos;un membre déclare un transfert Wave (ou qu&apos;un paiement Wave est confirmé), l&apos;équipe reçoit un message : nom, offre, montant et identifiant de
+        transaction, sans e-mail ni téléphone. Vous vérifiez le transfert dans votre application Wave, puis vous le validez dans Paiements : l&apos;accès s&apos;ouvre et le membre est prévenu.
+      </p>
+      {view}
+      <div className="grid gap-2">
+        <label className="field">
+          <span>Webhook Discord ou Slack {alerts.webhook_set ? "(configuré : collez-en un autre pour le remplacer)" : ""}</span>
+          <input className="input" type="password" autoComplete="off" placeholder="https://discord.com/api/webhooks/…" value={hook} onChange={(e) => setHook(e.target.value)} />
+        </label>
+        <p className="text-xs text-faint">Discord : dans un salon privé de l&apos;équipe → Modifier le salon → Intégrations → Webhooks → Nouveau webhook → Copier l&apos;URL.{alerts.webhook_from_env ? " Actuellement fourni par la variable ALERT_WEBHOOK_URL." : ""}</p>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-primary btn-sm" disabled={!hook.trim()} onClick={() => save({ alert_webhook_url: hook.trim() })}><Save className="size-4" /> Enregistrer le webhook</button>
+          {alerts.webhook_set && !alerts.webhook_from_env && <button className="btn btn-danger btn-sm" onClick={() => save({ alert_webhook_url: "" })}>Retirer</button>}
+        </div>
+      </div>
+      <div className="grid gap-2 border-t border-white/5 pt-4">
+        <label className="field">
+          <span>Identifiant du chat Telegram (vous, ou un groupe de l&apos;équipe)</span>
+          <input className="input" inputMode="numeric" placeholder="123456789 ou -100…" value={chat} onChange={(e) => setChat(e.target.value)} />
+        </label>
+        <p className="text-xs text-faint">
+          {alerts.telegram_bot
+            ? "Ouvrez le bot de la plateforme dans Telegram (ou ajoutez-le à un groupe) et envoyez /id : il répond avec l'identifiant à coller ici."
+            : "Le bot Telegram n'est pas configuré (variable HF_TELEGRAM_BOT_TOKEN, créée avec @BotFather) : utilisez le webhook Discord en attendant."}
+        </p>
+        <div><button className="btn btn-primary btn-sm" disabled={chat.trim() === alerts.telegram_chat} onClick={() => save({ alert_telegram_chat: chat.trim() })}><Save className="size-4" /> Enregistrer</button></div>
+      </div>
+      <div className="border-t border-white/5 pt-4">
+        <button className="btn btn-ghost btn-sm" onClick={() => run(async () => {
+          setTest(null);
+          setTest(await op<{ webhook: boolean | null; telegram: boolean | null }>("/api/admin/alerts/test", "POST"));
+        })}>Envoyer un message de test</button>
+        {test && (
+          <Notice kind={test.webhook === false || test.telegram === false ? "warn" : "ok"} className="mt-3">
+            Discord / Slack : {say(test.webhook)} · Telegram : {say(test.telegram)}
+          </Notice>
+        )}
       </div>
     </div>
   );
