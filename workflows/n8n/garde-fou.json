@@ -1,0 +1,71 @@
+{
+  "name": "Alpha Edge — garde-fou prop firm",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 * * * 1-5"
+            }
+          ]
+        }
+      },
+      "name": "Planning : garde-fou prop firm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ALPHA_EDGE_URL }}/api/jobs/guard-check",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Jobs-Secret",
+              "value": "={{ $env.HF_JOBS_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $workflow.id + '-' + $now.toFormat('yyyyMMddHHmm') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "Alpha Edge : /api/jobs/guard-check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Planning : garde-fou prop firm": {
+      "main": [
+        [
+          {
+            "node": "Alpha Edge : /api/jobs/guard-check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/New_York",
+    "executionOrder": "v1"
+  },
+  "active": false
+}

@@ -1,0 +1,75 @@
+id: carry_btc_basis
+name: BTC perpetual funding carry (delta-neutral)
+version: 1
+owner_desk: quant
+stage: data             # implemented + tested offline; next gate needs >=1y of real point-in-time data
+impl: hedgefund.strategy.library.carry:FundingCarry
+edge_source: risk_premium
+hypothesis: >
+  Leveraged long demand for perpetuals is persistent and price-insensitive, so perp funding
+  is positive on average and spikes during bullish leverage build-ups. A long-spot /
+  short-perp package collects funding with near-zero price exposure. The edge is a payment
+  for warehousing basis, exchange and liquidation risk, not a forecast.
+universe: [BTCUSDT, BTCUSDT-PERP]
+packages:
+  - key: BTC-carry
+    legs:
+      - {symbol: BTCUSDT, weight: 1.0}
+      - {symbol: BTCUSDT-PERP, weight: -1.0}
+timeframe: 4h
+allowed_directions: [long]     # long package = long spot / short perp (reverse carry needs spot borrow)
+features: [funding_avg_3d_ann, funding_last_ann, funding_neg_streak, basis, rv_ratio, oi_chg_1d]
+entry_rules:
+  - "3-day average funding, annualized, >= entry_funding_ann"
+  - "latest funding print > 0"
+  - "|perp/spot - 1| < basis_stop / 2"
+exit_rules:
+  - "3-day average funding, annualized, <= exit_funding_ann"
+  - "exit_neg_prints consecutive negative funding prints"
+  - "|basis| >= basis_stop (basis blow-out)"
+  - "Jev risk_state = flat or regime = crisis (spec exit_on_crisis)"
+expected_holding: "1-6 weeks"
+params:
+  entry_funding_ann: 0.15
+  exit_funding_ann: 0.03
+  exit_neg_prints: 2
+  basis_stop: 0.02
+  stop_distance_pct: 0.03
+risk:
+  risk_per_trade_pct_nav: 0.006
+  max_package_notional_pct_nav: 0.20
+  rebalance_threshold: 0.35
+  exit_on_crisis: true
+costs:
+  fee_bps_roundtrip: 30      # spot 10 + perp 5, in and out
+  slippage_bps_roundtrip: 4
+  funding_note: "Revenue is funding; break-even at ~15% annualized funding is ~7 days of carry."
+liquidity:
+  min_bar_notional_volume: 50000000
+jev:
+  profile: carry
+  allowed_regimes: [trending, mean_reverting, high_vol]
+  min_setup_quality: 2
+  min_liquidity_quality: 2
+  max_toxic_flow: 1
+  min_expected_edge: 55
+  min_confidence: 0.65
+  calibration_horizon_bars: 126    # 21 days: carry must amortize ~34bps of round-trip cost
+  instructions:
+    direction: "'long' means long spot / short perp carry is attractive; 'short' is not available; 'flat' means carry is not worth the costs and risks."
+    setup_quality: "Judge the level and persistence of funding, and basis stability."
+    toxic_flow: "Treat liquidation cascades and funding flips as toxic for a short-perp leg."
+    should_trade: "Answer yes only if funding is likely to remain above the exit threshold for at least a week."
+invalidation:
+  - {metric: rolling_sharpe_90d, op: "<", threshold: 0.0, min_observations: 540, action: demote}
+  - {metric: strategy_drawdown, op: ">", threshold: 0.04, action: halt}
+  - {metric: avg_slippage_bps, op: ">", threshold: 6.0, min_observations: 20, action: demote}
+  - {metric: brier_should_trade, op: ">", threshold: 0.25, min_observations: 50, action: demote}
+data_sources: [binance_spot_klines, binance_usdm_klines, binance_usdm_funding, binance_usdm_open_interest]
+failure_modes:
+  - "Venue insolvency or withdrawal freeze: both legs sit on one exchange (counterparty risk dominates the carry)."
+  - "Short-perp leg auto-deleveraged or liquidated in a squeeze while spot leg is intact."
+  - "Funding compresses as capacity arrives (the premium is crowded; ETF-basis and delta-neutral stablecoin products compete for it)."
+  - "Basis blow-out on a crash creates mark-to-market loss exceeding months of carry."
+capacity_usd: 20000000
+research_memo: null

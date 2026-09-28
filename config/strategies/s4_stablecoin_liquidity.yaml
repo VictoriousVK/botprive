@@ -1,0 +1,69 @@
+id: stablecoin_liquidity_tilt
+name: Stablecoin-liquidity regime tilt (spot BTC)
+version: 1
+owner_desk: macro
+stage: data             # implemented + tested offline; next gate needs >=1y of real point-in-time data
+impl: hedgefund.strategy.library.stablecoin:StablecoinLiquidityTilt
+edge_source: informational
+hypothesis: >
+  Net stablecoin issuance is the on-chain proxy for fresh dollar liquidity entering crypto.
+  Sustained supply expansion, confirmed by price above its 200-day average, marks regimes in
+  which risk-on flows dominate; contraction marks regimes to be flat. This is a slow regime
+  filter, not a timing signal, and it only ever holds long spot (no leverage, no shorts).
+universe: [BTCUSDT]
+packages:
+  - key: BTC-liquidity
+    legs: [{symbol: BTCUSDT, weight: 1.0}]
+timeframe: 4h
+allowed_directions: [long]
+features: [stable_growth_30d, close_vs_sma200, rv_ratio]
+entry_rules:
+  - "30-day stablecoin supply growth >= entry_growth"
+  - "close > 200-day simple moving average"
+exit_rules:
+  - "30-day stablecoin supply growth < exit_growth"
+  - "close < 200-day SMA * (1 - sma_buffer)"
+expected_holding: "1-6 months"
+params:
+  growth_days: 30
+  entry_growth: 0.01
+  exit_growth: 0.0
+  sma_days: 200
+  sma_buffer: 0.02
+  stop_distance_pct: 0.20
+risk:
+  risk_per_trade_pct_nav: 0.012
+  max_package_notional_pct_nav: 0.10
+  rebalance_threshold: 0.5
+  exit_on_crisis: true
+costs:
+  fee_bps_roundtrip: 20
+  slippage_bps_roundtrip: 2
+  funding_note: "Spot only: no funding."
+liquidity:
+  min_bar_notional_volume: 50000000
+jev:
+  profile: macro
+  allowed_regimes: [trending, mean_reverting]
+  min_setup_quality: 1
+  min_liquidity_quality: 2
+  max_toxic_flow: 2
+  min_expected_edge: 52
+  min_confidence: 0.62
+  calibration_horizon_bars: 180    # 30 days
+  instructions:
+    direction: "'long' if liquidity conditions support holding spot BTC; 'short' is not available."
+    setup_quality: "Judge the strength and persistence of stablecoin supply growth and trend confirmation."
+    should_trade: "Answer yes only if the next 30 days are more likely than not to reward holding spot BTC."
+invalidation:
+  - {metric: rolling_sharpe_90d, op: "<", threshold: -0.5, min_observations: 540, action: demote}
+  - {metric: strategy_drawdown, op: ">", threshold: 0.03, action: halt}
+  - {metric: brier_should_trade, op: ">", threshold: 0.26, min_observations: 30, action: demote}
+data_sources: [binance_spot_klines, defillama_stablecoins]
+failure_modes:
+  - "Supply growth driven by non-crypto demand (payments, treasury management) decouples from risk appetite."
+  - "Data revisions: aggregator backfills history; only point-in-time snapshots are valid evidence."
+  - "Very few regime switches per year; backtest statistics are weak (high variance of Sharpe)."
+  - "Overlaps with trend (S2) in bull regimes: correlated exposure."
+capacity_usd: 100000000
+research_memo: null

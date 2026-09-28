@@ -1,0 +1,7 @@
+# Option B : exposer la plateforme en HTTPS avec Caddy (certificat Let's Encrypt automatique).
+# Prérequis : un nom de domaine pointant vers l'IP du VPS, ports 80/443 ouverts.
+# Lancer :  caddy run --config deploy\Caddyfile   (après avoir remplacé le domaine)
+trading.mondomaine.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:8000
+}

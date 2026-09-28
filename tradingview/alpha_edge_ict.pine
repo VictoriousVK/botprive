@@ -1,0 +1,48 @@
+//@version=5
+// Alpha Edge ICT — visualisation des sorties du moteur (définitions victor-v0)
+// Affiche : killzones et fenêtres Silver Bullet (heure de New York), midnight open, open 18 h,
+// FVG à 3 bougies (taille minimale en fraction d'ATR). Ce script ne donne aucun signal
+// d'achat ou de vente : il montre les mêmes objets que le moteur, pour les vérifier à l'œil.
+// Alerte : utilisez le message JSON fourni dans votre espace membre (Réglages → TradingView).
+indicator("Alpha Edge ICT", overlay = true, max_boxes_count = 200, max_lines_count = 100)
+
+tz          = "America/New_York"
+fvgMinAtr   = input.float(0.12, "FVG : taille minimale (× ATR 14)", step = 0.01)
+showKz      = input.bool(true, "Killzones")
+showSb      = input.bool(true, "Fenêtres Silver Bullet")
+showFvg     = input.bool(true, "FVG")
+showOpens   = input.bool(true, "Midnight open et open 18 h")
+
+nyMin = hour(time, tz) * 60 + minute(time, tz)
+inRange(a, b) => nyMin >= a and nyMin < b
+
+kzAsia   = inRange(20 * 60, 24 * 60)
+kzLondon = inRange(2 * 60, 5 * 60)
+kzNyAm   = inRange(7 * 60, 10 * 60)
+kzNyPm   = inRange(13 * 60 + 30, 16 * 60)
+sbWindow = inRange(3 * 60, 4 * 60) or inRange(10 * 60, 11 * 60) or inRange(14 * 60, 15 * 60)
+
+bgcolor(showKz and kzLondon ? color.new(color.blue, 90) : na, title = "Killzone Londres")
+bgcolor(showKz and kzNyAm ? color.new(color.orange, 90) : na, title = "Killzone NY AM")
+bgcolor(showKz and kzNyPm ? color.new(color.purple, 92) : na, title = "Killzone NY PM")
+bgcolor(showKz and kzAsia ? color.new(color.gray, 94) : na, title = "Killzone Asie")
+plotshape(showSb and sbWindow and not sbWindow[1], "Début Silver Bullet", shape.triangleup, location.bottom, color.teal, size = size.tiny)
+
+var float midnightOpen = na
+var float open18 = na
+if nyMin == 0 or (nyMin < nyMin[1] and nyMin < 30)
+    midnightOpen := open
+if nyMin == 18 * 60
+    open18 := open
+plot(showOpens ? midnightOpen : na, "Midnight open", color.new(color.silver, 0), 1, plot.style_linebr)
+plot(showOpens ? open18 : na, "Open 18 h", color.new(color.yellow, 30), 1, plot.style_linebr)
+
+atr = ta.atr(14)
+bisi = low > high[2] and (low - high[2]) >= fvgMinAtr * atr[1]
+sibi = high < low[2] and (low[2] - high) >= fvgMinAtr * atr[1]
+if showFvg and bisi
+    box.new(bar_index - 1, low, bar_index + 10, high[2], border_color = color.new(color.green, 40), bgcolor = color.new(color.green, 85))
+if showFvg and sibi
+    box.new(bar_index - 1, low[2], bar_index + 10, high, border_color = color.new(color.red, 40), bgcolor = color.new(color.red, 85))
+
+alertcondition(bisi or sibi, "FVG formé", "FVG formé sur {{ticker}} ({{interval}})")
