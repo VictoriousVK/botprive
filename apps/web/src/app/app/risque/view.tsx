@@ -7,9 +7,12 @@ import { Bullets, Gauge, Kv, LabelChip, Section, useAction, useLoad } from "@/co
 import { Empty, Notice, Spinner } from "@/components/ui";
 import { GATE_LABEL, appApi, money, n2, when, type Account, type GuardStatus, type RiskGate } from "@/lib/app";
 
+type SizeRules = { max_loss?: number; daily_loss?: number; profit_target?: number; max_contracts?: number };
 type Profile = {
-  key: string; label: string; version: string | null; source: string | null; verified_at: string | null; daily_loss_pct: number | string | null; daily_loss_ref: string | null; daily_loss_base: string | null;
-  max_loss_pct: number | null; max_loss_type: string | null; profit_target_pct: number | null; min_trading_days: number | null; reset: string | null; news_minutes: number | null;
+  key: string; label: string; firm?: string | null; market?: "futures" | "cfd" | null; version: string | number | null; source: string | null; retrieved_at?: string | null; verified_at: string | null;
+  daily_loss_pct: number | string | null; daily_loss_ref: string | null; daily_loss_base: string | null; max_loss_pct: number | null; max_loss_type: string | null; trailing_lock?: string | null;
+  profit_target_pct: number[] | number | null; min_trading_days: number | null; reset: string | null; news_minutes: number | null;
+  consistency?: { pct: number; base: string } | null; sizes?: Record<string, SizeRules> | null; notes?: string | null;
 };
 
 export function RiskView() {
@@ -91,6 +94,7 @@ function Status({ account, accounts }: { account: string; accounts: Account[] })
             <Kv k="Début de journée" v={when(s.day_start)} />
             <Kv k="Source" v={s.state.source === "snapshot" ? "EA Journal Sync (équité en direct)" : "journal (trades clôturés)"} />
           </div>
+          {s.objectives && <Objectives o={s.objectives} cur={cur} />}
           {s.notes.length > 0 && <Bullets items={s.notes} />}
           {note}
         </div>
@@ -121,13 +125,14 @@ function Sizer({ account }: { account: string }) {
         {inp("target", "Objectif (facultatif)")}
         {inp("requested_lots", "Lots envisagés (facultatif)")}
       </div>
+      <p className="mt-2 text-xs text-faint">Futures : MNQ, NQ, MES, ES, MGC, GC, MCL… (sur un compte futures, « NQ » est le contrat, pas le CFD). Forex et CFD : XAUUSD, NAS100, EURUSD…</p>
       <button className="btn btn-primary btn-sm mt-4" disabled={busy || !f.entry || !f.stop} onClick={go}>Calculer</button>
       {note}
       {res && (
         <div className="mt-5 grid gap-3">
           <div className="flex items-center gap-2"><LabelChip map={GATE_LABEL} k={res.decision} /></div>
           <div>
-            <Kv k="Taille maximale" v={`${n2(res.max_lots)} lot(s)`} />
+            <Kv k="Taille maximale" v={`${n2(res.max_lots, res.futures ? 0 : 2)} ${res.futures ? "contrat(s)" : "lot(s)"}`} />
             <Kv k="Risque" v={`${money(res.risk_amount)} (${n2(res.risk_pct)} %)`} />
           </div>
           {res.violations.length > 0 && <Notice kind="error"><Bullets items={res.violations} /></Notice>}
@@ -143,31 +148,83 @@ function Sizer({ account }: { account: string }) {
   );
 }
 
-const pct = (x: number | string | null) => (x == null ? "—" : x === "plan" ? "selon votre plan" : `${x} %`);
+const pct = (x: number | string | null | undefined) => (x == null ? "—" : x === "plan" ? "selon votre plan" : `${x} %`);
+const k$ = (n: number) => `${Math.round(n / 1000)}K`;
+const usd = (n?: number) => (n == null ? "—" : `${n.toLocaleString("fr-FR")} $`);
+const MAX_TYPE: Record<string, string> = { static: "fixe", trailing: "suiveuse", trailing_eod: "suiveuse (fin de journée)" };
+const CONS_BASE: Record<string, string> = { target: "de l'objectif", total_profit: "du profit total", positive_days: "des jours gagnants" };
+
+const lossType = (p: Profile) =>
+  `${MAX_TYPE[p.max_loss_type ?? "static"] ?? p.max_loss_type}${p.trailing_lock === "initial" ? ", bloquée au capital de départ" : p.trailing_lock === "initial_plus_100" ? ", bloquée à +100 $" : p.max_loss_type?.startsWith("trailing") ? ", sans blocage" : ""}`;
+
+/** Profit target, trading days, best-day rule, contract cap: what an evaluation asks besides loss limits. */
+function Objectives({ o, cur }: { o: NonNullable<GuardStatus["objectives"]>; cur: string }) {
+  if (!o.target && !o.trading_days && !o.consistency && !o.max_contracts && !o.warnings.length) return null;
+  return (
+    <div className="grid gap-3 rounded-xl border border-white/5 bg-white/[0.02] p-4">
+      <div className="text-xs font-semibold uppercase tracking-wider text-faint">Objectifs de l&apos;évaluation</div>
+      {o.target && (
+        <div>
+          <div className="flex justify-between text-sm"><span className="text-muted">Objectif de profit</span><span className="num">{n2(o.target.progress_pct, 0)} % de {money(o.target.amount, cur)}</span></div>
+          <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-white/5"><div className="h-full rounded-full bg-brand-400" style={{ width: `${Math.min(100, o.target.progress_pct)}%` }} /></div>
+        </div>
+      )}
+      {o.trading_days && <Kv k="Jours de trading" v={`${o.trading_days.done} / ${o.trading_days.required} minimum`} />}
+      {o.consistency && <Kv k="Meilleur jour" v={`${money(o.consistency.best_day, cur)} = ${n2(o.consistency.share_pct, 0)} % (limite ${o.consistency.limit_pct} %)`} />}
+      {o.max_contracts != null && <Kv k="Plafond de contrats" v={`${o.max_contracts} minis (ou ${o.max_contracts * 10} micros)`} />}
+      {o.warnings.length > 0 && <Notice kind="warn"><Bullets items={o.warnings} /></Notice>}
+    </div>
+  );
+}
 
 function Profiles() {
   const { data } = useLoad<{ profiles: Profile[] }>("/api/app/risk/profiles");
   if (!data) return null;
+  const firms = data.profiles.filter((p) => p.key !== "generic");
   return (
-    <Section title="Profils de règles" icon={<ListChecks className="size-4" />}>
-      <div className="overflow-x-auto">
-        <table className="table min-w-[640px]">
-          <thead><tr><th>Profil</th><th>Perte journalière</th><th>Perte maximale</th><th>Objectif</th><th>Annonces</th><th>Vérifié</th></tr></thead>
-          <tbody>
-            {data.profiles.map((p) => (
-              <tr key={p.key}>
-                <td className="font-medium">{p.label}{p.version && <span className="ml-1 text-xs text-faint">{p.version}</span>}</td>
-                <td>{pct(p.daily_loss_pct)}</td>
-                <td>{p.max_loss_pct == null ? "—" : `${p.max_loss_pct} %${p.max_loss_type === "trailing" ? " (suiveuse)" : ""}`}</td>
-                <td>{p.profit_target_pct == null ? "—" : `${p.profit_target_pct} %`}</td>
-                <td>{p.news_minutes ? `± ${p.news_minutes} min` : "—"}</td>
-                <td>{p.key === "generic" ? <span className="text-faint">sans objet</span> : p.verified_at ? <span className="chip chip-green">{p.verified_at}</span> : <span className="chip chip-gold">à vérifier</span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <Section title="Profils de prop firm" icon={<ListChecks className="size-4" />}>
+      <div className="grid gap-4 md:grid-cols-2">
+        {firms.map((p) => (
+          <div key={p.key} className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold">{p.label}</span>
+              <span className="chip">{p.market === "futures" ? "Futures" : "CFD / forex"}</span>
+              {p.verified_at ? <span className="chip chip-green">vérifié le {p.verified_at}</span> : <span className="chip chip-gold">à vérifier</span>}
+            </div>
+            <div className="mt-3">
+              {p.sizes ? (
+                <div className="overflow-x-auto">
+                  <table className="table">
+                    <thead><tr><th>Compte</th><th className="text-right">Perte max.</th><th className="text-right">Perte jour</th><th className="text-right">Objectif</th><th className="text-right">Contrats</th></tr></thead>
+                    <tbody>
+                      {Object.entries(p.sizes).map(([size, r]) => (
+                        <tr key={size}><td>{k$(Number(size))}</td><td className="num text-right">{usd(r.max_loss)}</td><td className="num text-right">{usd(r.daily_loss)}</td><td className="num text-right">{usd(r.profit_target)}</td><td className="num text-right">{r.max_contracts ?? "—"}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <>
+                  <Kv k="Perte journalière" v={pct(p.daily_loss_pct)} />
+                  <Kv k="Perte maximale" v={p.max_loss_pct == null ? "—" : `${p.max_loss_pct} %, ${lossType(p)}`} />
+                  <Kv k="Objectif" v={Array.isArray(p.profit_target_pct) ? p.profit_target_pct.map((x) => `${x} %`).join(" puis ") : pct(p.profit_target_pct as number | null)} />
+                </>
+              )}
+              {p.sizes && <Kv k="Perte maximale" v={lossType(p)} />}
+              {p.consistency && <Kv k="Régularité" v={`meilleur jour ≤ ${p.consistency.pct} % ${CONS_BASE[p.consistency.base] ?? ""}`} />}
+              {p.min_trading_days != null && <Kv k="Jours minimum" v={String(p.min_trading_days)} />}
+            </div>
+            {p.notes && <p className="mt-2 text-xs text-gold-300">{p.notes}</p>}
+            <p className="mt-2 text-xs text-faint">
+              Relevé le {p.retrieved_at ?? "—"}{p.source && <> · <a href={p.source} target="_blank" rel="noopener noreferrer" className="text-brand-300 hover:underline">règlement officiel</a></>}
+            </p>
+          </div>
+        ))}
       </div>
-      <p className="mt-3 text-xs text-faint">Les règles des prop firms changent : chaque profil porte sa source et sa date de vérification. Un profil « à vérifier » n&apos;a pas encore été confronté au règlement officiel en vigueur.</p>
+      <p className="mt-4 text-xs text-faint">
+        Les règles des prop firms changent. Chaque profil porte sa source et sa date de relevé ; « à vérifier » signifie qu&apos;il n&apos;a pas encore été confronté au règlement en
+        vigueur. En cas de doute, le garde-fou retient la lecture la plus prudente. Pour un compte futures, indiquez comme solde de départ la taille exacte (ex. 50000).
+      </p>
     </Section>
   );
 }

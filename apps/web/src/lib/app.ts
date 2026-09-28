@@ -50,7 +50,7 @@ export type Candidate = {
 };
 export type RiskGate = {
   decision: "PASS" | "REDUCE" | "BLOCK"; max_lots: number; risk_amount: number; risk_pct: number; profile: string; profile_verified: boolean; rules_applied: string[]; violations: string[];
-  warnings: string[]; disagreement_logged: boolean; room?: Record<string, number>; state?: Record<string, number | string>; symbol?: string; account_id?: string;
+  warnings: string[]; disagreement_logged: boolean; room?: Record<string, number>; state?: Record<string, number | string>; symbol?: string; account_id?: string; futures?: boolean;
 };
 export type IctCompact = {
   symbol: string; price: number; htf_bias: string; premium_discount: string; dealing_range: [number, number];
@@ -78,6 +78,10 @@ export type Overview = {
 export type GuardStatus = {
   account_id: string; profile: string; profile_label: string; profile_verified: boolean; daily_used_pct?: number; max_used_pct?: number; alerts: { kind: string; level: number }[];
   limits: { daily_limit: number | null; daily_room: number | null; max_floor: number | null; max_room: number | null; current: number }; state: Record<string, number | string>; notes: string[];
+  objectives?: {
+    size_known: boolean; warnings: string[]; target?: { amount: number; progress_pct: number }; trading_days?: { done: number; required: number };
+    consistency?: { best_day: number; share_pct: number; limit_pct: number; base: string }; max_contracts?: number;
+  };
 };
 
 // ---------------- labels ----------------

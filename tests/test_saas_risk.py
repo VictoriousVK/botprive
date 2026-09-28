@@ -62,6 +62,71 @@ def test_day_start_per_firm():
     assert R.day_start(now, "cet_0") == 1_791_900_000_000 - 16 * 3_600_000  # 22:00 UTC the day before (CEST)
 
 
+def test_more_day_starts():
+    now = 1_791_900_000_000  # 2026-10-13 14:00 UTC
+    assert R.day_start(now, "ny_18") == now - 16 * 3_600_000  # 18:00 New York (EDT) = 22:00 UTC the day before
+    assert R.day_start(now, "utc3_0") == now - 17 * 3_600_000  # midnight UTC+3 = 21:00 UTC the day before
+
+
+def test_futures_symbols_and_contract_values():
+    assert [R.futures_root(x) for x in ("MNQ", "MNQZ5", "NQH26", "CON.F.US.MES.Z25", "MNQ 12-25", "6EZ5", "XAUUSD", "NAS100", "ES35")] == ["MNQ", "MNQ", "NQ", "MES", "MNQ", "6E", None, None, None]
+    nq, mnq = R.SymbolSpec.for_futures("NQ"), R.SymbolSpec.for_futures("MNQ")
+    assert nq.money_per_point_per_lot == 20 and mnq.money_per_point_per_lot == 2 and mnq.minis_per_contract == 0.1 and nq.volume_step == 1
+
+
+TOP = P["topstep_combine"]
+
+
+def test_topstep_eod_trailing_floor_locks_at_the_starting_balance():
+    s = st(balance=51_500, sod=51_500, initial=50_000, peak_eod_balance=51_500)
+    lim = R.limits(s, PLAN, TOP)
+    assert lim["max_amount"] == 2000 and lim["max_floor"] == 49_500 and lim["daily_limit"] == 1000
+    s = st(balance=52_000, sod=53_000, initial=50_000, peak_eod_balance=53_000)
+    lim = R.limits(s, PLAN, TOP)
+    assert lim["max_floor"] == 50_000 and lim["max_room"] == 2_000  # 53 000 - 2 000 = 51 000, locked at 50 000
+    assert lim["daily_level"] == 52_000 and lim["daily_room"] == 0  # already 1 000 $ down today
+    tradeify = P["tradeify_select"]
+    lim = R.limits(st(balance=52_000, sod=52_000, initial=50_000, peak_eod_balance=53_000), PLAN, tradeify)
+    assert lim["max_floor"] == 51_000 and lim["daily_limit"] is None  # never locks (prudent reading), no daily limit in Select
+
+
+def test_contract_cap_and_futures_sizing():
+    s = st(balance=50_000, sod=50_000, initial=50_000, peak_eod_balance=50_000)
+    plan = {**PLAN, "markets": [], "killzones": []}
+    nq = R.gate(R.Proposal("NQ", "long", 20_000, 19_990), s, plan, "topstep_combine", TOP, R.SymbolSpec.for_futures("NQ"))
+    assert nq.max_lots == 2 and nq.risk_amount == 400  # 1 % = 500 $ ; 10 points x 20 $ = 200 $ a contract
+    mnq = R.gate(R.Proposal("MNQ", "long", 20_000, 19_999), s, plan, "topstep_combine", TOP, R.SymbolSpec.for_futures("MNQ"))
+    assert mnq.max_lots == 50 and any("plafond de contrats" in x for x in mnq.rules_applied)  # 250 by risk, capped at 5 minis = 50 micros
+    assert any("contrat à terme : 2 $ par point" in x for x in mnq.rules_applied)
+
+
+def test_objectives_target_days_and_consistency():
+    s = st(balance=51_800, sod=51_800, initial=50_000, peak_eod_balance=51_800, best_day=1_600, total_profit=1_800, positive_days_profit=1_900, trading_days=3)
+    o = R.status(s, PLAN, TOP)["objectives"]
+    assert o["target"] == {"amount": 3000.0, "progress_pct": 60.0} and o["max_contracts"] == 5
+    assert o["consistency"]["share_pct"] == 53.3 and any("régularité" in w for w in o["warnings"])  # 1 600 > 50 % of 3 000
+    o = R.status(st(balance=61_000, initial=60_000), PLAN, TOP)["objectives"]
+    assert any("taille de compte absente" in w for w in o["warnings"])
+    lim = R.limits(st(balance=61_000, initial=60_000), PLAN, TOP)
+    assert lim["max_floor"] is None and lim["daily_limit"] is None  # unknown size: no invented amounts
+    o = R.status(st(balance=10_300, initial=10_000, best_day=200, total_profit=300, positive_days_profit=350, trading_days=4), PLAN, P["fundingpips_2step"])["objectives"]
+    assert o["target"]["amount"] == 800 and "consistency" not in o
+
+
+def test_futures_account_reads_nq_as_the_contract(tmp_path):
+    c, h, saas = _member(tmp_path, offer="pro_trader", balance=None)
+    acct = c.post("/api/app/accounts", json={"label": "Topstep 50K", "kind": "prop", "starting_balance": 50000, "prop_profile": "topstep_combine"}, headers=h).json()
+    r = c.post("/api/app/risk/size", json={"symbol": "NQ", "direction": "long", "entry": 20000, "stop": 19990, "account_id": acct["id"]}, headers=h).json()
+    assert r["symbol"] == "NQ" and r["max_lots"] == 2 and r["profile"] == "topstep_combine" and any("à vérifier" in w for w in r["warnings"])
+    cfd = c.post("/api/app/accounts", json={"label": "FTMO", "kind": "prop", "starting_balance": 100000, "prop_profile": "ftmo_2step"}, headers=h).json()
+    r = c.post("/api/app/risk/size", json={"symbol": "NQ", "direction": "long", "entry": 20000, "stop": 19990, "account_id": cfd["id"]}, headers=h).json()
+    assert r["symbol"] == "NAS100"  # on a CFD account NQ is the Nasdaq CFD
+    status = c.get(f"/api/app/risk/status?account={acct['id']}").json()
+    assert status["limits"]["max_floor"] == 48_000 and status["objectives"]["target"]["amount"] == 3000
+    profiles = {p["key"]: p for p in c.get("/api/app/risk/profiles").json()["profiles"]}
+    assert profiles["topstep_combine"]["market"] == "futures" and profiles["topstep_combine"]["sizes"]["50000"]["max_loss"] == 2000
+
+
 # ---------------------------------------------------------------- API and G1
 NOW_SB = 1_791_900_000_000 - 7 * 3_600_000 + 15 * 60_000  # 2026-10-13 03:15 New York: London Silver Bullet window
 

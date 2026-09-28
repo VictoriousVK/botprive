@@ -46,6 +46,11 @@ _SUFFIX = re.compile(r"(\.[A-Za-z0-9]+|_[A-Za-z0-9]+|-[A-Za-z0-9]+|[+#!$]|\.?(CA
 
 
 def normalize_symbol(raw: str) -> str:
+    from hedgefund.saas.engines.risk import futures_root
+
+    root = futures_root(raw or "")
+    if root and (raw or "").strip().upper() not in _ALIAS:
+        return root  # MNQZ5, NQH6, CON.F.US.MNQ.Z25 → MNQ / NQ (a futures contract, all expiries)
     s = (raw or "").strip().upper().replace(" ", "")
     if not s:
         raise ImportError_("symbole vide")

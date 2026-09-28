@@ -1,15 +1,26 @@
 # Profils de règles des prop firms (skill .claude/skills/prop-firm-profiles).
 #
-# ATTENTION : valeurs de départ À VÉRIFIER sur le règlement officiel de chaque firme avant de
-# s'y fier. Tant que `verified_at` est vide, le garde-fou affiche « profil à vérifier ».
-# Les règles changent : revue mensuelle, et nouvelle version à chaque changement.
+# ATTENTION : aucun profil n'est vérifié. Les valeurs viennent des pages d'aide des firmes, lues
+# à travers des résultats de recherche le jour indiqué par `retrieved_at` (les sites des firmes
+# n'étaient pas joignables depuis l'environnement de développement). Tant que `verified_at` est
+# vide, le garde-fou affiche « profil à vérifier ». Une personne relit le règlement officiel,
+# corrige si besoin, puis date `verified_at`. Les règles changent : revue mensuelle, et nouvelle
+# version à chaque changement. En cas de doute, la valeur retenue est la plus prudente pour le
+# trader (moins de marge), et le doute est écrit dans `notes`.
 #
-# daily_loss_ref : base du montant de perte journalière autorisée (initial_balance = % du capital
-#   initial ; start_of_day = % du solde du début de journée).
+# daily_loss_ref : base du montant de perte journalière (initial_balance = % du capital initial ;
+#   start_of_day = % du solde du début de journée).
 # daily_loss_base : niveau à partir duquel la perte du jour se mesure (balance_start_of_day ou
 #   max_balance_equity_start_of_day).
-# max_loss_type : static (plancher fixe sous le capital initial) ou trailing (sous le plus haut).
-# reset : heure de début de journée de la firme : ny_17 (17:00 New York), cet_0 (minuit CE(S)T), utc_0.
+# max_loss_type : static (plancher fixe sous le capital initial), trailing (sous le plus haut
+#   intrajournalier) ou trailing_eod (sous le plus haut solde de fin de journée).
+# trailing_lock : où un plancher suiveur s'arrête : initial, initial_plus_100, ou vide (jamais).
+# sizes : règles en dollars par taille de compte (firmes de futures) ; la taille est reconnue au
+#   solde de départ du compte (à 1 % près). max_contracts : en contrats mini (1 mini = 10 micros).
+# consistency : meilleur jour ≤ pct % de base (target = objectif de profit, total_profit = profit
+#   total, positive_days = somme des jours gagnants).
+# reset : début de journée : ny_17 (17:00 New York), ny_18 (18:00 New York = 17:00 Chicago,
+#   journée CME), cet_0 (minuit CE(S)T), utc3_0 (minuit UTC+3, heure plateforme MT5), utc_0.
 
 profiles:
   generic:
@@ -28,14 +39,17 @@ profiles:
 
   ftmo_2step:
     label: "FTMO — Challenge 2 étapes"
-    version: 1
+    firm: FTMO
+    market: cfd
+    version: 2
     source: "https://ftmo.com/en/trading-objectives/"
+    retrieved_at: "2026-09-28"
     verified_at: null
-    daily_loss_pct: 5
+    daily_loss_pct: 5            # 5 % du capital initial, sous le solde de 00:00 CE(S)T
     daily_loss_ref: initial_balance
     daily_loss_base: balance_start_of_day
     includes_floating: true
-    max_loss_pct: 10
+    max_loss_pct: 10             # statique : l'équité ne descend jamais sous 90 % du capital initial
     max_loss_type: static
     profit_target_pct: [10, 5]
     min_trading_days: 4
@@ -43,6 +57,120 @@ profiles:
     news_minutes: 0              # restrictions selon le type de compte : à vérifier
     ea_allowed: true
     copy_signals_forbidden: true
+
+  ftmo_1step:
+    label: "FTMO — Challenge 1 étape"
+    firm: FTMO
+    market: cfd
+    version: 1
+    source: "https://ftmo.com/en/1-step-challenge/"
+    retrieved_at: "2026-09-28"
+    verified_at: null
+    daily_loss_pct: 3            # 3 % du capital initial, recalculé à 00:00 CE(S)T
+    daily_loss_ref: initial_balance
+    daily_loss_base: balance_start_of_day
+    includes_floating: true
+    max_loss_pct: 10             # suiveur fin de journée : sous le plus haut solde de clôture
+    max_loss_type: trailing_eod
+    trailing_lock: null          # aucun blocage mentionné : hypothèse prudente
+    profit_target_pct: [10]
+    consistency: {pct: 50, base: positive_days}   # meilleur jour ≤ 50 % des jours gagnants
+    reset: cet_0
+    news_minutes: 0
+    ea_allowed: true
+    copy_signals_forbidden: true
+    notes: "Blocage éventuel du plancher suiveur et jours minimum à vérifier."
+
+  topstep_combine:
+    label: "Topstep — Trading Combine"
+    firm: Topstep
+    market: futures
+    version: 1
+    source: "https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit"
+    retrieved_at: "2026-09-28"
+    verified_at: null
+    daily_loss_ref: start_of_day
+    daily_loss_base: balance_start_of_day
+    includes_floating: true      # réalisé et latent, surveillé en temps réel
+    max_loss_type: trailing_eod  # Maximum Loss Limit calculé en fin de journée
+    trailing_lock: initial       # s'arrête au solde de départ
+    sizes:
+      50000:  {max_loss: 2000, daily_loss: 1000, profit_target: 3000, max_contracts: 5}
+      100000: {max_loss: 3000, daily_loss: 2000, profit_target: 6000, max_contracts: 10}
+      150000: {max_loss: 4500, daily_loss: 3000, profit_target: 9000, max_contracts: 15}
+    consistency: {pct: 50, base: target}   # meilleur jour ≤ 50 % de l'objectif
+    reset: ny_18                 # journée CME : 17:00 à 15:10 Chicago ; positions fermées à 15:10 CT
+    news_minutes: 0
+    ea_allowed: true
+    copy_signals_forbidden: true
+    notes: "Daily Loss Limit facultative chez Topstep : appliquée ici par prudence. Positions à fermer avant 15:10 CT."
+
+  tradeify_growth:
+    label: "Tradeify — Growth (évaluation)"
+    firm: Tradeify
+    market: futures
+    version: 1
+    source: "https://help.tradeify.co/en/articles/10495915-growth-evaluation-accounts"
+    retrieved_at: "2026-09-28"
+    verified_at: null
+    daily_loss_ref: start_of_day
+    daily_loss_base: balance_start_of_day
+    includes_floating: true
+    max_loss_type: trailing_eod  # mis à jour en fin de journée, appliqué en temps réel
+    trailing_lock: null          # en évaluation, le plancher ne se bloque pas
+    sizes:
+      50000:  {max_loss: 2000, daily_loss: 1250}
+      100000: {max_loss: 3000, daily_loss: 2500, profit_target: 6000}
+      150000: {max_loss: 5000, daily_loss: 3750, profit_target: 9000}
+    reset: ny_18
+    news_minutes: 0
+    ea_allowed: true
+    copy_signals_forbidden: true
+    notes: "Objectif du 50K (2 500 ou 3 000 $ selon les sources), taille 25K et plafonds de contrats à vérifier. Perte journalière « souple » : arrêt pour la séance."
+
+  tradeify_select:
+    label: "Tradeify — Select (évaluation)"
+    firm: Tradeify
+    market: futures
+    version: 1
+    source: "https://help.tradeify.co/en/articles/12853921-select-evaluation-accounts"
+    retrieved_at: "2026-09-28"
+    verified_at: null
+    daily_loss_ref: start_of_day
+    daily_loss_base: balance_start_of_day
+    includes_floating: true
+    max_loss_type: trailing_eod
+    trailing_lock: null          # blocage à +100 $ selon une source, jamais selon une autre : hypothèse prudente
+    sizes:
+      50000: {max_loss: 2000, profit_target: 3000, max_contracts: 4}
+    consistency: {pct: 40, base: total_profit}
+    min_trading_days: 3
+    reset: ny_18
+    news_minutes: 0
+    ea_allowed: true
+    copy_signals_forbidden: true
+    notes: "Pas de perte journalière en évaluation Select. Autres tailles à compléter."
+
+  fundingpips_2step:
+    label: "FundingPips — 2 étapes Standard"
+    firm: FundingPips
+    market: cfd
+    version: 1
+    source: "https://help.fundingpips.com/hc/en-us/articles/34501809112081-2-Step-Standard"
+    retrieved_at: "2026-09-28"
+    verified_at: null
+    daily_loss_pct: 5            # 5 % du plus haut entre solde et équité au début de journée
+    daily_loss_ref: start_of_day
+    daily_loss_base: max_balance_equity_start_of_day
+    includes_floating: true
+    max_loss_pct: 10
+    max_loss_type: static
+    profit_target_pct: [8, 5]
+    reset: utc3_0                # 00:00 heure plateforme (UTC+3)
+    news_minutes: 0              # pas de restriction en évaluation
+    ea_allowed: true
+    copy_signals_forbidden: true
+    notes: "Jours minimum : 3 ou 5 selon les sources, à vérifier."
 
   fundednext_2step:
     label: "FundedNext — Stellar 2 étapes"

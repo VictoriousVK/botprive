@@ -13,6 +13,7 @@ from sqlalchemy import asc
 from hedgefund.saas.api import ROUTERS, ApiContext, guard
 from hedgefund.saas.db import account_snapshots, broker_accounts, now_ms, trades
 from hedgefund.saas.engines import risk as R
+from hedgefund.saas.ingest import _ALIAS as CFD_ALIASES
 from hedgefund.saas.ingest import killzone_at, normalize_symbol
 from hedgefund.saas.service import Access, SaaS
 from hedgefund.saas.tools import Tool, ToolContext
@@ -34,10 +35,24 @@ class Risk:
         self.profiles = R.load_profiles()
 
     def public_profiles(self) -> list[dict[str, Any]]:
-        keep = ("label", "version", "source", "verified_at", "daily_loss_pct", "daily_loss_ref", "daily_loss_base", "max_loss_pct", "max_loss_type", "profit_target_pct", "min_trading_days", "reset", "news_minutes")
+        keep = ("label", "firm", "market", "version", "source", "retrieved_at", "verified_at", "daily_loss_pct", "daily_loss_ref", "daily_loss_base", "max_loss_pct", "max_loss_type",
+                "trailing_lock", "profit_target_pct", "min_trading_days", "reset", "news_minutes", "consistency", "sizes", "notes")
         return [{"key": k, **{x: p.get(x) for x in keep}} for k, p in self.profiles.items()]
 
+    @staticmethod
+    def resolve_symbol(raw: str, profile: dict[str, Any]) -> str:
+        """A futures contract when the symbol can only be one (MNQ, NQZ5…) or when the account is
+        a futures account; otherwise the CFD name (NQ is also the Nasdaq CFD at many brokers)."""
+        root = R.futures_root(raw)
+        ambiguous = raw.strip().upper() in CFD_ALIASES
+        if root and (not ambiguous or profile.get("market") == "futures"):
+            return root
+        return normalize_symbol(raw)
+
     def spec(self, symbol: str) -> R.SymbolSpec:
+        root = R.futures_root(symbol)
+        if root:
+            return R.SymbolSpec.for_futures(root)
         m = self.saas.market
         if m is not None:
             specs = m.specs()
@@ -84,8 +99,25 @@ class Risk:
                 peak = max(peak, cum)
         open_risk = sum(t["risk_amount"] or 0 for t in open_ if t["r_source"] == "sl")
         unknown = sum(1 for t in open_ if not (t["risk_amount"] and t["r_source"] == "sl"))
+        # Day by day (the firm's trading day): end-of-day balances for EOD trailing drawdowns, and
+        # each day's result for the profit target and the best-day consistency rules.
+        day_net: dict[int, float] = {}
+        for t in sorted(closed, key=lambda x: x["close_utc"]):
+            d = R.day_start(t["close_utc"], reset)
+            day_net[d] = day_net.get(d, 0.0) + float(t["net"] or 0)
+        cum, peak_eod = initial, initial
+        for d in sorted(day_net):
+            cum += day_net[d]
+            if d < start:  # a finished day
+                peak_eod = max(peak_eod, cum)
+        if snaps:
+            before = [x for x in snaps if x["time_utc"] <= start]
+            if before:
+                peak_eod = max(peak_eod, float(before[-1]["balance"]))
         st = R.AccountState(balance=balance, equity=equity, initial_balance=initial, start_of_day_balance=balance - realized_today, start_of_day_equity=sod_eq,
-                            peak_equity=max(peak, equity), open_risk=open_risk, open_risk_unknown=unknown, trades_today=sum(1 for t in rows if t["open_utc"] >= start), source=source)
+                            peak_equity=max(peak, equity), open_risk=open_risk, open_risk_unknown=unknown, trades_today=sum(1 for t in rows if t["open_utc"] >= start), source=source,
+                            peak_eod_balance=peak_eod, best_day=max([0.0, *day_net.values()]), total_profit=balance - initial,
+                            positive_days_profit=sum(v for v in day_net.values() if v > 0), trading_days=len(day_net))
         return st, a
 
     def profile_for(self, acc: Access, a: dict[str, Any] | None) -> tuple[str, dict[str, Any], list[str]]:
@@ -101,22 +133,24 @@ class Risk:
 
     def gate(self, acc: Access, body: ProposalIn, tenant_plan: dict[str, Any] | None = None) -> dict[str, Any]:
         journal = self.saas.modules["journal"]
-        symbol = normalize_symbol(body.symbol)
         with self.saas.db.tenant(acc.tenant_id) as s:
             plan = tenant_plan or journal.plan(s, acc.member_id)
             a = self.account(s, acc.member_id, body.account_id)
         key, profile, notes = self.profile_for(acc, a)
+        symbol = self.resolve_symbol(body.symbol, profile)
         state, a = self.state(acc.tenant_id, acc.member_id, body.account_id or (a or {}).get("id"), profile.get("reset", "ny_17"))
         now = now_ms()
         events = self.saas.modules["stats"].events(now - 3_600_000, now + 3_600_000) if "stats" in self.saas.modules else []
         p = R.Proposal(symbol, body.direction, body.entry, body.stop, body.target, body.requested_lots, killzone_at(now))
         res = R.gate(p, state, plan, key, profile, self.spec(symbol), events, now)
         res.warnings.extend(notes)
-        if self.saas.market is None or symbol not in (self.saas.market.specs() if self.saas.market else {}):
+        if R.futures_root(symbol):
+            pass  # contract value from the CME specification
+        elif self.saas.market is None or symbol not in (self.saas.market.specs() if self.saas.market else {}):
             res.warnings.append("spécification du symbole inconnue : valeur du point supposée égale à la taille du contrat")
         else:
             res.warnings.append("valeur du point lue chez le broker de la plateforme : vérifiez-la chez le vôtre")
-        return {**res.as_dict(), "account_id": a["id"], "state": state.__dict__, "symbol": symbol}
+        return {**res.as_dict(), "account_id": a["id"], "state": state.__dict__, "symbol": symbol, "futures": bool(R.futures_root(symbol))}
 
     def status(self, acc: Access, account_id: str | None) -> dict[str, Any]:
         journal = self.saas.modules["journal"]
