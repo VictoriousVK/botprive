@@ -4,6 +4,8 @@
   reset-password --username NAME  set a new console password and revoke that user's sessions
   member-password --email EMAIL   set a new password for a site member and revoke their sessions
   serve [--host 127.0.0.1] [--port 8000]
+  demo  [--host 127.0.0.1] [--port 8000] [--reset]
+                                  the platform on fictitious data, in var/demo, to present it
 """
 
 from __future__ import annotations
@@ -44,7 +46,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("serve")
     p.add_argument("--host", default=os.environ.get("HF_HOST", "127.0.0.1"))
     p.add_argument("--port", type=int, default=int(os.environ.get("HF_PORT", "8000")))
+    p = sub.add_parser("demo")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--reset", action="store_true", help="efface les données de démonstration et en recrée")
     args = ap.parse_args(argv)
+
+    if args.cmd == "demo":
+        return _demo(args)
 
     from hedgefund.web.security import AuthService
 
@@ -95,6 +104,37 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ATTENTION : écoute sur {args.host}. Exposez la plateforme uniquement derrière HTTPS (voir docs/PLATFORM.md).")
     print(f"Plateforme : http://{args.host}:{args.port}  (flux : {engine.feed.name}, mode : {engine.mode})")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", server_header=False, proxy_headers=False)
+    return 0
+
+
+def _demo(args) -> int:
+    import time
+
+    import uvicorn
+
+    from hedgefund.config import load_config
+    from hedgefund.web import demo
+
+    data = demo.demo_dir(load_config(args.config).var_dir, args.data_dir)
+    if args.reset:
+        demo.reset(data)
+    demo.prepare_environment(data)
+
+    from hedgefund.web.server import build_platform
+
+    app, engine, auth = build_platform(args.config, str(data))
+    shown = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+    base = f"http://{shown}:{args.port}"
+    creds = demo.credentials(data)
+    if creds is None:
+        print("Création des données de démonstration…")
+        creds = demo.seed(app, auth, data, int(time.time() * 1000), base)
+    print()
+    print(demo.credentials_text(creds, base))
+    print(f"(copie dans {data / demo.CREDENTIALS})")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"ATTENTION : écoute sur {args.host}, en http. Démonstration seulement : n'y saisissez aucun vrai mot de passe.")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning", server_header=False, proxy_headers=False)
     return 0
 
 

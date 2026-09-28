@@ -11,7 +11,7 @@ dependencies = ["pyyaml>=6", "requests>=2.31"]
 
 [project.optional-dependencies]
 research = ["anthropic>=1.8"]
-web = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "sqlalchemy>=2.0", "langgraph>=1.0", "langgraph-checkpoint-sqlite>=2.0"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "sqlalchemy>=2.0", "langgraph>=1.0", "langgraph-checkpoint-sqlite>=2.0", "httpx>=0.27"]  # httpx: demo data (python -m hedgefund.web demo)
 saas = ["psycopg[binary]>=3.2", "langgraph-checkpoint-postgres>=2.0", "mcp>=2.0", "cryptography>=42"]
 mt5 = ["MetaTrader5>=5.0.45; platform_system == 'Windows'"]
 dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]

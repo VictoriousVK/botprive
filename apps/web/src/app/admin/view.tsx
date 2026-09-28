@@ -211,7 +211,7 @@ function PaymentsTab({ onChange }: { onChange: () => void }) {
           </table>
         )}
       </div>
-      <p className="mt-3 text-xs text-faint">Avant de valider un transfert manuel, retrouvez la transaction (montant et ID) dans votre application Wave Business.</p>
+      <p className="mt-3 text-xs text-faint">Avant de valider un transfert manuel, retrouvez la transaction dans votre application Wave : même montant, même identifiant.</p>
     </div>
   );
 }

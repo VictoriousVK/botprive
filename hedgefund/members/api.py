@@ -188,7 +188,7 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> Callable[..., tuple[Session
     @app.get("/api/site")
     def site_info() -> dict:
         wave = "api" if members.wave is not None else ("manual" if site.public()["billing"]["wave_manual"] else "off")
-        return {**site.public(), "copytrading": copy.mode, "wave": wave, "registration_open": settings.registration_open, "version": __version__}
+        return {**site.public(), "copytrading": copy.mode, "wave": wave, "registration_open": settings.registration_open, "demo": settings.demo, "version": __version__}
 
     @app.get("/api/site/robots")
     def robots() -> list[dict]:

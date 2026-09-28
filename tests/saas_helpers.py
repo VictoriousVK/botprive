@@ -33,7 +33,7 @@ def make_saas(feed: Any = None, clock: SimClock | None = None, turns: list[Any] 
     return saas
 
 
-def make_app(tmp_path: Path, turns: list[Any] | None = None, now: int = NOW, grant: str | None = None):
+def make_app(tmp_path: Path, turns: list[Any] | None = None, now: int = NOW, grant: str | None = None, member_settings: MemberSettings | None = None):
     clock = SimClock(now)
     feed = SimulatedFeed(clock)
     eng = BotEngine(load_config(), PlatformStore(Path(tmp_path) / "p.db"), feed, clock=clock, data_dir=Path(tmp_path))
@@ -42,7 +42,7 @@ def make_app(tmp_path: Path, turns: list[Any] | None = None, now: int = NOW, gra
         auth.create_user("vic", PW)
     saas = make_saas(feed, clock, turns)
     app = create_app(eng, auth, WebSettings(cookie_secure=False, hsts=False), start_engine=False, site=load_site(),
-                     member_settings=MemberSettings(), site_dir=Path(tmp_path) / "nosite", saas=saas)
+                     member_settings=member_settings or MemberSettings(), site_dir=Path(tmp_path) / "nosite", saas=saas)
     return TestClient(app), eng, saas, clock
 
 

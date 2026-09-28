@@ -2,7 +2,7 @@ import "../fonts/fonts.css";
 import "./globals.css";
 
 import type { Metadata, Viewport } from "next";
-import { Footer, Nav, Ticker } from "@/components/chrome";
+import { DemoBanner, Footer, Nav, Ticker } from "@/components/chrome";
 import { SessionProvider } from "@/lib/session";
 
 export const metadata: Metadata = {
@@ -22,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <a href="#contenu" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-lg focus:bg-brand-500 focus:px-3 focus:py-2">
             Aller au contenu
           </a>
+          <DemoBanner />
           <Ticker />
           <Nav />
           <main id="contenu">{children}</main>

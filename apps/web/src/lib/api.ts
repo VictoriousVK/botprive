@@ -61,6 +61,7 @@ export type SiteInfo = {
   copytrading: "off" | "demo" | "live";
   wave: "api" | "manual" | "off";
   registration_open: boolean;
+  demo?: boolean;
   version: string;
 };
 export type Robot = { key: string; name: string; status: string; status_label: string; headline: string; markets: string; access: string | null; description: string; timeframes: string[]; origin: string; params: number };

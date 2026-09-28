@@ -12,6 +12,9 @@ Le projet contient trois choses qui tournent ensemble dans **un seul programme P
 Le site est déjà compilé dans le projet : **pas besoin de Node.js** pour le faire tourner.
 Node.js ne sert que si vous voulez modifier le design du site (étape C).
 
+Pour une **présentation à un client** (données fictives, une seule commande), voir
+[DEMO.md](DEMO.md).
+
 Choisissez votre cas :
 
 - **A. Sur Windows avec MetaTrader 5** : la vraie plateforme (prix et ordres MT5).

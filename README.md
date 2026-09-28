@@ -28,6 +28,8 @@ This repository holds three things:
   that blocks delivery.
   **Guide in French: [docs/SAAS.md](docs/SAAS.md).**
 - **Step-by-step local setup (French): [docs/DEMARRAGE.md](docs/DEMARRAGE.md).**
+- **Demo on fictitious data, to present the MVP (French): [docs/DEMO.md](docs/DEMO.md)**
+  (`python -m hedgefund.web demo`, or `.\deploy\windows\demo.ps1` on Windows).
 - **`hedgefund/`** is a one-person, 24/7 AI hedge fund. Claude Opus 5.5 does the research,
   an orchestrated set of workflows runs the operation, Jev makes fast typed decisions, and
   deterministic code owns risk and execution. The full design, build plan and risk analysis

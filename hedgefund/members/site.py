@@ -229,6 +229,7 @@ class MemberSettings:
     media_hosts: tuple[str, ...] = field(default_factory=tuple)
     telegram_url: str = ""  # private invite links: environment or admin settings, never the repository
     discord_url: str = ""
+    demo: bool = False  # demonstration data (python -m hedgefund.web demo): a banner says so on every page
 
     @classmethod
     def from_env(cls) -> "MemberSettings":
@@ -247,6 +248,7 @@ class MemberSettings:
             media_hosts=tuple(h.strip().lower() for h in os.environ.get("LF_MEDIA_HOSTS", "").split(",") if h.strip()),
             telegram_url=os.environ.get("LF_TELEGRAM_URL", "").strip(),
             discord_url=os.environ.get("LF_DISCORD_URL", "").strip(),
+            demo=_flag("HF_DEMO"),
         )
 
     @property

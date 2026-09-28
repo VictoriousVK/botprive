@@ -17,6 +17,17 @@ const LINKS = [
   { href: "/tarifs/", label: "Offres" },
 ];
 
+/** Shown on every page when the platform runs on demonstration data. */
+export function DemoBanner() {
+  const { site } = useSession();
+  if (!site?.demo) return null;
+  return (
+    <div className="border-b border-gold-400/30 bg-gold-400/10 px-4 py-1.5 text-center text-xs font-semibold text-gold-300" role="note">
+      Démonstration : comptes, trades et paiements fictifs, prix simulés. Aucun ordre, aucun paiement réel.
+    </div>
+  );
+}
+
 export function Ticker() {
   const [q, setQ] = useState<Quotes | null>(null);
   useEffect(() => {
