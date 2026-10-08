@@ -1,0 +1,36 @@
+{
+  "name": "alpha-edge-motion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Alpha Edge presentation films (Remotion): captures of the real product, scenes, music, subtitles.",
+  "type": "module",
+  "scripts": {
+    "capture": "node scripts/capture.mjs",
+    "audio": "tsx scripts/audio.ts",
+    "subtitles": "tsx scripts/subtitles.ts",
+    "studio": "remotion studio src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "render:film": "node scripts/render.mjs film",
+    "render:promo": "node scripts/render.mjs promo",
+    "render:vertical": "node scripts/render.mjs vertical",
+    "render:all": "node scripts/render.mjs film promo vertical",
+    "qc": "node scripts/qc.mjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.534",
+    "@remotion/fonts": "^4.0.534",
+    "@remotion/noise": "4.0.534",
+    "@remotion/transitions": "4.0.534",
+    "lucide-react": "^1.48.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.534"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/react": "19.2.2",
+    "playwright": "1.64.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}
