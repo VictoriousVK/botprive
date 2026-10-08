@@ -9,6 +9,7 @@ import { Backdrop } from "../components/Backdrop";
 import type { Chapter, Note, Step } from "../content/types";
 import { shotSrc, useManifest, type Manifest } from "../lib/captures";
 import { boxOf, buildModel, camAt, cursorAt, ease, focusAt, notes, pageTransform, SHOT_FADE, shotIndexAt, toScreen, type Model, type Rect } from "../lib/tour";
+import { fr } from "../lib/text";
 import { C, EASE, F } from "../theme";
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -130,7 +131,9 @@ const Spotlight: React.FC<{ r: Rect; w: number; h: number; pIn: number; pOut: nu
   return (
     <svg width={w} height={h} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}>
       {dim && <path d={hole} fill={`rgba(2,3,5,${0.5 * a})`} fillRule="evenodd" />}
-      <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={rad} fill="none" stroke={C.goldLight} strokeOpacity={0.35 * pOut} strokeWidth={8} style={{ filter: "blur(6px)" }} strokeDasharray={per} strokeDashoffset={per * (1 - pIn)} />
+      {/* the glow: two wide translucent strokes (no blur filter, costly in software rendering) */}
+      <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={rad} fill="none" stroke={C.goldLight} strokeOpacity={0.12 * pOut} strokeWidth={12} strokeDasharray={per} strokeDashoffset={per * (1 - pIn)} />
+      <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={rad} fill="none" stroke={C.goldLight} strokeOpacity={0.22 * pOut} strokeWidth={6} strokeDasharray={per} strokeDashoffset={per * (1 - pIn)} />
       <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={rad} fill="none" stroke={C.gold} strokeOpacity={pOut} strokeWidth={2.2} strokeDasharray={per} strokeDashoffset={per * (1 - pIn)} />
     </svg>
   );
@@ -153,9 +156,9 @@ const NoteCard: React.FC<{ note: Note; at: number; until: number; t: number; cen
     <div style={{ position: "absolute", inset: 0, opacity: out, textAlign: center ? "center" : "left" }}>
       <div style={{ fontFamily: F.mono, fontSize: 15 * size, letterSpacing: "0.3em", color: C.gold, opacity: k, transform: `translateY(${(1 - k) * 10}px)` }}>{note.kicker}</div>
       <div style={{ overflow: "hidden", marginTop: 12 * size }}>
-        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 40 * size, lineHeight: 1.12, color: C.white, transform: `translateY(${(1 - ti) * 105}%)` }}>{note.title}</div>
+        <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: 40 * size, lineHeight: 1.12, color: C.white, transform: `translateY(${(1 - ti) * 105}%)` }}>{fr(note.title)}</div>
       </div>
-      {note.text && <div style={{ marginTop: 16 * size, fontFamily: F.body, fontSize: 24 * size, lineHeight: 1.45, color: C.grey, opacity: tx, transform: `translateY(${(1 - tx) * 8}px)` }}>{note.text}</div>}
+      {note.text && <div style={{ marginTop: 16 * size, fontFamily: F.body, fontSize: 24 * size, lineHeight: 1.45, color: C.grey, opacity: tx, transform: `translateY(${(1 - tx) * 8}px)` }}>{fr(note.text)}</div>}
     </div>
   );
 };

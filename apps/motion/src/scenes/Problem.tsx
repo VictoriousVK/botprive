@@ -133,7 +133,7 @@ export const ProblemScene: React.FC<{ short?: boolean }> = ({ short }) => {
               borderRadius: 18,
               background: "linear-gradient(160deg, rgba(24,26,33,0.92), rgba(10,11,14,0.92))",
               border: `1px solid ${C.hair}`,
-              boxShadow: "0 30px 80px -30px rgba(0,0,0,0.9)",
+              boxShadow: "0 18px 40px -18px rgba(0,0,0,0.9)",
               padding: 26,
             }}
           >
@@ -164,7 +164,7 @@ export const ProblemScene: React.FC<{ short?: boolean }> = ({ short }) => {
             borderRadius: 14,
             overflow: "hidden",
             border: `1px solid ${C.hair}`,
-            boxShadow: "0 40px 120px -30px rgba(0,0,0,0.95), 0 0 120px -30px rgba(212,179,116,0.35)",
+            boxShadow: "0 24px 60px -20px rgba(0,0,0,0.95)",
             background: C.panel,
           }}
         >

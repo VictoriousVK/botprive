@@ -28,6 +28,8 @@ This repository holds three things:
   that blocks delivery.
   **Guide in French: [docs/SAAS.md](docs/SAAS.md).**
 - **Step-by-step local setup (French): [docs/DEMARRAGE.md](docs/DEMARRAGE.md).**
+- **Presentation films (Remotion, French): [apps/motion/README.md](apps/motion/README.md)**: the
+  real product filmed in demonstration mode, edited into a full film, a short cut and a vertical cut.
 - **Demo on fictitious data, to present the MVP (French): [docs/DEMO.md](docs/DEMO.md)**
   (`python -m hedgefund.web demo`, or `.\deploy\windows\demo.ps1` on Windows).
 - **`hedgefund/`** is a one-person, 24/7 AI hedge fund. Claude Opus 5.5 does the research,

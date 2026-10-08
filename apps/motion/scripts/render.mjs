@@ -58,7 +58,7 @@ for (const key of wanted) {
   const output = join(MOTION, "out", `${f.file}${flag("--clean") ? "-sans-sous-titres" : ""}-${size}.mp4`);
   const range = opt("--frames")?.split("-").map(Number);
   const started = Date.now();
-  const common = { composition, serveUrl, browserExecutable, chromiumOptions: { gl: "swangle" }, concurrency: Number(opt("--concurrency") ?? Math.max(1, cpus().length)) };
+  const common = { composition, serveUrl, browserExecutable, chromiumOptions: { gl: "swangle" }, concurrency: Number(opt("--concurrency") ?? Math.max(1, cpus().length - 1)) };
   const segSize = Number(opt("--segments") ?? 0);
   if (segSize > 0) {
     // Resumable rendering in parts (video only), then join and add the whole soundtrack.
@@ -121,7 +121,7 @@ for (const key of wanted) {
     jpegQuality: 92,
     scale: big ? 2 : 1,
     outputLocation: output,
-    concurrency: Number(opt("--concurrency") ?? Math.max(1, cpus().length)),
+    concurrency: Number(opt("--concurrency") ?? Math.max(1, cpus().length - 1)),
     frameRange: range && range.length === 2 ? [range[0], range[1]] : null,
     browserExecutable,
     chromiumOptions: { gl: "swangle" },

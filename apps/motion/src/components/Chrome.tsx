@@ -16,7 +16,8 @@ export const WindowFrame: React.FC<{ area: Rect; url: string; children: React.Re
       overflow: "hidden",
       background: C.panel,
       border: `1px solid ${C.hair}`,
-      boxShadow: "0 40px 120px -30px rgba(0,0,0,0.9), 0 0 0 1px rgba(0,0,0,0.6), 0 0 80px -20px rgba(212,179,116,0.18)",
+      // Short shadows: large blur radii are costly in software rendering.
+      boxShadow: "0 22px 50px -18px rgba(0,0,0,0.9), 0 0 0 1px rgba(0,0,0,0.6)",
       ...style,
     }}
   >
@@ -49,7 +50,7 @@ export const PhoneFrame: React.FC<{ area: Rect; children: React.ReactNode; style
       borderRadius: 64,
       background: "linear-gradient(160deg, #1A1C22, #08090C)",
       border: `1.5px solid ${C.hair}`,
-      boxShadow: "0 50px 140px -30px rgba(0,0,0,0.95), 0 0 90px -20px rgba(212,179,116,0.22)",
+      boxShadow: "0 26px 60px -20px rgba(0,0,0,0.95)",
       ...style,
     }}
   >

@@ -50,7 +50,7 @@ export const OutroScene: React.FC<{ short?: boolean }> = ({ short }) => {
                     borderRadius: 14,
                     overflow: "hidden",
                     border: `1px solid ${C.hair}`,
-                    boxShadow: "0 40px 100px -30px rgba(0,0,0,0.95), 0 0 80px -30px rgba(212,179,116,0.3)",
+                    boxShadow: "0 22px 50px -20px rgba(0,0,0,0.95)",
                     background: C.panel,
                   }}
                 >

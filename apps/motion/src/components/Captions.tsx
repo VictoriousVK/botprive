@@ -1,6 +1,7 @@
 // The narration on screen, synchronised with the voice-over (and the SRT files).
 import { interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import type { AbsCaption } from "../lib/timeline";
+import { fr } from "../lib/text";
 import { F } from "../theme";
 
 export const Captions: React.FC<{ items: AbsCaption[] }> = ({ items }) => {
@@ -33,7 +34,7 @@ export const Captions: React.FC<{ items: AbsCaption[] }> = ({ items }) => {
           transform: `translateY(${(1 - o) * 6}px)`,
         }}
       >
-        {c.text}
+        {fr(c.text)}
       </div>
     </div>
   );

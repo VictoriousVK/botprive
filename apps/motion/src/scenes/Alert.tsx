@@ -40,7 +40,7 @@ export const AlertScene: React.FC = () => {
           Format réel du message envoyé par la plateforme. Valeurs de démonstration.
         </div>
       </div>
-      <div style={{ position: "absolute", left: 1000, top: 190, width: 700, height: 700, opacity: panel, transform: `perspective(1600px) rotateY(${(1 - panel) * -18}deg) translateX(${(1 - panel) * 60}px)`, borderRadius: 28, overflow: "hidden", background: "linear-gradient(180deg, #12141A, #0A0B0F)", border: `1px solid ${C.hair}`, boxShadow: "0 50px 140px -30px rgba(0,0,0,0.95), 0 0 100px -30px rgba(212,179,116,0.3)" }}>
+      <div style={{ position: "absolute", left: 1000, top: 190, width: 700, height: 700, opacity: panel, transform: `perspective(1600px) rotateY(${(1 - panel) * -18}deg) translateX(${(1 - panel) * 60}px)`, borderRadius: 28, overflow: "hidden", background: "linear-gradient(180deg, #12141A, #0A0B0F)", border: `1px solid ${C.hair}`, boxShadow: "0 26px 60px -20px rgba(0,0,0,0.95)" }}>
         <div style={{ height: 84, display: "flex", alignItems: "center", gap: 16, padding: "0 26px", borderBottom: `1px solid ${C.hairSoft}` }}>
           <span style={{ width: 48, height: 48, borderRadius: 24, display: "grid", placeItems: "center", background: "rgba(212,179,116,0.12)", border: `1px solid ${C.hair}` }}>
             <Send size={22} color={C.gold} />
