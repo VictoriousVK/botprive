@@ -12,8 +12,8 @@ const args = process.argv.slice(2);
 const every = Number(args.includes("--every") ? args[args.indexOf("--every") + 1] : 8);
 const files = args.filter((a) => a.endsWith(".mp4"));
 const targets = files.length ? files.map((f) => resolve(f)) : readdirSync(join(MOTION, "out")).filter((f) => f.endsWith(".mp4")).map((f) => join(MOTION, "out", f));
-const remotion = join(MOTION, "node_modules/.bin/remotion");
-const run = (tool, a) => execFileSync(remotion, [tool, ...a], { cwd: MOTION, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
+const REMOTION = join(MOTION, "node_modules/@remotion/cli/remotion-cli.js");
+const run = (tool, a) => execFileSync(process.execPath, [REMOTION, tool, ...a], { cwd: MOTION, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
 let failures = 0;
 for (const file of targets) {

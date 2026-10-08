@@ -37,12 +37,15 @@ if (!existsSync(join(MOTION, "public/captures/manifest.json"))) {
   console.error("Captures du produit absentes : lancez d'abord « npm run capture » (le serveur de démonstration doit pouvoir démarrer).");
   process.exit(1);
 }
-const tsx = join(MOTION, "node_modules/.bin/tsx");
+// Node runs the tools directly (no shell): works on Windows, macOS and Linux, spaces in paths included.
+const TSX = join(MOTION, "node_modules/tsx/dist/cli.mjs");
+const REMOTION = join(MOTION, "node_modules/@remotion/cli/remotion-cli.js");
+const tool = (cli, a) => execFileSync(process.execPath, [cli, ...a], { stdio: "inherit", cwd: MOTION });
 if (!existsSync(join(MOTION, "public/audio/music-film.wav"))) {
   console.log("Musique absente : génération (npm run audio)…");
-  execFileSync(tsx, [join(MOTION, "scripts/audio.ts")], { stdio: "inherit", cwd: MOTION, shell: process.platform === "win32" });
+  tool(TSX, [join(MOTION, "scripts/audio.ts")]);
 }
-execFileSync(tsx, [join(MOTION, "scripts/subtitles.ts")], { stdio: "inherit", cwd: MOTION, shell: process.platform === "win32" });
+tool(TSX, [join(MOTION, "scripts/subtitles.ts")]);
 
 const browserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE || null;
 console.log("Préparation du projet (bundle)…");
@@ -101,10 +104,9 @@ for (const key of wanted) {
     await renderMedia({ ...common, codec: "wav", outputLocation: audio });
     const list = join(partsDir, "parts.txt");
     writeFileSync(list, parts.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n"));
-    const remotion = join(MOTION, "node_modules/.bin/remotion");
     const joined = join(partsDir, "video.mp4");
-    execFileSync(remotion, ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", joined], { stdio: "inherit", shell: process.platform === "win32" });
-    execFileSync(remotion, ["ffmpeg", "-y", "-v", "error", "-i", joined, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", output], { stdio: "inherit", shell: process.platform === "win32" });
+    tool(REMOTION, ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", joined]);
+    tool(REMOTION, ["ffmpeg", "-y", "-v", "error", "-i", joined, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", output]);
     console.log(`\n✓ ${output}\n  ${(statSync(output).size / 1e6).toFixed(1)} Mo\n`);
     continue;
   }
