@@ -1,0 +1,19 @@
+# Hard risk limits. Owned by the Risk Committee. Deterministic code enforces these;
+# no model (Opus, Jev) can read-modify-write this file or override a verdict.
+# Any change requires a human approval recorded in the ledger:
+#   python -m hedgefund approve --action risk_limits_change --operator <you> --reason "..."
+
+max_drawdown_pct: 0.15            # from high-water mark -> kill switch (latching, human reset)
+drawdown_reduce_only_pct: 0.10    # from high-water mark -> reduce-only mode (no new risk)
+max_daily_loss_pct: 0.03          # from UTC-day start NAV -> no new risk until next UTC day
+max_position_pct_nav: 0.25        # abs notional per instrument, aggregated across strategies
+max_gross_leverage: 1.5           # sum |notional| / NAV
+max_net_leverage: 1.0             # |sum notional| / NAV
+max_cluster_net_pct_nav: 0.60     # |net notional| of a correlated cluster / NAV
+max_participation: 0.02           # order notional / previous bar notional volume
+max_slippage_bps: 30              # estimated spread + impact per order
+max_orders_per_minute: 30         # runaway-loop guard (exits bypass it)
+max_risk_per_trade_pct_nav: 0.015 # cap on any strategy's risk budget per package
+reconciliation_tolerance_pct: 0.001  # internal vs venue position mismatch -> kill switch
+jev_min_confidence: 0.60          # cannot be set below the 0.60 floor in code
+min_order_fraction: 0.10          # if risk clips an order below 10% of request, reject it

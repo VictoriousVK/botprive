@@ -1,0 +1,12 @@
+.git
+var
+**/__pycache__
+**/*.pyc
+apps/web/node_modules
+apps/web/.next
+apps/web/out
+*.egg-info
+.env
+.env.*
+docs/CONCEPTION.md
+docs/PROMPT_MAITRE.md

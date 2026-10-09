@@ -1,0 +1,73 @@
+id: tsmom_majors
+name: Time-series momentum on BTC/ETH perps
+version: 1
+owner_desk: quant
+stage: data             # implemented + tested offline; next gate needs >=1y of real point-in-time data
+impl: hedgefund.strategy.library.trend:TimeSeriesMomentum
+edge_source: behavioral
+hypothesis: >
+  Crypto majors exhibit time-series momentum at multi-week horizons because information
+  diffuses slowly and flows (fund allocations, leverage cycles) are pro-cyclical. When 20-,
+  60- and 120-day returns agree in sign and the path is efficient, continuation is more
+  likely than reversal. The edge is modest per trade and comes from right-tail capture.
+universe: [BTCUSDT-PERP, ETHUSDT-PERP]
+packages:
+  - key: BTC-trend
+    legs: [{symbol: BTCUSDT-PERP, weight: 1.0}]
+  - key: ETH-trend
+    legs: [{symbol: ETHUSDT-PERP, weight: 1.0}]
+timeframe: 4h
+allowed_directions: [long, short]
+features: [mom_20d, mom_60d, mom_120d, er_10d, daily_vol, rv_ratio]
+entry_rules:
+  - "sign(20d), sign(60d), sign(120d) returns all agree"
+  - "10-day efficiency ratio >= min_efficiency"
+exit_rules:
+  - "majority of horizon signs flips against the position"
+  - "Jev risk_state flat / crisis"
+expected_holding: "2-12 weeks"
+params:
+  lookback_short_days: 20
+  lookback_mid_days: 60
+  lookback_long_days: 120
+  min_efficiency: 0.25
+  stop_vol_mult: 2.0
+  stop_horizon_days: 10
+  min_stop_pct: 0.05
+risk:
+  risk_per_trade_pct_nav: 0.01
+  max_package_notional_pct_nav: 0.20
+  rebalance_threshold: 0.35
+  exit_on_crisis: true
+costs:
+  fee_bps_roundtrip: 10
+  slippage_bps_roundtrip: 3
+  funding_note: "Long positions pay funding in bull regimes (often 10-30% annualized): a material drag."
+liquidity:
+  min_bar_notional_volume: 100000000
+jev:
+  profile: directional
+  allowed_regimes: [trending, high_vol]
+  min_setup_quality: 2
+  min_liquidity_quality: 2
+  max_toxic_flow: 2
+  min_expected_edge: 55
+  min_confidence: 0.62
+  calibration_horizon_bars: 60     # 10 days
+  instructions:
+    direction: "Answer with the direction of the prevailing multi-week trend, or flat if there is none."
+    setup_quality: "Judge agreement across horizons and path efficiency; choppy paths are weak."
+    should_trade: "Answer yes only if continuation over the next 2 weeks is more likely than reversal, after funding costs."
+invalidation:
+  - {metric: rolling_sharpe_90d, op: "<", threshold: -0.5, min_observations: 540, action: demote}
+  - {metric: strategy_drawdown, op: ">", threshold: 0.08, action: halt}
+  - {metric: avg_slippage_bps, op: ">", threshold: 5.0, min_observations: 20, action: demote}
+  - {metric: brier_direction, op: ">", threshold: 0.26, min_observations: 60, action: demote}
+data_sources: [binance_usdm_klines, binance_usdm_funding]
+failure_modes:
+  - "Whipsaw regimes: repeated entries at local extremes; loss is small per trade but frequent."
+  - "Gap/cascade through stop: 4h bars understate intrabar drawdown."
+  - "Funding drag erases the edge in crowded long trends."
+  - "BTC and ETH trend signals are highly correlated: effective diversification is ~1.2 bets, not 2."
+capacity_usd: 50000000
+research_memo: null

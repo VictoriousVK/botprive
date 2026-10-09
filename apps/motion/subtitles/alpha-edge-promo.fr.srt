@@ -1,0 +1,27 @@
+1
+00:00:03,900 --> 00:00:06,300
+Alpha Edge. Le trading, avec des données.
+
+2
+00:00:06,800 --> 00:00:12,300
+Vos outils, votre plan, votre risque : enfin au même endroit.
+
+3
+00:00:12,700 --> 00:00:18,300
+Un tableau de bord calculé sur vos trades.
+
+4
+00:00:18,700 --> 00:00:23,800
+Un Coach qui mesure vos écarts au plan.
+
+5
+00:00:24,200 --> 00:00:28,800
+Un garde-fou aux règles de votre prop firm.
+
+6
+00:00:29,200 --> 00:00:33,300
+Une analyse ICT aux règles écrites.
+
+7
+00:00:33,700 --> 00:00:37,700
+Des robots testés avant le réel, sous trois verrous.

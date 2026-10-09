@@ -1,0 +1,239 @@
+1
+00:00:08,700 --> 00:00:12,100
+Alpha Edge : vos données de trading, réunies au même endroit.
+
+2
+00:00:12,800 --> 00:00:16,800
+Chaque jour, un trader jongle avec cinq ou six outils.
+
+3
+00:00:17,000 --> 00:00:21,800
+La plateforme, un tableur, des notes, des captures, des groupes de discussion.
+
+4
+00:00:22,000 --> 00:00:26,000
+Le plan existe, mais personne ne vérifie qu'il est respecté.
+
+5
+00:00:26,200 --> 00:00:30,000
+Les performances se mesurent mal, et le risque se gère de tête.
+
+6
+00:00:30,200 --> 00:00:33,400
+Alpha Edge réunit tout dans une seule plateforme.
+
+7
+00:00:35,700 --> 00:00:38,900
+Voici le tableau de bord.
+
+8
+00:00:39,000 --> 00:00:43,200
+Les données sont fictives ; l'interface, elle, est réelle.
+
+9
+00:00:43,400 --> 00:00:48,500
+La performance des trente derniers jours, calculée sur vos propres trades.
+
+10
+00:00:48,800 --> 00:00:54,000
+Les comportements repérés : surtrading, revanche, lot doublé après une perte.
+
+11
+00:00:54,300 --> 00:00:58,000
+Le garde-fou suit les limites de votre prop firm.
+
+12
+00:00:58,300 --> 00:01:02,400
+Et vos résultats par killzone : ce qui rapporte, ce qui coûte.
+
+13
+00:01:04,600 --> 00:01:07,200
+Tout commence sur le site.
+
+14
+00:01:07,400 --> 00:01:11,300
+L'inscription se fait en deux temps : le nom et l'e-mail…
+
+15
+00:01:11,500 --> 00:01:14,900
+…puis un mot de passe, et sa jauge de solidité.
+
+16
+00:01:15,100 --> 00:01:20,300
+La mise en route prend deux minutes : votre niveau, vos marchés…
+
+17
+00:01:20,500 --> 00:01:23,900
+…votre prop firm : ici Topstep, compte de 50 000 dollars.
+
+18
+00:01:24,100 --> 00:01:29,300
+Ses règles s'affichent, marquées « à vérifier » jusqu'à leur relecture officielle.
+
+19
+00:01:29,500 --> 00:01:32,600
+Le plan de risque se calcule en direct.
+
+20
+00:01:32,800 --> 00:01:35,600
+Une limite trop large ? L'écran le signale.
+
+21
+00:01:35,800 --> 00:01:38,300
+Puis votre premier compte, déjà prérempli.
+
+22
+00:01:38,500 --> 00:01:42,100
+Prêt : il reste à importer votre historique MT5.
+
+23
+00:01:42,300 --> 00:01:48,500
+Dans les réglages : votre plan, votre profil, les alertes Telegram et la synchronisation MT5.
+
+24
+00:01:48,800 --> 00:01:52,400
+Et dans l'espace membre : abonnement, accès et paiements.
+
+25
+00:01:54,700 --> 00:01:58,700
+L'Analyste ICT lit le marché avec des règles écrites.
+
+26
+00:01:58,900 --> 00:02:02,900
+La liquidité : ces sommets égaux, que le prix vient chercher.
+
+27
+00:02:03,100 --> 00:02:05,700
+Puis il casse la structure…
+
+28
+00:02:05,900 --> 00:02:08,400
+…et laisse un fair value gap.
+
+29
+00:02:08,900 --> 00:02:11,400
+Sur l'or ou le Nasdaq : un clic.
+
+30
+00:02:11,600 --> 00:02:16,300
+L'Analyste trace les niveaux et vérifie le risque. Ici, sur des prix simulés.
+
+31
+00:02:16,600 --> 00:02:20,800
+Et quand il n'y a pas de setup valide, il le dit clairement.
+
+32
+00:02:21,100 --> 00:02:25,700
+Avec le briefing de la séance et les alertes TradingView.
+
+33
+00:02:27,900 --> 00:02:30,000
+Le Coach relit vos trades.
+
+34
+00:02:30,200 --> 00:02:33,800
+Chaque étape s'affiche, jusqu'aux leçons.
+
+35
+00:02:34,000 --> 00:02:38,800
+Les écarts sont calculés par le moteur, jamais inventés par l'IA.
+
+36
+00:02:39,100 --> 00:02:42,400
+Vous acceptez, reformulez ou refusez chaque leçon.
+
+37
+00:02:42,600 --> 00:02:46,800
+Dans le journal, chaque trade garde son contexte…
+
+38
+00:02:47,000 --> 00:02:50,400
+…vos émotions, vos erreurs, vos notes.
+
+39
+00:02:50,600 --> 00:02:54,900
+Les statistiques donnent leur marge d'erreur, sans conclure trop vite.
+
+40
+00:02:55,100 --> 00:02:58,800
+Le laboratoire simule des milliers de séquences…
+
+41
+00:02:59,100 --> 00:03:02,900
+…et teste la robustesse d'une stratégie avant d'y croire.
+
+42
+00:03:03,100 --> 00:03:08,700
+Le Mentor répond aux questions de cours, à partir des contenus de la formation, avec ses sources.
+
+43
+00:03:10,900 --> 00:03:14,600
+Le garde-fou calcule ce qu'il vous reste avant chaque limite.
+
+44
+00:03:14,800 --> 00:03:17,600
+Il suit aussi les objectifs de l'évaluation.
+
+45
+00:03:17,800 --> 00:03:23,400
+Sur Topstep, le risque devient un nombre de contrats, plafond de la firme compris.
+
+46
+00:03:23,600 --> 00:03:28,000
+L'EA Journal Sync envoie vos trades MT5, en lecture seule.
+
+47
+00:03:28,200 --> 00:03:33,400
+Côté robots, la console Alpha Edge permet de configurer un EA…
+
+48
+00:03:33,600 --> 00:03:40,600
+…et de le backtester. Ici sur prix simulés : le résultat teste la mécanique, pas la rentabilité.
+
+49
+00:03:40,800 --> 00:03:47,800
+Le passage au réel reste sous trois verrous : autorisation serveur, mot de passe et 2FA, phrase de confirmation.
+
+50
+00:03:48,000 --> 00:03:52,700
+L'usine EA écrit et compile le code MQL5, avec une clé IA et MetaEditor.
+
+51
+00:03:54,900 --> 00:03:59,400
+L'académie accueillera les cours vidéo, partie par partie.
+
+52
+00:03:59,600 --> 00:04:04,400
+La formation Victorious Trader, de Victor Faye, y est incluse.
+
+53
+00:04:04,600 --> 00:04:09,700
+Et les groupes privés Telegram et Discord s'ouvrent avec l'offre.
+
+54
+00:04:11,900 --> 00:04:16,800
+Trois offres, payées en francs CFA avec Wave.
+
+55
+00:04:17,200 --> 00:04:23,100
+Quand un membre déclare son paiement, l'équipe reçoit une alerte Telegram.
+
+56
+00:04:23,500 --> 00:04:26,200
+L'équipe vérifie le transfert, puis valide…
+
+57
+00:04:26,400 --> 00:04:29,500
+…et l'accès s'ouvre aussitôt.
+
+58
+00:04:29,700 --> 00:04:33,500
+L'administration suit les membres et les coûts d'IA.
+
+59
+00:04:33,700 --> 00:04:37,300
+Ce que l'offre n'inclut pas reste verrouillé.
+
+60
+00:04:38,600 --> 00:04:42,800
+Alpha Edge. Votre trading, vos données, votre avantage.
