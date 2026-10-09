@@ -53,8 +53,18 @@ Rendu d'un seul film : `npm run render:film`, `render:promo` ou `render:vertical
 `--concurrency 2` (machine modeste), `--frames 0-299` (un extrait, pour tester).
 
 Durée de rendu indicative sur un processeur à 4 cœurs, sans carte graphique : voir le rapport
-(`RAPPORT.md`, section « Contrôle qualité »). Le rendu du film complet peut être découpé en
-extraits (`--frames`) si la machine doit servir entre-temps.
+(`RAPPORT.md`, section « Contrôle qualité »).
+
+**Rendu en plusieurs fois** (machine modeste, ou machine qui doit servir entre-temps) :
+`node scripts/render.mjs film --segments 2900` rend le film par morceaux de 2 900 images dans
+`out/parts/`. Une coupure n'est pas grave : relancer la même commande reprend au morceau suivant
+(`--max-parts 1` pour n'en rendre qu'un à la fois). Quand tous les morceaux sont là, ils sont mis
+bout à bout sans réencodage, puis la bande son complète (musique, effets, voix off si présente) est
+mixée par `scripts/mix.ts` et ajoutée. Les morceaux d'un ancien rendu se suppriment avec le dossier
+`out/parts/<film>/` (à faire après tout changement du film).
+
+Les vidéos sortent en H.264, couleurs BT.709 en plage vidéo standard (`yuv420p`), lisibles
+partout (téléphones, WhatsApp, YouTube, PowerPoint).
 
 **Prévisualiser et ajuster** : `npm run studio` ouvre l'éditeur de Remotion dans le navigateur
 (lecture, avance image par image, choix de la composition). Les modifications des fichiers de

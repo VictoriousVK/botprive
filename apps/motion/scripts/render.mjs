@@ -61,7 +61,9 @@ for (const key of wanted) {
   const output = join(MOTION, "out", `${f.file}${flag("--clean") ? "-sans-sous-titres" : ""}-${size}.mp4`);
   const range = opt("--frames")?.split("-").map(Number);
   const started = Date.now();
-  const common = { composition, serveUrl, browserExecutable, chromiumOptions: { gl: "swangle" }, concurrency: Number(opt("--concurrency") ?? Math.max(1, cpus().length - 1)) };
+  // BT.709, limited range: the standard for HD video (without it the file is full-range JPEG colour,
+  // "yuvj420p", which some players and platforms show with crushed or washed-out blacks).
+  const common = { composition, serveUrl, browserExecutable, colorSpace: "bt709", chromiumOptions: { gl: "swangle" }, concurrency: Number(opt("--concurrency") ?? Math.max(1, cpus().length - 1)) };
   const segSize = Number(opt("--segments") ?? 0);
   if (segSize > 0) {
     // Resumable rendering in parts (video only), then join and add the whole soundtrack.
@@ -99,9 +101,11 @@ for (const key of wanted) {
       console.log(`\n${missing} partie(s) restante(s) : relancez la même commande pour continuer.`);
       continue;
     }
+    // The soundtrack is mixed in Node (same levels as the composition): rendering the audio of a
+    // long film through the browser is slow and can run out of memory.
     const audio = join(partsDir, "soundtrack.wav");
-    console.log("Piste audio complète…");
-    await renderMedia({ ...common, codec: "wav", outputLocation: audio });
+    console.log("Bande son complète…");
+    tool(TSX, [join(MOTION, "scripts/mix.ts"), key, audio]);
     const list = join(partsDir, "parts.txt");
     writeFileSync(list, parts.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n"));
     const joined = join(partsDir, "video.mp4");
@@ -117,6 +121,7 @@ for (const key of wanted) {
     codec: "h264",
     crf: big ? 20 : 18,
     pixelFormat: "yuv420p",
+    colorSpace: "bt709",
     audioCodec: "aac",
     audioBitrate: "192k",
     imageFormat: "jpeg",
