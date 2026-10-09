@@ -46,7 +46,11 @@ npm run audio          # 2. musique et effets sonores (≈ 1 min 15) → public/
 npm run subtitles      # 3. sous-titres SRT et script de voix off → subtitles/, VOIX-OFF.fr.md
 npm run render:all     # 4. les trois MP4 → out/
 npm run qc             # 5. contrôle des MP4 et planches d'images → out/qc/
+npm run share -- out/alpha-edge-film-1080p.mp4   # 6. copie légère à envoyer (28 Mo au plus)
 ```
+
+La copie légère (`…-leger.mp4`) garde la 1080p et tient sous une taille donnée (`--max 15` pour
+15 Mo), pour un envoi par message ou e-mail ; le fichier complet reste la version à projeter.
 
 Rendu d'un seul film : `npm run render:film`, `render:promo` ou `render:vertical`. Options, après
 `--` : `--clean` (sans sous-titres incrustés), `--4k` (film et version courte en 3840 × 2160),

@@ -14,7 +14,8 @@
     "render:promo": "node scripts/render.mjs promo",
     "render:vertical": "node scripts/render.mjs vertical",
     "render:all": "node scripts/render.mjs film promo vertical",
-    "qc": "node scripts/qc.mjs"
+    "qc": "node scripts/qc.mjs",
+    "share": "node scripts/share.mjs"
   },
   "dependencies": {
     "@remotion/cli": "4.0.534",
