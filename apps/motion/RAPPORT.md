@@ -93,6 +93,29 @@ Machine de rendu : 4 cœurs, sans carte graphique (rendu logiciel de Chromium), 
 | Son | crête −2,6 dBFS, niveau moyen −18,1 dBFS, aucun blanc de plus de 1,5 s |
 | Planches d'images | 37 images (une toutes les 8 s) relues : pas de texte coupé ni débordant, sous-titres lisibles et jamais superposés, bandeau « Démonstration » et mention « Prix simulés » visibles |
 
+### Version courte (`AlphaEdgePromo`) et format vertical (`AlphaEdgeVertical`)
+
+| Contrôle | Version courte | Format vertical |
+|---|---|---|
+| Rendu | 1,6 image/s, environ 14 min | 1,7 image/s, environ 14 min |
+| Fichier | 1920 × 1080, 44,3 s, 1 329 images, 64,5 Mo | 1080 × 1920, 47,8 s, 1 434 images, 61,3 Mo |
+| Copie légère | 25,8 Mo | 25,9 Mo |
+| `npm run qc` | tous les contrôles au vert (BT.709, `yuv420p`) | tous les contrôles au vert (BT.709, `yuv420p`) |
+| Son | crête −2,8 dBFS, moyenne −17,5 dBFS | crête −2,5 dBFS, moyenne −17,3 dBFS |
+| Planches | 15 images relues, aucun défaut | 24 images relues après correction (voir ci-dessous) |
+
+**Défauts trouvés sur le format vertical et corrigés avant livraison** :
+
+- écran « Ses règles, en clair » : la zone visée sur téléphone n'était que l'intitulé du bloc ; le
+  zoom maximal coupait les valeurs à droite (« 5 % », « minuit »). La capture vise maintenant le
+  bloc entier, comme sur ordinateur ;
+- écran d'inscription : le bouton « Continuer » tombait juste sous le bord de l'écran du téléphone,
+  le clic se faisait hors champ. La capture est prise en pleine page et le cadrage montre le
+  formulaire jusqu'au bouton.
+
+L'éclair lumineux de 0,5 s sur l'apparition du logo (les trois films) est voulu, synchronisé avec
+l'impact sonore ; un seul éclair, loin des seuils de photosensibilité (trois par seconde).
+
 **Correction apportée pendant le contrôle** : le premier fichier maître sortait en `yuvj420p`
 (couleurs JPEG plein écart, matrice BT.601), mal interprété par certains lecteurs et plateformes.
 Les rendus sortent désormais en BT.709 plage vidéo (`colorSpace: "bt709"`) ; le film déjà rendu a
