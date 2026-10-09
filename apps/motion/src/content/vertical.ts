@@ -26,7 +26,7 @@ export const VERTICAL: Film = {
     {
       id: "signup", kind: "tour", device: "phone", dur: 5, transition: PUSH, chapter: { n: "01", kicker: "SIGN UP", title: "Inscription" },
       steps: [
-        { at: 0, shot: "m_auth", view: "top" },
+        { at: 0, shot: "m_auth", view: { y: 500, zoom: 1 } },
         { at: 0.2, focus: "next", note: { kicker: "SIGN UP", title: "En deux temps" } },
         { at: 2.4, cursor: "next", click: true },
       ],

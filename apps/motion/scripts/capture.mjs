@@ -354,7 +354,7 @@ async function phone(browser, creds) {
   await go(page, "/compte/?vue=inscription", 1200);
   await page.getByLabel("Nom complet").fill("Aïssatou Ba");
   await page.getByLabel("E-mail").fill("aissatou.demo@example.com");
-  await shot(page, "m_auth", { device: PHONE, targets: { next: button("Continuer") } });
+  await shot(page, "m_auth", { device: PHONE, full: true, targets: { next: button("Continuer") } });
   await ctx.close();
   ({ ctx, page } = await newContext(browser, PHONE, creds.trader));
   await go(page, "/app/", 1500);
@@ -372,7 +372,7 @@ async function phone(browser, creds) {
   await page.getByText("Tradez-vous pour une prop firm").waitFor();
   await page.getByRole("button", { name: "FTMO CFD et Forex" }).click();
   await sleep(800);
-  await shot(page, "m_onb_firm", { device: PHONE, full: true, targets: { rules: text("Règles suivies") } });
+  await shot(page, "m_onb_firm", { device: PHONE, full: true, targets: { rules: around(text("Règles suivies")) } });
   await ctx.close();
 }
 
