@@ -79,4 +79,25 @@ l'emblème (teinté or, réglable dans `src/content/brand.ts`) et adopte la pale
 
 ## 4. Contrôle qualité
 
-Voir la section suivante, complétée après les rendus.
+Machine de rendu : 4 cœurs, sans carte graphique (rendu logiciel de Chromium), Remotion 4.0.534.
+
+### Film principal (`AlphaEdgeFilm`)
+
+| Contrôle | Résultat |
+|---|---|
+| Rendu | 4 morceaux (`--segments 2900`) à 2,1 à 2,3 images/s, soit environ 1 h 10 de calcul ; assemblage et bande son : 16 s |
+| Fichier maître | 1920 × 1080, 30 i/s, 291,4 s (4 min 51), 8 742 images comptées, H.264 + AAC 192 kb/s |
+| Version de diffusion | 159 Mo, 4,4 Mb/s, `yuv420p` BT.709 plage vidéo ; tous les contrôles de `npm run qc` au vert |
+| Version légère (`npm run share`) | 29,4 Mo, 1080p, 0,8 Mb/s, deux passes ; texte net vérifié sur les plans en mouvement |
+| Raccords entre morceaux | images identiques de part et d'autre des coupures (96,7 s, 193,3 s, 290,0 s) |
+| Son | crête −2,6 dBFS, niveau moyen −18,1 dBFS, aucun blanc de plus de 1,5 s |
+| Planches d'images | 37 images (une toutes les 8 s) relues : pas de texte coupé ni débordant, sous-titres lisibles et jamais superposés, bandeau « Démonstration » et mention « Prix simulés » visibles |
+
+**Correction apportée pendant le contrôle** : le premier fichier maître sortait en `yuvj420p`
+(couleurs JPEG plein écart, matrice BT.601), mal interprété par certains lecteurs et plateformes.
+Les rendus sortent désormais en BT.709 plage vidéo (`colorSpace: "bt709"`) ; le film déjà rendu a
+été converti (matrice et plage), sans écart de teinte mesurable sur l'or de la marque.
+
+**Incident de rendu** : le rendu du son du film entier par le navigateur a saturé la mémoire vers
+l'image 5 022. Le son est désormais mixé en Node (`scripts/mix.ts`, mêmes niveaux que la
+composition) et le film se rend en morceaux reprenables.
