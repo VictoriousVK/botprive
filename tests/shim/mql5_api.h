@@ -28,13 +28,15 @@ enum ENUM_ANCHOR_POINT { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT = 1, ANCHOR_LEFT_LOW
                          ANCHOR_CENTER = 8 };
 enum ENUM_BASE_CORNER { CORNER_LEFT_UPPER = 0, CORNER_LEFT_LOWER = 1, CORNER_RIGHT_LOWER = 2, CORNER_RIGHT_UPPER = 3 };
 enum ENUM_BORDER_TYPE { BORDER_FLAT = 0, BORDER_RAISED = 1, BORDER_SUNKEN = 2 };
-enum ENUM_OBJECT { OBJ_TREND = 2, OBJ_RECTANGLE = 16, OBJ_TEXT = 101, OBJ_LABEL = 102, OBJ_RECTANGLE_LABEL = 110 };
+enum ENUM_OBJECT { OBJ_VLINE = 0, OBJ_TREND = 2, OBJ_RECTANGLE = 16, OBJ_ARROW = 100, OBJ_TEXT = 101, OBJ_LABEL = 102,
+                   OBJ_RECTANGLE_LABEL = 110 };
 enum ENUM_OBJECT_PROPERTY_INTEGER {
   OBJPROP_COLOR, OBJPROP_STYLE, OBJPROP_WIDTH, OBJPROP_BACK, OBJPROP_ZORDER, OBJPROP_FILL, OBJPROP_HIDDEN,
   OBJPROP_SELECTED, OBJPROP_SELECTABLE, OBJPROP_RAY_LEFT, OBJPROP_RAY_RIGHT, OBJPROP_FONTSIZE, OBJPROP_ANCHOR,
   OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, OBJPROP_YSIZE, OBJPROP_BGCOLOR, OBJPROP_CORNER,
-  OBJPROP_BORDER_TYPE
+  OBJPROP_BORDER_TYPE, OBJPROP_ARROWCODE
 };
+enum ENUM_OBJECT_PROPERTY_DOUBLE { OBJPROP_PRICE };
 enum ENUM_OBJECT_PROPERTY_STRING { OBJPROP_TEXT, OBJPROP_FONT, OBJPROP_TOOLTIP };
 enum ENUM_LOG_LEVELS { LOG_LEVEL_NO = 0, LOG_LEVEL_ERRORS = 1, LOG_LEVEL_ALL = 2 };
 enum ENUM_SYMBOL_INFO_DOUBLE { SYMBOL_BID, SYMBOL_ASK, SYMBOL_POINT, SYMBOL_TRADE_TICK_SIZE, SYMBOL_TRADE_TICK_VALUE,
@@ -78,9 +80,14 @@ enum ENUM_DEAL_ENTRY { DEAL_ENTRY_IN = 0, DEAL_ENTRY_OUT = 1, DEAL_ENTRY_INOUT =
 #define REASON_TEMPLATE 7
 #define REASON_INITFAILED 8
 #define REASON_CLOSE 9
+#define FILE_READ 1
 #define FILE_WRITE 2
 #define FILE_CSV 8
 #define FILE_ANSI 32
+#define FILE_SHARE_READ 128
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 #define INVALID_HANDLE (-1)
 #define TIME_DATE 1
 #define TIME_MINUTES 2
@@ -95,6 +102,12 @@ const color clrSilver = MQL_RGB(192, 192, 192);
 const color clrWhite = MQL_RGB(255, 255, 255);
 const color clrTomato = MQL_RGB(255, 99, 71);
 const color clrRed = MQL_RGB(255, 0, 0);
+const color clrDodgerBlue = MQL_RGB(30, 144, 255);
+const color clrOrangeRed = MQL_RGB(255, 69, 0);
+const color clrGoldenrod = MQL_RGB(218, 165, 32);
+const color clrSlateGray = MQL_RGB(112, 128, 144);
+const color clrMediumPurple = MQL_RGB(147, 112, 219);
+const color clrGold = MQL_RGB(255, 215, 0);
 
 struct MqlRates {
   datetime time;
@@ -139,6 +152,7 @@ struct Sim {
   int selOrder = -1, selPos = -1;
   int alerts = 0, pushes = 0, orderErrors = 0;
   std::vector<std::string> log;
+  std::map<std::string, int> placed;  // ordres envoyés par commentaire
 
   double profitOf(int posType, double open, double close, double vol) const {
     return (posType == 0 ? (close - open) : (open - close)) * vol * pointValue;
@@ -346,7 +360,28 @@ inline bool ObjectSetString(long, const string &name, ENUM_OBJECT_PROPERTY_STRIN
   it->second.sprops[prop] = v;
   return true;
 }
+inline double ObjectGetDouble(long, const string &name, ENUM_OBJECT_PROPERTY_DOUBLE, int idx = 0) {
+  auto it = g_sim.objects.find(name);
+  if (it == g_sim.objects.end() || idx < 0 || idx >= (int)it->second.p.size()) return 0.0;
+  return it->second.p[idx];
+}
 inline void ChartRedraw(long = 0) {}
+
+// ------------------------------------------------------------------ variables globales du terminal
+inline std::map<std::string, double> &sim_gv() {
+  static std::map<std::string, double> g;
+  return g;
+}
+inline datetime GlobalVariableSet(const string &name, double v) {
+  sim_gv()[name] = v;
+  return g_sim.now;
+}
+inline double GlobalVariableGet(const string &name) {
+  auto it = sim_gv().find(name);
+  return it == sim_gv().end() ? 0.0 : it->second;
+}
+inline bool GlobalVariableCheck(const string &name) { return sim_gv().count(name) > 0; }
+inline bool GlobalVariableDel(const string &name) { return sim_gv().erase(name) > 0; }
 
 // ------------------------------------------------------------------ ordres / positions / historique
 inline int OrdersTotal() { return (int)g_sim.orders.size(); }
@@ -467,27 +502,42 @@ inline std::map<int, std::ofstream *> &sim_files() {
   static std::map<int, std::ofstream *> f;
   return f;
 }
-inline int FileOpen(const string &name, int, short = '\t', uint = 0) {
+inline std::map<int, char> &sim_delim() {
+  static std::map<int, char> d;
+  return d;
+}
+inline int FileOpen(const string &name, int flags, short delim = '\t', uint = 0) {
   static int next = 1;
-  auto *o = new std::ofstream("build/" + name);
+  auto *o = new std::ofstream("build/" + name, (flags & FILE_READ) ? std::ios::app : std::ios::trunc);
   if (!o->is_open()) { delete o; return INVALID_HANDLE; }
   sim_files()[next] = o;
+  sim_delim()[next] = (char)delim;
   return next++;
 }
-inline void sim_write(std::ostream &, bool) {}
+inline void sim_write(std::ostream &, char, bool) {}
 template <class T, class... R>
-void sim_write(std::ostream &o, bool first, const T &v, const R &...r) {
-  if (!first) o << ",";
+void sim_write(std::ostream &o, char d, bool first, const T &v, const R &...r) {
+  if (!first) o << d;
   o << v;
-  sim_write(o, false, r...);
+  sim_write(o, d, false, r...);
 }
 template <class... A>
 uint FileWrite(int h, const A &...a) {
   auto it = sim_files().find(h);
   if (it == sim_files().end()) return 0;
-  sim_write(*it->second, true, a...);
+  sim_write(*it->second, sim_delim()[h], true, a...);
   *it->second << "\n";
   return 1;
+}
+inline bool FileSeek(int h, long, int) { return sim_files().count(h) > 0; }
+inline ulong FileTell(int h) {
+  auto it = sim_files().find(h);
+  if (it == sim_files().end()) return 0;
+  return (ulong)it->second->tellp();
+}
+inline void FileFlush(int h) {
+  auto it = sim_files().find(h);
+  if (it != sim_files().end()) it->second->flush();
 }
 inline void FileClose(int h) {
   auto it = sim_files().find(h);
@@ -532,6 +582,7 @@ class CTrade {
     return std::fabs(k - std::round(k)) < 1e-6;
   }
   bool market(int type, double volume, double sl, double tp, const string &cmt) {
+    g_sim.placed[cmt]++;
     if (!checkVol(volume)) return fail(TRADE_RETCODE_INVALID_VOLUME);
     double px = type == 0 ? g_sim.ask : g_sim.bid;
     if (type == 0 && ((sl > 0 && sl >= g_sim.bid) || (tp > 0 && tp <= g_sim.bid))) return fail(TRADE_RETCODE_INVALID_STOPS);
@@ -543,6 +594,7 @@ class CTrade {
     return true;
   }
   bool limit(int type, double volume, double price, double sl, double tp, const string &cmt) {
+    g_sim.placed[cmt]++;
     if (!checkVol(volume)) return fail(TRADE_RETCODE_INVALID_VOLUME);
     if (!onGrid(price) || (sl > 0 && !onGrid(sl)) || (tp > 0 && !onGrid(tp))) return fail(TRADE_RETCODE_INVALID_PRICE);
     if (type == ORDER_TYPE_SELL_LIMIT) {
