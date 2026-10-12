@@ -4,6 +4,8 @@
 #   2. EA OPR + FVG : tests du moteur (10 tests obligatoires du cahier des charges)
 #      + EA complet simulé tick par tick (5 variantes)
 #   3. le comparatif « avant / après » sur les mêmes données synthétiques
+#   4. EA ICT NAS Institutional : v2.30 (fusion avec le moteur OPR + FVG) testée de bout en bout
+#      (6 variantes) et comparée à la v2.22 d'origine (tests/ref) sur les mêmes données
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build
@@ -61,5 +63,43 @@ build_opr 4 --set=InpServerTZ=OPR_SRV_GMT_US_DST --set=InpTheme=OPR_THEME_LIGHT 
 echo
 $CXX -Ibuild/opr compare_before_after.cpp -o build/compare_before_after
 ./build/compare_before_after
+
+# ---------------------------------------------------------------- EA ICT NAS Institutional
+ICT=../mql5/Experts/ICT_NAS_Institutional/ICT_NAS_Institutional.mq5
+mkdir -p build/ict
+ICXX="g++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-misleading-indentation -Werror -Ishim -Ibuild/ict"
+python3 check_embedded.py "$ICT" "$OPR"
+build_ict() {  # $1 = source .mq5, $2 = binaire, $3 = 0/1 (v2.30), $4 = variante, $5 = libellé, puis surcharges --set=...
+  local src=$1 bin=$2 v230=$3 var=$4 label=$5
+  shift 5
+  python3 mq2cpp.py "$src" "build/ict/$bin.cpp" "$@"
+  $ICXX -DICT_SRC="\"$bin.cpp\"" -DV230="$v230" -DVARIANT="$var" -DLABEL="\"$label\"" ictnas_tests.cpp -o "build/ict/$bin" -lsqlite3
+}
+STATS=build/ict/stats.txt
+: > $STATS
 echo
-echo "Tous les tests (LRL + OPR) sont passés."
+build_ict "$ICT" ict_def 1 0 "v2.30 (nouvelle version)"
+for s in 71 72 73; do ./build/ict/ict_def $s | tee -a $STATS | grep -v '^STATS'; done
+build_ict "$ICT" ict_sig 1 1 "-" --set=InpTradingEnabled=false
+./build/ict/ict_sig 71 | grep -v '^STATS'
+build_ict "$ICT" ict_rst 1 2 "-" --set=InpFreshDBInTester=false
+./build/ict/ict_rst 71 | grep -v '^STATS'
+build_ict "$ICT" ict_leg 1 3 "v2.30 sans le modèle London PDF" --set=InpLondonMode=LONDON_LEGACY
+for s in 71 72 73; do ./build/ict/ict_leg $s | tee -a $STATS | grep -v '^STATS'; done
+build_ict "$ICT" ict_bad 1 4 "-" --set=InpLOOpr2Trade=true
+./build/ict/ict_bad 71 | grep -v '^STATS'
+build_ict "$ICT" ict_vis 1 5 "-" --set=InpLondonManage=LM_ICTNAS
+./build/ict/ict_vis 71 | grep -v '^STATS'
+build_ict "$ICT" ict_risk222 1 9 "v2.30 avec le risque de la v2.22" --set=InpRiskPct=3.0 --set=InpDailyLossPct=3.0 \
+  --set=InpDailyTargetPct=9.0 --set=InpMaxConcurrent=1
+for s in 71 72 73; do ./build/ict/ict_risk222 $s | tee -a $STATS | grep -v '^STATS'; done
+build_ict "$ICT" ict_slcap 1 9 "option : SL max 4 ATR M5 (profil personnalisé)" --set=InpProfile=PROFILE_CUSTOM \
+  --set=InpScoreMin=25 --set=InpMinFVGPts=3 --set=InpDispATRMult=1.2 --set=InpHuntMaxBars=45 --set=InpSLCapATR=4.0
+for s in 71 72 73; do ./build/ict/ict_slcap $s | tee -a $STATS | grep -v '^STATS'; done
+build_ict ref/ICT_NAS_Institutional_v222.mq5 ict_v222 0 9 "v2.22 (origine)"
+for s in 71 72 73; do ./build/ict/ict_v222 $s | tee -a $STATS | grep -v '^STATS'; done
+echo
+echo "Comparatif ICT NAS (données synthétiques, 3 graines x 60 jours) :"
+python3 compare_ictnas.py $STATS | tee build/ict/comparatif.md
+echo
+echo "Tous les tests (LRL + OPR + ICT NAS) sont passés."

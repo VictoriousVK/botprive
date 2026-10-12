@@ -42,6 +42,8 @@ struct MqlArray {
 };
 template <class T>
 int ArraySize(const MqlArray<T> &a) { return (int)a.v.size(); }
+template <class T, size_t N>
+int ArraySize(const T (&)[N]) { return (int)N; }
 template <class T>
 int ArrayResize(MqlArray<T> &a, int n, int reserve = 0) {
   if (n < 0) return -1;
@@ -178,10 +180,46 @@ inline bool StringTrimRight(string &s) {
   s = p == std::string::npos ? "" : s.substr(0, p + 1);
   return true;
 }
-inline string TimeToString(datetime t, int = 0) {
+// flags : 1 = date, 2 = heures:minutes, 4 = secondes (0 = date + heures:minutes, comme MT5)
+inline string TimeToString(datetime t, int flags = 3) {
   MqlDateTime s;
   TimeToStruct(t, s);
+  if (flags == 0) flags = 3;
   char buf[64];
-  snprintf(buf, sizeof(buf), "%04d.%02d.%02d %02d:%02d", s.year, s.mon, s.day, s.hour, s.min);
-  return buf;
+  std::string out;
+  if (flags & 1) {
+    snprintf(buf, sizeof(buf), "%04d.%02d.%02d", s.year, s.mon, s.day);
+    out = buf;
+  }
+  if (flags & 6) {
+    if (!out.empty()) out += " ";
+    if (flags & 4)
+      snprintf(buf, sizeof(buf), "%02d:%02d:%02d", s.hour, s.min, s.sec);
+    else
+      snprintf(buf, sizeof(buf), "%02d:%02d", s.hour, s.min);
+    out += buf;
+  }
+  return out;
+}
+// "YYYY.MM.DD [HH:MM[:SS]]"
+inline datetime StringToTime(const string &str) {
+  MqlDateTime s;
+  memset(&s, 0, sizeof(s));
+  int n = sscanf(str.c_str(), "%d.%d.%d %d:%d:%d", &s.year, &s.mon, &s.day, &s.hour, &s.min, &s.sec);
+  if (n < 3) return 0;
+  return StructToTime(s);
+}
+inline int StringReplace(string &s, const string &from, const string &to) {
+  if (from.empty()) return 0;
+  int n = 0;
+  size_t p = 0;
+  while ((p = s.find(from, p)) != std::string::npos) {
+    s.replace(p, from.size(), to);
+    p += to.size();
+    n++;
+  }
+  return n;
+}
+inline ushort StringGetCharacter(const string &s, int pos) {
+  return (pos >= 0 && pos < (int)s.size()) ? (ushort)(unsigned char)s[pos] : 0;
 }
