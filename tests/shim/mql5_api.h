@@ -553,11 +553,23 @@ inline int CopyBuffer(int h, int, int start, int count, MqlArray<double> &buf) {
   if (h < 0 || h >= (int)sim_ind().size()) return -1;
   SimInd ind = sim_ind()[h];
   int n = sim_count(ind.tf);
-  for (int s = start + count - 1; s >= start; s--) {
-    int idx = n - 1 - s;
-    if (idx - ind.period < 0) return -1;
-    buf.v.push_back(sim_atr(ind.tf, ind.period, idx));
+  int lo = n - 1 - (start + count - 1), hi = n - 1 - start;  // indices chronologiques demandés
+  if (count <= 0 || hi < 0 || lo - ind.period < 0) return -1;
+  // somme glissante du true range (même résultat que sim_atr, en O(count + période))
+  std::vector<double> tr(hi - lo + ind.period + 1);
+  for (int j = lo - ind.period + 1; j <= hi; j++) {
+    SimBar b = sim_get(ind.tf, j), q = sim_get(ind.tf, j - 1);
+    tr[j - (lo - ind.period + 1)] = std::max(b.h, q.c) - std::min(b.l, q.c);
   }
+  double s = 0;
+  for (int k = 0; k < ind.period; k++) s += tr[k];
+  std::vector<double> chrono;
+  chrono.push_back(s / ind.period);
+  for (int idx = lo + 1; idx <= hi; idx++) {
+    s += tr[idx - (lo - ind.period + 1)] - tr[idx - ind.period - (lo - ind.period + 1)];
+    chrono.push_back(s / ind.period);
+  }
+  for (double v : chrono) buf.v.push_back(v);  // même ordre que l'ancienne boucle (la plus ancienne d'abord)
   return (int)buf.v.size();
 }
 

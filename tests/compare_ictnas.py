@@ -19,8 +19,9 @@ for line in open(sys.argv[1], encoding="utf-8"):
     runs[label].append(dict(ver=ver, seed=int(seed), days=int(days), fills=int(fills), wins=int(wins), losses=int(losses),
                             net=float(net), maxloss=float(maxloss), sigs=int(sigs), models=models, decisions=decisions))
 
-print("| Configuration | trades exécutés / jour | dont London OPR PDF | dont SB Momentum | autres modèles | gagnants / perdants | perte max par trade |")
-print("|---|---|---|---|---|---|---|")
+print("| Configuration | trades exécutés / jour | dont London OPR PDF | dont SB Momentum | dont v6.20 (SB 1er FVG + Macro Breaker) "
+      "| autres modèles | gagnants / perdants | perte max par trade | setups refusés « lot < lot minimum » |")
+print("|---|---|---|---|---|---|---|---|---|")
 for label in order:
     rs = runs[label]
     days = sum(r["days"] for r in rs)
@@ -29,9 +30,11 @@ for label in order:
     sm = sum(r["models"].get("SB_MOMENTUM", 0) for r in rs)
     w = sum(r["wins"] for r in rs)
     l = sum(r["losses"] for r in rs)
+    v6 = sum(r["models"].get("SB_V6", 0) + r["models"].get("MACRO_BREAKER", 0) for r in rs)
     ml = max(r["maxloss"] for r in rs)
-    print(f"| {label} | {fills / days:.2f} ({fills} sur {days} j) | {lo / days:.2f} | {sm / days:.2f} | {(fills - lo - sm) / days:.2f} "
-          f"| {w} / {l} | {ml:.2f} % |")
+    lot = sum(v for r in rs for k, v in r["decisions"].items() if "lot < lot minimum" in k)
+    print(f"| {label} | {fills / days:.2f} ({fills} sur {days} j) | {lo / days:.2f} | {sm / days:.2f} | {v6 / days:.2f} "
+          f"| {(fills - lo - sm - v6) / days:.2f} | {w} / {l} | {ml:.2f} % | {lot} |")
 print()
 print("Principales décisions sur les signaux ICT complets (cumul des graines) :")
 for label in order:

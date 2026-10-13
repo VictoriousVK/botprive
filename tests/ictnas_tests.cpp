@@ -1,6 +1,7 @@
 // Test de bout en bout d'ICT_NAS_Institutional (converti en C++) sur un marché simulé tick par tick.
-//   -DICT_SRC="ICT_v230.cpp" -DV230=1 : nouvelle version (fusion avec le moteur OPR + FVG)
-//   -DICT_SRC="ICT_v222.cpp" -DV230=0 : version d'origine (référence du comparatif avant / après)
+//   -DV230=1 -DV240=1 : version courante (v2.40 : modèles v6.20, garde-fous RiskGuard)
+//   -DV230=1 -DV240=0 : v2.30 (fusion avec le moteur OPR + FVG, référence)
+//   -DV230=0          : v2.22, version d'origine (référence du comparatif avant / après)
 // Chaque exécution écrit aussi une ligne « STATS;... » lue par compare_ictnas.py.
 #include "mql5_api.h"
 bool g_shim_quiet = true;
@@ -29,12 +30,18 @@ ENUM_TIMEFRAMES _Period = PERIOD_M1;
 #ifndef LABEL
 #define LABEL "-"
 #endif
+#ifndef V240
+#define V240 0
+#endif
+#define VER_NAME (V240 ? "v2.40" : (V230 ? "v2.30" : "v2.22"))
 #define V_DEFAULT 0   // paramètres par défaut
 #define V_SIGNALS 1   // observation : aucun ordre
 #define V_RESTART 2   // redémarrage de l'EA en cours de route
 #define V_LEGACY 3    // London OPR v2.22 (moteur PDF en observation)
 #define V_BADCFG 4    // OPR 2 tradé sans fenêtre -> refus explicite
 #define V_VISUAL 5    // mode visuel (tracés, panneau), gestion ICT NAS des trades London, spread 1 tick
+#define V_SMALL 6     // petit compte : 10 000, lot minimum 0,1 (le lot minimum dépasse souvent 1 % de risque)
+#define V_OPEN 7      // testeur en « prix d'ouverture » : un seul tick par bougie M1
 #define V_COMPARE 9   // comparatif seulement (pas de contrôle spécifique)
 
 static int g_fail = 0, g_pass = 0;
@@ -107,8 +114,9 @@ static std::map<std::string, int> sqlCount(const char *sql) {
 int main(int argc, char **argv) {
   const int seed = argc > 1 ? atoi(argv[1]) : SEED;
   const char *names[] = {"défaut", "observation (aucun ordre)", "redémarrage en cours de route", "London v2.22 (moteur PDF en observation)",
-                         "OPR 2 tradé sans fenêtre", "visuel + gestion ICT NAS du London + spread", "", "", "", "comparatif"};
-  printf("[test ICT NAS %s] variante : %s (graine %d)\n", V230 ? "v2.30" : "v2.22", names[VARIANT], seed);
+                         "OPR 2 tradé sans fenêtre", "visuel + gestion ICT NAS du London + spread",
+                         "petit compte (10 000, lot min 0,1)", "prix d'ouverture seulement (1 tick / bougie)", "", "comparatif"};
+  printf("[test ICT NAS %s] variante : %s (graine %d)\n", VER_NAME, names[VARIANT], seed);
   const int histDays = 70;
   const int liveDays = (VARIANT == V_VISUAL) ? 12 : LIVE_DAYS;
   const int N = (histDays + liveDays) * 1440;
@@ -118,6 +126,12 @@ int main(int argc, char **argv) {
   for (auto &b : bars) g_sim.bars.push_back({b.t, b.o, b.h, b.l, b.c});
   g_sim.visual = (VARIANT == V_VISUAL) ? 1 : 0;
   g_sim.spread = (VARIANT == V_VISUAL) ? 0.25 : 0.0;
+  if (VARIANT == V_SMALL) {
+    g_sim.balance = 10000.0;
+    g_sim.volMin = 0.1;
+    g_sim.volStep = 0.1;
+  }
+  const double startBal = g_sim.balance;
   g_sim.cur = warm;
   g_sim.setTick(bars[warm].t, bars[warm].o);
   // fichiers d'une exécution précédente (la variante « redémarrage » simule le live : l'EA ne les vide pas)
@@ -162,7 +176,8 @@ int main(int argc, char **argv) {
       CHECK(OnInit() == INIT_SUCCEEDED, "redémarrage de l'EA");
     }
     double path[4] = {b.o, b.c >= b.o ? b.l : b.h, b.c >= b.o ? b.h : b.l, b.c};
-    for (int k = 0; k < 4; k++) {
+    const int nTicks = (VARIANT == V_OPEN) ? 1 : 4;
+    for (int k = 0; k < nTicks; k++) {
       g_sim.setTick(b.t + k * 15, path[k]);
       OnTick();
       int n = 0, dirs = 0;
@@ -188,7 +203,7 @@ int main(int argc, char **argv) {
   std::map<ulong, PosInfo> pos;
   std::map<long, int> fillsPerDay;
   std::map<std::string, int> fillsByModel;
-  double bal = 100000.0;
+  double bal = startBal;
   int afterDailyStop = 0;
   std::map<long, double> dayStartBal, dayRealized;
   for (auto &d : g_sim.deals) {
@@ -223,13 +238,15 @@ int main(int argc, char **argv) {
     maxLossPct = std::max(maxLossPct, lossPct);
   }
   int days = (int)liveDays;
-  double netPct = (g_sim.balance - 100000.0) / 1000.0;
+  double netPct = (g_sim.balance - startBal) / startBal * 100.0;
 
   // ------------------------------------------------------------------ base SQLite écrite par l'EA
   auto sigByModel = sqlCount("SELECT model, COUNT(*) FROM signals GROUP BY model");
   auto sigByDecision = sqlCount("SELECT decision || CASE WHEN reject_reason IS NULL THEN '' ELSE ' | ' || "
                                 "CASE WHEN reject_reason LIKE 'RR %' THEN 'RR < min' WHEN reject_reason LIKE 'score %' THEN 'score < min' "
-                                "WHEN reject_reason LIKE 'SL trop large%' THEN 'SL trop large' ELSE reject_reason END END, COUNT(*) "
+                                "WHEN reject_reason LIKE 'SL trop large%' THEN 'SL trop large' WHEN reject_reason LIKE 'lot < lot minimum%' THEN 'lot < lot minimum' "
+                                "WHEN reject_reason LIKE 'risque ouvert%' THEN 'risque ouvert cumule' WHEN reject_reason LIKE 'spread %' THEN 'spread' "
+                                "ELSE reject_reason END END, COUNT(*) "
                                 "FROM signals GROUP BY 1 ORDER BY 2 DESC");
   auto takenByModel = sqlCount("SELECT model, COUNT(*) FROM signals WHERE decision='TAKEN' GROUP BY model");
   auto tradeRows = sqlCount("SELECT 'n', COUNT(*) FROM trades");
@@ -249,7 +266,7 @@ int main(int argc, char **argv) {
   printf("\n");
 
   // ligne lue par compare_ictnas.py
-  printf("STATS;%s;%s;%d;%d;%d;%d;%d;%.2f;%.3f;%d", LABEL, V230 ? "v2.30" : "v2.22", seed, days, fills, wins, losses, netPct,
+  printf("STATS;%s;%s;%d;%d;%d;%d;%d;%.2f;%.3f;%d", LABEL, VER_NAME, seed, days, fills, wins, losses, netPct,
          maxLossPct, sigTotal);
   for (auto &kv : fillsByModel) printf(";F:%s=%d", kv.first.c_str(), kv.second);
   for (auto &kv : sigByDecision) printf(";D:%s=%d", kv.first.c_str(), kv.second);
@@ -309,10 +326,13 @@ int main(int argc, char **argv) {
     CHECK(maxPos <= 2, "2 positions simultanées maximum");
     CHECK(maxPerDay <= 3, "3 trades exécutés maximum par jour de trading");
     CHECK(afterDailyStop == 0, "aucune entrée après le stop journalier (-2 %)");
-    CHECK(maxLossPct <= 1.05, "perte maximale par trade <= 1 % du solde (+ arrondi)");
+    if (VARIANT == V_SMALL && V240)
+      CHECK(maxLossPct <= 1.55, "petit compte : perte max par trade <= 1,5 % (lot minimum toléré, règle v6.20)");
+    else
+      CHECK(maxLossPct <= 1.05, "perte maximale par trade <= 1 % du solde (+ arrondi)");
   }
   CHECK(GlobalVariableCheck("ICTNAS_26092801_NQ_LO0_H"), "MOR du jour sauvegardé (persistance)");
-  if (VARIANT == V_DEFAULT || VARIANT == V_RESTART) {
+  if (VARIANT == V_DEFAULT || VARIANT == V_RESTART || VARIANT == V_OPEN) {
     CHECK(loFills > 0, "le modèle London OPR PDF prend des trades");
     CHECK(loBoth >= 0.9 * loFills, "trades London réels = trades du modèle book (>= 90 %)");
     CHECK(takenByModel["LONDON_OPR_PDF"] > 0, "signaux London PDF enregistrés comme TAKEN");
@@ -325,6 +345,32 @@ int main(int argc, char **argv) {
     CHECK(g_sim.maxObjects > 0, "tracés et panneau créés en mode visuel");
     CHECK(g_sim.objects.empty(), "objets supprimés au retrait de l'EA");
   }
+#endif
+#if V240
+  // ------------------------------------------------------------------ contrôles v2.40
+  // une fenêtre Silver Bullet / une macro = 1 entrée v6.20 au plus (uid : SB<fenêtre>... / MB<macro>...)
+  std::map<std::string, int> v6PerWindow;
+  int v6Fills = 0;
+  for (auto &kv : pos) {
+    const PosInfo &p = kv.second;
+    if (p.model != "SB_V6" && p.model != "MACRO_BREAKER") continue;
+    v6Fills++;
+    size_t sp = p.cmt.find(' ');
+    std::string uid = sp == std::string::npos ? "" : p.cmt.substr(sp + 1);
+    std::string head = uid.substr(0, p.model == "SB_V6" ? 3 : 6);
+    v6PerWindow[std::to_string(tradingDay(p.t)) + head]++;
+  }
+  int v6Over = 0;
+  for (auto &kv : v6PerWindow) v6Over += kv.second > 1;
+  printf("  v2.40 : entrées v6.20 %d (SB_V6 %d, MACRO_BREAKER %d) | fenêtres / macros tradées %d\n", v6Fills,
+         fillsByModel["SB_V6"], fillsByModel["MACRO_BREAKER"], (int)v6PerWindow.size());
+  CHECK(v6Over == 0, "une seule entrée v6.20 par fenêtre Silver Bullet / par macro");
+  if (VARIANT != V_RESTART)
+    CHECK(tradeRows["n"] == fills, "chaque exécution a sa ligne dans « trades » (y compris exécution + clôture sur le même tick)");
+  if (VARIANT == V_DEFAULT || VARIANT == V_OPEN || VARIANT == V_SMALL)
+    CHECK(v6Fills > 0, "les modèles v6.20 (Silver Bullet 1er FVG / Macro Breaker) prennent des trades");
+  if (VARIANT != V_COMPARE && VARIANT != V_SIGNALS)
+    CHECK(fills > 20, "l'EA trade régulièrement (plus de 20 trades sur la période)");
 #endif
   printf("  %d vérifications OK, %d échecs\n", g_pass, g_fail);
   return g_fail ? 1 : 0;

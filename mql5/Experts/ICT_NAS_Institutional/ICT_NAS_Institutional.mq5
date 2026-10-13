@@ -57,10 +57,29 @@
 //|     maximum, toujours dans le même sens                          |
 //|   - entrée au marché bornée (x R au-delà du niveau) et annulation|
 //|     « cible atteinte avant l'entrée » contrôlée à chaque tick    |
+//|                                                                  |
+//|  v2.40 : union des EA ICT de l'auteur (ICT NAS, OPR + FVG,       |
+//|  ICT Ultimate Pro v6.20, ICT_RiskGuard) - une seule chaîne de    |
+//|  décision, de risque et de données                               |
+//|   - modèles v6.20 : SB_V6 (Silver Bullet M5, 1er FVG de la jambe |
+//|     après sweep confirmé + MSS) et MACRO_BREAKER (M1, macros ICT,|
+//|     breaker confirmé par le corps, Unicorn), carte de liquidité  |
+//|     et niveaux de référence v6.20, passe relâchée, arbitrage     |
+//|     SB / MB, 1 trade par fenêtre / macro                         |
+//|   - « un seul trade dans le testeur » : ordre de test désactivé  |
+//|     par défaut, lot minimum accepté jusqu'à 1,5 x le risque      |
+//|     (règle v6.20), trades du jour comptés depuis l'historique,   |
+//|     exécution + clôture sur le même tick comptée et enregistrée, |
+//|     prise de liquidité aussi détectée sur la bougie M1 clôturée  |
+//|   - RiskGuard : risque ouvert cumulé max 3 %, lot max, délai     |
+//|     entre deux ordres, spread max (ATR M5), SL au-delà du        |
+//|     plafond ATR : rejet (ICT) ou ramené au plafond (RiskGuard)   |
+//|   - diagnostic : entonnoir v6.20 et pistes quand l'EA ne trade   |
+//|     pas (lot minimum, DD total, SL trop large)                   |
 //+------------------------------------------------------------------+
 #property copyright "Victor — ICT NAS Institutional"
-#property version   "2.30"
-#property description "EA ICT complet NAS100 : modeles ICT, London OPR (PDF), score, filtre ML ONNX, gestion des partiels, collecte de donnees."
+#property version   "2.40"
+#property description "EA ICT complet NAS100 : modeles ICT, London OPR (PDF), Silver Bullet 1er FVG et Macro Breaker (v6.20), score, filtre ML ONNX, garde-fous RiskGuard, collecte de donnees."
 
 #include <Trade\Trade.mqh>
 
@@ -76,7 +95,7 @@
 #define ICTNAS_DEFINES_MQH
 
 #define ICTNAS_PREFIX   "ICTNAS_"
-#define ICTNAS_VERSION  "2.30"
+#define ICTNAS_VERSION  "2.40"
 #define SEC_MIN         60
 #define SEC_HOUR        3600
 #define SEC_DAY         86400
@@ -140,6 +159,13 @@ enum ENUM_LONDON_MANAGE
   };
 
 #define LO_MODEL "LONDON_OPR_PDF"   // nom du modèle London OPR du PDF (moteur OPR + FVG)
+
+//--- v2.40 : SL au-delà du plafond ATR du profil
+enum ENUM_SL_CAP_MODE
+  {
+   SLCAP_REJECT = 0,   // Rejet du setup (ICT : le SL reste au-delà du sweep)
+   SLCAP_CLAMP  = 1    // SL ramené au plafond (RiskGuard)
+  };
 
 //--- Types de liquidité (le poids est défini dans LiquidityEngine)
 enum ENUM_LIQ_TYPE
@@ -1057,6 +1083,27 @@ public:
         }
      }
 
+   //--- v2.40 : mèche de la bougie M1 clôturée au-delà d'un niveau intact = prise de liquidité.
+   //--- En « Every tick » rien ne change ; en OHLC M1 / prix d'ouverture, aucune prise n'est manquée.
+   void              OnClosedBar(void)
+     {
+      datetime t=iTime(m_sym,PERIOD_M1,1);
+      double h=iHigh(m_sym,PERIOD_M1,1),l=iLow(m_sym,PERIOD_M1,1);
+      if(t<=0 || h<=0 || l<=0) return;
+      for(int i=0;i<ArraySize(lv);i++)
+        {
+         if(lv[i].swept || lv[i].tFormed>=t) continue;
+         if(lv[i].buySide ? h>lv[i].price : l<lv[i].price)
+           {
+            lv[i].swept=true;
+            lv[i].tSwept=t;
+            int k=ArraySize(m_events);
+            ArrayResize(m_events,k+1);
+            m_events[k]=i;
+           }
+        }
+     }
+
    //--- Niveaux pris en direct depuis le dernier appel (déclencheurs de setups)
    int               PopSweeps(int &out[])
      {
@@ -1547,6 +1594,8 @@ public:
 //|  et prop firm. Règles validées : risque plafonné à 2 %, stop     |
 //|  journalier -2 %, objectif +3 %, DD total 8 %, RR min 2.         |
 //|  v2.30 : stop / objectif journalier à 0 = désactivé.             |
+//|  v2.40 : lot minimum accepté si son risque <= tolérance x risque |
+//|  voulu (v6.20 : 150 %, jamais au-delà du plafond dur), lot max.  |
 //|  Le jour de risque démarre à 18:00 NY (= minuit Prague, FTMO).   |
 //+------------------------------------------------------------------+
 #ifndef ICTNAS_RISKMANAGER_MQH
@@ -1568,6 +1617,9 @@ private:
    bool              m_dayBlocked;
    bool              m_hardBlocked;
    string            m_reason;
+   double            m_minLotTol;        // v2.40 : lot min accepté jusqu'à x fois le risque voulu (1 = refus strict)
+   double            m_maxLots;          // v2.40 : lot maximum absolu (0 = aucun)
+   string            m_lotNote;          // v2.40 : explication du dernier calcul (refus ou lot minimum)
 
    static int        VolDigits(double step)
      {
@@ -1591,7 +1643,12 @@ public:
       m_dayBlocked=false;
       m_hardBlocked=false;
       m_reason="";
+      m_minLotTol=1.0;
+      m_maxLots=0;
+      m_lotNote="";
      }
+   void              SetLotLimits(double minLotTol,double maxLots) { m_minLotTol=MathMax(minLotTol,1.0); m_maxLots=MathMax(maxLots,0.0); }
+   string            LotNote(void)   { return(m_lotNote); }
    double            RiskPct(void)   { return(m_riskPct); }
    double            MinRR(void)     { return(m_minRR); }
 
@@ -1637,11 +1694,13 @@ public:
      }
 
    //--- Lots pour risquer riskPct du solde entre entry et sl. 0 = trade impossible
-   //--- (jamais d'arrondi vers le haut : si le lot min dépasse le risque, on refuse)
+   //--- (jamais d'arrondi vers le haut ; v2.40 : le lot minimum est accepté si son risque
+   //--- reste <= m_minLotTol x le risque voulu et <= plafond dur, sinon refus expliqué)
    double            CalcLots(bool isBuy,double entry,double sl,double riskPct=-1)
      {
       if(riskPct<0) riskPct=m_riskPct;
       riskPct=MathMin(riskPct,RISK_HARD_CAP_PCT);
+      m_lotNote="";
       if(entry<=0 || sl<=0 || entry==sl) return(0.0);
       double loss=0.0;
       ENUM_ORDER_TYPE t=isBuy?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
@@ -1654,8 +1713,22 @@ public:
       double vmax=SymbolInfoDouble(m_sym,SYMBOL_VOLUME_MAX);
       if(step<=0) step=0.01;
       double lots=MathFloor(riskMoney/loss/step+1e-9)*step;
-      if(lots<vmin) return(0.0);
+      if(lots<vmin)
+        {
+         double bal=AccountInfoDouble(ACCOUNT_BALANCE);
+         double minRisk=vmin*loss;
+         double allowed=MathMin(riskMoney*m_minLotTol,bal*RISK_HARD_CAP_PCT/100.0);
+         if(minRisk>allowed+1e-9)
+           {
+            m_lotNote="lot < lot minimum : "+DoubleToString(vmin,2)+" lot risque "+DoubleToString(minRisk,2)+" > "+
+                      DoubleToString(allowed,2)+" autorises ("+DoubleToString(riskPct,2)+" % x "+DoubleToString(m_minLotTol,2)+")";
+            return(0.0);
+           }
+         lots=vmin;
+         m_lotNote="lot minimum "+DoubleToString(vmin,2)+" (risque "+DoubleToString((bal>0)?minRisk/bal*100.0:0,2)+" % du solde)";
+        }
       if(lots>vmax) lots=vmax;
+      if(m_maxLots>0 && lots>m_maxLots) lots=MathMax(vmin,MathFloor(m_maxLots/step+1e-9)*step);
       return(NormalizeDouble(lots,VolDigits(step)));
      }
 
@@ -2705,6 +2778,8 @@ struct SSignal
    bool              fixedUid;        // identifiant déterministe (London OPR PDF : pas de doublon après redémarrage)
    long              extId;           // setup du moteur London OPR (0 = aucun)
    int               slot;            // OPR du moteur London (-1 = aucun)
+   //--- v2.40
+   string            extKey;          // fenêtre / macro v6.20 du signal ("" = aucune) : 1 trade par fenêtre
   };
 
 //--- Répartition des sorties selon que les TP sont distincts ou non
@@ -3384,6 +3459,7 @@ struct STradeCtx
    double            w1,w2,w3,initVol;
    double            beTrigger,inval;
    double            cancelPx;          // v2.30 : prix qui annule l'ordre en attente (0 = TP1)
+   string            key;               // v2.40 : fenêtre / macro v6.20 ("" = autre modèle)
    bool              tp1Done,tp2Done,beDone;
    datetime          lastBarChecked;
    datetime          tPlaced,tExpiry,tOpen;
@@ -3404,6 +3480,43 @@ private:
    double            m_trailBuf;
    string            m_last;
    int               m_filledToday;     // v2.30 : trades exécutés depuis le début du jour de trading
+   datetime          m_dayStartSrv;     // v2.40 : début du jour de trading (18:00 NY la veille, heure serveur)
+   datetime          m_v6Fills[];       // v2.40 : heures d'entrée des trades des modèles v6.20
+
+   void              AddV6Fill(const STradeCtx &c)
+     {
+      if(c.key=="") return;
+      int n=ArraySize(m_v6Fills);
+      if(n>=100)
+        {
+         for(int i=0;i<n-1;i++) m_v6Fills[i]=m_v6Fills[i+1];
+         n--;
+        }
+      ArrayResize(m_v6Fills,n+1);
+      m_v6Fills[n]=(c.tOpen>0) ? c.tOpen : TimeCurrent();
+     }
+
+   //--- v2.40 : ordre exécuté PUIS clôturé avant le tick suivant (SL / TP sur la bougie d'entrée)
+   bool              ClosedBeforeTick(STradeCtx &c)
+     {
+      if(!HistorySelectByPosition(c.order)) return(false);
+      bool hasIn=false,hasOut=false;
+      for(int k=0;k<HistoryDealsTotal();k++)
+        {
+         ulong d=HistoryDealGetTicket(k);
+         long e=HistoryDealGetInteger(d,DEAL_ENTRY);
+         if(e==DEAL_ENTRY_IN)
+           {
+            hasIn=true;
+            c.tOpen=(datetime)HistoryDealGetInteger(d,DEAL_TIME);
+            c.entry=HistoryDealGetDouble(d,DEAL_PRICE);
+           }
+         if(e==DEAL_ENTRY_OUT || e==DEAL_ENTRY_OUT_BY) hasOut=true;
+        }
+      if(!hasIn || !hasOut) return(false);
+      c.filled=true;
+      return(true);
+     }
 
    double            Tick(void)
      {
@@ -3526,6 +3639,8 @@ public:
       ArrayResize(m_t,0);
       m_last="";
       m_filledToday=0;
+      m_dayStartSrv=0;
+      ArrayResize(m_v6Fills,0);
      }
    string            LastMessage(void) { return(m_last); }
 
@@ -3542,8 +3657,57 @@ public:
      }
 
    //--- v2.30 : compteurs du jour (trades exécutés, ordres en attente)
-   void              NewDay(void)       { m_filledToday=0; }
-   int               FilledToday(void)  { return(m_filledToday); }
+   void              NewDay(datetime dayStartSrv) { m_filledToday=0; m_dayStartSrv=dayStartSrv; }
+   //--- v2.40 (RiskGuard) : entrées du jour lues dans l'historique (positions distinctes, magic de l'EA) ;
+   //--- un redémarrage ou une exécution manquée par le suivi ne remet plus le compteur à zéro
+   int               FilledToday(void)
+     {
+      int n=m_filledToday;
+      if(m_dayStartSrv<=0 || !HistorySelect(m_dayStartSrv,TimeCurrent()+60)) return(n);
+      long ids[];
+      int h=0;
+      for(int i=0;i<HistoryDealsTotal();i++)
+        {
+         ulong d=HistoryDealGetTicket(i);
+         if(HistoryDealGetInteger(d,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
+         if(HistoryDealGetInteger(d,DEAL_MAGIC)!=m_magic || HistoryDealGetString(d,DEAL_SYMBOL)!=m_sym) continue;
+         long pid=HistoryDealGetInteger(d,DEAL_POSITION_ID);
+         bool seen=false;
+         for(int j=0;j<h;j++) if(ids[j]==pid) { seen=true; break; }
+         if(seen) continue;
+         ArrayResize(ids,h+1);
+         ids[h]=pid;
+         h++;
+        }
+      return(h>n ? h : n);
+     }
+   //--- v2.40 (règle v6.20 « TradesInWindow ») : ordres v6.20 en attente + entrées v6.20 depuis le début
+   //--- de la fenêtre / macro (un trade Macro Breaker compte aussi dans la fenêtre Silver Bullet qui le contient)
+   int               V6CountSince(const datetime from)
+     {
+      int c=0;
+      for(int i=0;i<ArraySize(m_t);i++) if(m_t[i].active && !m_t[i].filled && m_t[i].key!="") c++;
+      for(int i=0;i<ArraySize(m_v6Fills);i++) if(m_v6Fills[i]>=from) c++;
+      return(c);
+     }
+   //--- v2.40 (RiskGuard) : risque encore ouvert = positions dont le SL n'est pas au BE + ordres en attente
+   double            OpenRiskMoney(void)
+     {
+      double risk=0;
+      for(int i=PositionsTotal()-1;i>=0;i--)
+        {
+         ulong t=PositionGetTicket(i);
+         if(t==0 || PositionGetString(POSITION_SYMBOL)!=m_sym || PositionGetInteger(POSITION_MAGIC)!=m_magic) continue;
+         double sl=PositionGetDouble(POSITION_SL),open=PositionGetDouble(POSITION_PRICE_OPEN),vol=PositionGetDouble(POSITION_VOLUME);
+         bool buy=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+         if(sl<=0) { risk+=AccountInfoDouble(ACCOUNT_EQUITY); continue; }      // pas de SL = tout le compte
+         if(buy ? sl>=open : sl<=open) continue;                               // SL au BE ou mieux : plus de risque
+         double p=0;
+         if(OrderCalcProfit(buy?ORDER_TYPE_BUY:ORDER_TYPE_SELL,m_sym,vol,open,sl,p) && p<0) risk-=p;
+        }
+      for(int i=0;i<ArraySize(m_t);i++) if(m_t[i].active && !m_t[i].filled) risk+=m_t[i].riskMoney;
+      return(risk);
+     }
    int               PendingCount(void)
      {
       int c=0;
@@ -3658,6 +3822,7 @@ public:
       m_t[n].tp1Done=false; m_t[n].tp2Done=false; m_t[n].beDone=false;
       m_t[n].beTrigger=s.beTrigger; m_t[n].inval=s.inval; m_t[n].lastBarChecked=0;
       m_t[n].cancelPx=(s.cancelPx>0)?NP(s.cancelPx):0;
+      m_t[n].key=s.extKey;
       m_t[n].tPlaced=TimeCurrent();
       m_t[n].tExpiry=s.expirySrv;
       m_t[n].tOpen=0;
@@ -3686,6 +3851,7 @@ public:
                m_t[i].tOpen=(datetime)PositionGetInteger(POSITION_TIME);
                m_t[i].entry=PositionGetDouble(POSITION_PRICE_OPEN);
                m_filledToday++;
+               AddV6Fill(m_t[i]);
                continue;
               }
             if(OrderSelect(m_t[i].order))
@@ -3696,6 +3862,13 @@ public:
                   m_trade.OrderDelete(m_t[i].order);
                   m_t[i].active=false;
                  }
+              }
+            else if(ClosedBeforeTick(m_t[i]))
+              {
+               //--- v2.40 : exécuté et déjà clôturé (même tick) : compté dans le jour et enregistré dans « trades »
+               m_filledToday++;
+               AddV6Fill(m_t[i]);
+               Finalize(m_t[i]);
               }
             else if(now-m_t[i].tPlaced>60)
                m_t[i].active=false;           // annulé / rejeté / expiré (délai de grâce : la position peut apparaître en retard)
@@ -6151,6 +6324,1995 @@ string OprSetupStateText(const int st)
 //=== fin OPR_Engine.mqh ===
 
 //+------------------------------------------------------------------+
+//| v2.40 : modèles de « ICT Ultimate Pro v6.20 » (même auteur)      |
+//|   - Silver Bullet (M5, fenêtres 03-04 / 10-11 / 14-15 NY) :      |
+//|     sweep confirmé -> MSS + displacement -> 1er FVG de la jambe  |
+//|   - Macro Breaker (M1, macros ICT xx:20-xx:40 / xx:50-xx:10) :   |
+//|     stop hunt -> breaker confirmé par le corps -> entrée au bord |
+//|     (Unicorn si FVG dans le breaker), cible avant entrée = rien  |
+//| Modules repris de la v6.20 (détection uniquement), renommés avec |
+//| le préfixe V6. Exécution, risque, filtres, ML et SQLite : chaîne |
+//| de décision d'ICT NAS (voir V6Bridge).                           |
+//+------------------------------------------------------------------+
+//=== début V6_Common.mqh ===
+#ifndef ICTV6_COMMON_MQH
+#define ICTV6_COMMON_MQH
+
+
+//--- Direction d'un setup / d'un biais
+enum ENUM_ICT_DIR
+{
+   DIR_NONE = 0,
+   DIR_BUY  = 1,
+   DIR_SELL = -1
+};
+
+//--- Type de setup
+enum ENUM_SETUP_TYPE
+{
+   SETUP_SILVER_BULLET = 0,  // Silver Bullet (M5, fenetres 1h)
+   SETUP_MACRO_BREAKER = 1   // Macro Breaker (M1, macros 20 min)
+};
+
+//--- Fenetres Silver Bullet (heure de New York)
+enum ENUM_SB_WINDOW
+{
+   WIN_NONE   = 0,   // aucune
+   WIN_LONDON = 1,   // 03:00-04:00 NY
+   WIN_NY_AM  = 2,   // 10:00-11:00 NY
+   WIN_NY_PM  = 3    // 14:00-15:00 NY
+};
+
+//--- Mode d'entree Silver Bullet
+enum ENUM_ENTRY_MODE
+{
+   ENTRY_FVG_TOP        = 0,  // ordre limite sur le bord du FVG
+   ENTRY_FVG_CE         = 1,  // ordre limite sur le consequent encroachment (50 % du FVG)
+   ENTRY_MARKET_ON_MSS  = 2   // au marche des la confirmation MSS
+};
+
+//--- Niveau d'entree Macro Breaker
+enum ENUM_MB_ENTRY
+{
+   MB_ENTRY_BREAKER_EDGE = 0,  // bord du breaker (high pour un achat)
+   MB_ENTRY_BREAKER_BODY = 1,  // corps du breaker
+   MB_ENTRY_BREAKER_CE   = 2   // milieu du breaker
+};
+
+//--- Mode de cible
+enum ENUM_TP_MODE
+{
+   TP_NEAREST_POOL = 0,  // pool de liquidite oppose le plus proche (RR min impose)
+   TP_FIXED_RR     = 1   // RR fixe
+};
+
+//--- Types de niveaux de liquidite / reference
+enum ENUM_V6_LIQ
+{
+   V6L_PDH = 0, V6L_PDL,
+   V6L_PWH,     V6L_PWL,
+   V6L_ASIA_HIGH,   V6L_ASIA_LOW,
+   V6L_LONDON_HIGH, V6L_LONDON_LOW,
+   V6L_NYAM_HIGH,   V6L_NYAM_LOW,
+   V6L_EQ_HIGH,     V6L_EQ_LOW,
+   V6L_IPDA_HIGH,   V6L_IPDA_LOW,
+   V6L_HTF_SWING_HIGH, V6L_HTF_SWING_LOW,
+   V6L_LTF_SWING_HIGH, V6L_LTF_SWING_LOW,
+   V6L_M1_SWING_HIGH,  V6L_M1_SWING_LOW,
+   V6L_OPR_HIGH,   V6L_OPR_LOW,
+   V6L_TBR_HIGH,   V6L_TBR_LOW,
+   V6L_NDOG_HIGH,  V6L_NDOG_LOW,
+   V6L_NWOG_HIGH,  V6L_NWOG_LOW,
+   V6L_SD_TARGET
+};
+
+//--- Niveau de liquidite
+struct SV6Level
+{
+   double        price;
+   int           rank;     // 3 = PDH/PDL/PWH/PWL/IPDA, 2 = session/equal/HTF swing/OPR/NDOG, 1 = swing LTF / SD
+   ENUM_V6_LIQ type;
+   datetime      time;
+   bool          isHigh;
+};
+
+//--- Sweep de liquidite detecte
+struct SV6Sweep
+{
+   bool          found;
+   double        level;
+   int           rank;
+   ENUM_V6_LIQ type;
+   datetime      levelTime;
+   int           extremeIdx;        // index serie de l'extreme du sweep
+   double        extreme;
+   datetime      extremeTime;
+   int           episodeNewestIdx;  // index de la derniere bougie sous/au-dessus du niveau
+   int           episodeBars;
+   double        penetrationATR;
+};
+
+//--- Market Structure Shift
+struct SV6MSS
+{
+   bool     found;
+   int      barIdx;
+   datetime barTime;
+   double   brokenLevel;
+   double   dispBody;       // plus grand corps de la jambe
+   double   legExtreme;     // extreme de la jambe apres le MSS
+   int      legExtremeIdx;
+};
+
+//--- Fair Value Gap
+struct SV6FVG
+{
+   bool     found;
+   int      midIdx;
+   datetime time;
+   double   top;
+   double   bottom;
+   double   ce;
+   double   size;
+   bool     touched;
+};
+
+//--- Breaker block (Macro Breaker)
+struct SV6Breaker
+{
+   bool     found;
+   int      candleIdx;      // bougie qui a forme le swing (down-close pour un breaker haussier)
+   datetime time;
+   double   top;            // high de la bougie
+   double   bottom;         // low de la bougie
+   double   bodyTop;
+   double   bodyBottom;
+   double   swingLevel;     // extreme du swing casse (high pour haussier)
+   int      confirmIdx;     // bougie dont le corps cloture au-dela du corps du breaker
+   datetime confirmTime;
+   double   dispBody;
+   bool     unicorn;        // FVG a l'interieur du breaker
+   double   zoneTop;        // zone d'entree retenue (breaker ou FVG dans le breaker)
+   double   zoneBottom;
+};
+
+//--- Setup complet
+struct SV6Setup
+{
+   bool            valid;
+   ENUM_SETUP_TYPE setupType;
+   ENUM_ICT_DIR    dir;
+   ENUM_SB_WINDOW  window;
+   datetime        windowStart;
+   datetime        windowEnd;
+   int             macroId;        // HHMM NY du debut de macro, 0 si aucune
+   bool            macroHighProb;
+   SV6Sweep          sweep;
+   SV6MSS            mss;
+   SV6FVG            fvg;
+   SV6Breaker        breaker;
+   double          entry;
+   double          sl;
+   double          tp;
+   double          rr;
+   double          riskDist;
+   double          legLow;
+   double          legHigh;
+   double          retracePct;     // retracement de la jambe au niveau de l'entree (0..1)
+   double          pdPct;          // position dans le dealing range (0 = bas, 1 = haut)
+   bool            inOTE;
+   bool            inDiscount;
+   bool            biasAligned;
+   bool            inMacro;
+   bool            fvgUntouched;
+   bool            marketEntry;
+   bool            needsOBConfirm; // ENTRY_OB_AFTER_FVG : armer, attendre le rejet du FVG
+   bool            unicorn;
+   bool            bpr;
+   bool            refLevelHit;
+   bool            trueOpenAligned;
+   bool            eqWarning;
+   bool            relaxed;        // v6.20 : setup issu de la 2e passe relachee
+   int             dowScore;
+   int             score;
+   ENUM_ICT_DIR    bias;
+   double          atr;
+   double          atrD1;
+   double          spreadPts;
+   double          dispBodyATR;
+   double          fvgSizeATR;
+   double          trueOpen;
+   int             tpSource;       // ENUM_V6_LIQ ou -1 pour RR fixe
+   string          refLevelName;
+   string          id;
+   string          rejectReason;
+};
+
+//+------------------------------------------------------------------+
+//| Utilitaires                                                      |
+//+------------------------------------------------------------------+
+string V6DirToStr(const ENUM_ICT_DIR d)
+{
+   if(d == DIR_BUY)  return "BUY";
+   if(d == DIR_SELL) return "SELL";
+   return "NONE";
+}
+
+string V6SetupTypeToStr(const ENUM_SETUP_TYPE t)
+{
+   return (t == SETUP_MACRO_BREAKER) ? "MB" : "SB";
+}
+
+string V6WindowToStr(const ENUM_SB_WINDOW w)
+{
+   switch(w)
+   {
+      case WIN_LONDON: return "LONDON";
+      case WIN_NY_AM:  return "NY_AM";
+      case WIN_NY_PM:  return "NY_PM";
+      default:         return "NONE";
+   }
+}
+
+string V6LiqTypeToStr(const int t)
+{
+   switch(t)
+   {
+      case V6L_PDH: return "PDH";               case V6L_PDL: return "PDL";
+      case V6L_PWH: return "PWH";               case V6L_PWL: return "PWL";
+      case V6L_ASIA_HIGH: return "ASIA_H";      case V6L_ASIA_LOW: return "ASIA_L";
+      case V6L_LONDON_HIGH: return "LONDON_H";  case V6L_LONDON_LOW: return "LONDON_L";
+      case V6L_NYAM_HIGH: return "NYAM_H";      case V6L_NYAM_LOW: return "NYAM_L";
+      case V6L_EQ_HIGH: return "EQH";           case V6L_EQ_LOW: return "EQL";
+      case V6L_IPDA_HIGH: return "IPDA_H";      case V6L_IPDA_LOW: return "IPDA_L";
+      case V6L_HTF_SWING_HIGH: return "HTF_SH"; case V6L_HTF_SWING_LOW: return "HTF_SL";
+      case V6L_LTF_SWING_HIGH: return "LTF_SH"; case V6L_LTF_SWING_LOW: return "LTF_SL";
+      case V6L_M1_SWING_HIGH: return "M1_SH";   case V6L_M1_SWING_LOW: return "M1_SL";
+      case V6L_OPR_HIGH: return "OPR_H";        case V6L_OPR_LOW: return "OPR_L";
+      case V6L_TBR_HIGH: return "TBR_H";        case V6L_TBR_LOW: return "TBR_L";
+      case V6L_NDOG_HIGH: return "NDOG_H";      case V6L_NDOG_LOW: return "NDOG_L";
+      case V6L_NWOG_HIGH: return "NWOG_H";      case V6L_NWOG_LOW: return "NWOG_L";
+      case V6L_SD_TARGET: return "SD";
+      case -1: return "FIXED_RR";
+      default: return "UNKNOWN";
+   }
+}
+
+double V6NormPrice(const string sym, const double p)
+{
+   int d = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   return NormalizeDouble(p, d);
+}
+
+
+double V6BodyOf(const MqlRates &r) { return MathAbs(r.close - r.open); }
+double V6BodyTop(const MqlRates &r) { return MathMax(r.open, r.close); }
+double V6BodyBottom(const MqlRates &r) { return MathMin(r.open, r.close); }
+
+string V6TsToStr(const datetime t) { return TimeToString(t, TIME_DATE | TIME_MINUTES); }
+
+string V6D2(const double v, const int digits = 2) { return DoubleToString(v, digits); }
+
+void V6ResetSetup(SV6Setup &s)
+{
+   s.valid = false;
+   s.setupType = SETUP_SILVER_BULLET;
+   s.dir = DIR_NONE;
+   s.window = WIN_NONE;
+   s.windowStart = 0;
+   s.windowEnd = 0;
+   s.macroId = 0;
+   s.macroHighProb = false;
+   ZeroMemory(s.sweep);
+   ZeroMemory(s.mss);
+   ZeroMemory(s.fvg);
+   ZeroMemory(s.breaker);
+   s.entry = 0; s.sl = 0; s.tp = 0; s.rr = 0; s.riskDist = 0;
+   s.legLow = 0; s.legHigh = 0; s.retracePct = 0; s.pdPct = 0.5;
+   s.inOTE = false; s.inDiscount = false; s.biasAligned = false;
+   s.inMacro = false; s.fvgUntouched = false; s.marketEntry = false; s.needsOBConfirm = false;
+   s.unicorn = false; s.bpr = false; s.refLevelHit = false; s.trueOpenAligned = false; s.eqWarning = false;
+   s.relaxed = false;
+   s.dowScore = 0;
+   s.score = 0; s.bias = DIR_NONE; s.atr = 0; s.atrD1 = 0; s.spreadPts = 0;
+   s.dispBodyATR = 0; s.fvgSizeATR = 0; s.trueOpen = 0; s.tpSource = -1;
+   s.refLevelName = ""; s.id = ""; s.rejectReason = "";
+}
+
+#endif // ICTV6_COMMON_MQH
+//=== fin V6_Common.mqh ===
+
+//=== début V6_SessionClock.mqh ===
+#ifndef ICTV6_SESSIONCLOCK_MQH
+#define ICTV6_SESSIONCLOCK_MQH
+
+//+------------------------------------------------------------------+
+//| CV6Clock : horloge des modèles v6.20 (fenêtres Silver Bullet,    |
+//| table des macros ICT). Repris de CSessionClock (v6.20) ; les|
+//| conversions serveur <-> New York passent par le CTimeManager     |
+//| d'ICT NAS (un seul réglage de fuseau : InpServerTZ).             |
+//+------------------------------------------------------------------+
+#define ICTV6_MAX_MACROS 32
+
+class CV6Clock
+{
+private:
+   CTimeManager *m_tm;
+   bool     m_useLondon;
+   bool     m_useNYAM;
+   bool     m_useNYPM;
+
+   //--- table des macros (heure NY)
+   int      m_mId[ICTV6_MAX_MACROS];
+   int      m_mStart[ICTV6_MAX_MACROS];
+   int      m_mEnd[ICTV6_MAX_MACROS];
+   bool     m_mHigh[ICTV6_MAX_MACROS];
+   bool     m_mEnabled[ICTV6_MAX_MACROS];
+   string   m_mName[ICTV6_MAX_MACROS];
+   int      m_mCount;
+
+   void AddMacro(const int id, const int startMin, const int endMin, const bool highProb, const string name)
+   {
+      if(m_mCount >= ICTV6_MAX_MACROS) return;
+      m_mId[m_mCount] = id; m_mStart[m_mCount] = startMin; m_mEnd[m_mCount] = endMin;
+      m_mHigh[m_mCount] = highProb; m_mEnabled[m_mCount] = false; m_mName[m_mCount] = name;
+      m_mCount++;
+   }
+   void BuildMacroTable()
+   {
+      m_mCount = 0;
+      //--- Londres
+      AddMacro(150,  110, 130, false, "01:50 manipulation");
+      AddMacro(250,  170, 190, false, "02:50 power hour / expansion");
+      AddMacro(320,  200, 220, true,  "03:20 reversal / retracement");
+      AddMacro(350,  230, 250, false, "03:50 continuation de 03:20");
+      AddMacro(420,  260, 280, false, "04:20");
+      //--- Early NY
+      AddMacro(650,  410, 430, false, "06:50 early NY");
+      AddMacro(750,  470, 490, false, "07:50 early NY");
+      //--- NY
+      AddMacro(820,  500, 520, true,  "08:20 manipulation / spooling (MSS)");
+      AddMacro(850,  530, 550, false, "08:50 accumulation (low prob)");
+      AddMacro(920,  560, 580, true,  "09:20 manipulation high prob");
+      AddMacro(950,  590, 610, false, "09:50 continuation de 09:20");
+      AddMacro(1020, 620, 640, true,  "10:20 reversal / retracement high prob");
+      AddMacro(1050, 650, 670, false, "10:50 continuation de 10:20");
+      AddMacro(1120, 680, 700, false, "11:20 changement de tendance");
+      AddMacro(1150, 710, 730, false, "11:50 changement / continuation");
+      AddMacro(1220, 740, 760, false, "12:20 volatilite");
+      AddMacro(1250, 770, 790, false, "12:50 pre-lunch");
+      AddMacro(1320, 800, 820, true,  "13:20 high prob + opening range PM");
+      AddMacro(1350, 830, 850, false, "13:50");
+      AddMacro(1420, 860, 880, false, "14:20 volatilite + livraison swing");
+      AddMacro(1450, 890, 910, false, "14:50");
+      AddMacro(1515, 915, 940, true,  "15:15 spooling high prob");
+      AddMacro(1550, 950, 970, true,  "15:50 final hour high prob");
+   }
+
+   static datetime DayStartOf(const datetime t)
+   {
+      long v = (long)t;
+      return (datetime)(v - (v % 86400));
+   }
+
+public:
+   CV6Clock()
+   {
+      m_tm = NULL;
+      m_useLondon = true; m_useNYAM = true; m_useNYPM = true;
+      BuildMacroTable();
+   }
+
+   void Init(CTimeManager *tm, const bool useLondon, const bool useNYAM, const bool useNYPM, const string enabledMacros)
+   {
+      m_tm = tm;
+      m_useLondon = useLondon;
+      m_useNYAM = useNYAM;
+      m_useNYPM = useNYPM;
+      SetEnabledMacros(enabledMacros);
+   }
+
+   //--- "0320,0350,1020" : liste des macros autorisees pour le Macro Breaker
+   void SetEnabledMacros(const string list)
+   {
+      for(int i = 0; i < m_mCount; i++) m_mEnabled[i] = false;
+      string parts[];
+      int n = StringSplit(list, ',', parts);
+      for(int k = 0; k < n; k++)
+      {
+         string p = parts[k];
+         StringTrimLeft(p); StringTrimRight(p);
+         StringReplace(p, ":", "");
+         if(p == "") continue;
+         int id = (int)StringToInteger(p);
+         for(int i = 0; i < m_mCount; i++) if(m_mId[i] == id) m_mEnabled[i] = true;
+      }
+   }
+   int EnabledCount()
+   {
+      int n = 0;
+      for(int i = 0; i < m_mCount; i++) if(m_mEnabled[i]) n++;
+      return n;
+   }
+
+   datetime ServerToNY(const datetime srv) { return m_tm.ServerToNY(srv); }
+   datetime NYToServer(const datetime ny)  { return m_tm.NYToServer(ny); }
+
+   int NYMinuteOfDay(const datetime srv)
+   {
+      MqlDateTime t;
+      TimeToStruct(ServerToNY(srv), t);
+      return t.hour * 60 + t.min;
+   }
+   int NYDayOfWeek(const datetime srv)
+   {
+      MqlDateTime t;
+      TimeToStruct(ServerToNY(srv), t);
+      return t.day_of_week;
+   }
+   datetime NYDayStartServer(const datetime srv)
+   {
+      return NYToServer(DayStartOf(ServerToNY(srv)));
+   }
+   //--- Intervalle [start, end) en serveur pour une plage exprimee en minutes NY
+   void NYRangeToServer(const datetime srv, const int startMin, const int endMin, datetime &startSrv, datetime &endSrv)
+   {
+      datetime dayStartNY = DayStartOf(ServerToNY(srv));
+      startSrv = NYToServer((datetime)((long)dayStartNY + (long)startMin * 60));
+      endSrv   = NYToServer((datetime)((long)dayStartNY + (long)endMin * 60));
+   }
+   //--- Instant serveur correspondant a une heure NY (minutes) d'un jour NY decale de dayOffset
+   datetime NYMinuteToServer(const datetime srv, const int minuteOfDay, const int dayOffset = 0)
+   {
+      datetime dayStartNY = DayStartOf(ServerToNY(srv));
+      return NYToServer((datetime)((long)dayStartNY + (long)dayOffset * 86400 + (long)minuteOfDay * 60));
+   }
+
+   //--- Fenetre Silver Bullet active a l'instant srv (heure NY : 3-4, 10-11, 14-15)
+   ENUM_SB_WINDOW WindowAt(const datetime srv, datetime &startSrv, datetime &endSrv)
+   {
+      int mod = NYMinuteOfDay(srv);
+      ENUM_SB_WINDOW w = WIN_NONE;
+      int s = 0, e = 0;
+      if(m_useLondon && mod >= 180 && mod < 240) { w = WIN_LONDON; s = 180; e = 240; }
+      else if(m_useNYAM && mod >= 600 && mod < 660) { w = WIN_NY_AM; s = 600; e = 660; }
+      else if(m_useNYPM && mod >= 840 && mod < 900) { w = WIN_NY_PM; s = 840; e = 900; }
+      if(w == WIN_NONE)
+      {
+         startSrv = 0; endSrv = 0;
+         return WIN_NONE;
+      }
+      NYRangeToServer(srv, s, e, startSrv, endSrv);
+      return w;
+   }
+
+   //--- Macro couvrant l'instant srv (toutes macros, activees ou non). Retourne l'index ou -1.
+   int MacroIndexAt(const datetime srv)
+   {
+      int m = NYMinuteOfDay(srv);
+      for(int i = 0; i < m_mCount; i++)
+         if(m >= m_mStart[i] && m < m_mEnd[i]) return i;
+      return -1;
+   }
+   //--- Derniere macro terminee depuis moins de graceMin minutes (index ou -1)
+   int MacroIndexRecent(const datetime srv, const int graceMin)
+   {
+      int m = NYMinuteOfDay(srv);
+      for(int i = 0; i < m_mCount; i++)
+         if(m >= m_mEnd[i] && m < m_mEnd[i] + graceMin) return i;
+      return -1;
+   }
+   bool   InMacro(const datetime srv) { return MacroIndexAt(srv) >= 0; }
+   int    MacroId(const int idx)       { return (idx >= 0 && idx < m_mCount) ? m_mId[idx] : 0; }
+   bool   MacroEnabled(const int idx)  { return (idx >= 0 && idx < m_mCount) ? m_mEnabled[idx] : false; }
+   bool   MacroHighProb(const int idx) { return (idx >= 0 && idx < m_mCount) ? m_mHigh[idx] : false; }
+   string MacroName(const int idx)     { return (idx >= 0 && idx < m_mCount) ? m_mName[idx] : "aucune"; }
+   void   MacroRangeServer(const datetime srv, const int idx, datetime &startSrv, datetime &endSrv)
+   {
+      if(idx < 0 || idx >= m_mCount) { startSrv = 0; endSrv = 0; return; }
+      NYRangeToServer(srv, m_mStart[idx], m_mEnd[idx], startSrv, endSrv);
+   }
+
+   //--- Profil hebdomadaire : lundi 0, mardi/mercredi/jeudi +1, vendredi -1, week-end -2
+   int DayOfWeekScore(const datetime srv)
+   {
+      int d = NYDayOfWeek(srv);
+      if(d == 2 || d == 3 || d == 4) return 1;
+      if(d == 1) return 0;
+      if(d == 5) return -1;
+      return -2;
+   }
+};
+
+#endif // ICTV6_SESSIONCLOCK_MQH
+//=== fin V6_SessionClock.mqh ===
+
+//=== début V6_MarketStructure.mqh ===
+#ifndef ICTV6_MARKETSTRUCTURE_MQH
+#define ICTV6_MARKETSTRUCTURE_MQH
+
+class CV6Structure
+{
+public:
+   //--- Swing high confirme a l'index i (necessite s bougies fermees de chaque cote)
+   static bool IsSwingHigh(const MqlRates &r[], const int i, const int s, const int count)
+   {
+      if(i - s < 1 || i + s >= count) return false;
+      for(int k = 1; k <= s; k++)
+         if(r[i].high <= r[i - k].high || r[i].high < r[i + k].high) return false;
+      return true;
+   }
+   static bool IsSwingLow(const MqlRates &r[], const int i, const int s, const int count)
+   {
+      if(i - s < 1 || i + s >= count) return false;
+      for(int k = 1; k <= s; k++)
+         if(r[i].low >= r[i - k].low || r[i].low > r[i + k].low) return false;
+      return true;
+   }
+
+   //--- Biais par dernier Break Of Structure (iteration chronologique)
+   static ENUM_ICT_DIR Bias(const MqlRates &r[], const int count, const int s,
+                            double &lastSwingHigh, double &lastSwingLow)
+   {
+      ENUM_ICT_DIR bias = DIR_NONE;
+      double curSH = 0, curSL = 0;
+      lastSwingHigh = 0; lastSwingLow = 0;
+      for(int k = count - s - 2; k >= 1; k--)
+      {
+         int i = k + s;   // le swing a l'index i devient connu a la bougie k
+         if(IsSwingHigh(r, i, s, count)) { curSH = r[i].high; lastSwingHigh = curSH; }
+         if(IsSwingLow(r, i, s, count))  { curSL = r[i].low;  lastSwingLow = curSL; }
+         if(curSH > 0 && r[k].close > curSH) { bias = DIR_BUY;  curSH = 0; }
+         if(curSL > 0 && r[k].close < curSL) { bias = DIR_SELL; curSL = 0; }
+      }
+      return bias;
+   }
+
+   //--- Dernier swing low confirme sous 'price' (pour trailing structurel)
+   static double LastSwingLowBelow(const MqlRates &r[], const int count, const int s, const double price, const int maxLook)
+   {
+      int lim = MathMin(count - s - 1, maxLook);
+      for(int i = s + 1; i <= lim; i++)
+         if(IsSwingLow(r, i, s, count) && r[i].low < price) return r[i].low;
+      return 0.0;
+   }
+   static double LastSwingHighAbove(const MqlRates &r[], const int count, const int s, const double price, const int maxLook)
+   {
+      int lim = MathMin(count - s - 1, maxLook);
+      for(int i = s + 1; i <= lim; i++)
+         if(IsSwingHigh(r, i, s, count) && r[i].high > price) return r[i].high;
+      return 0.0;
+   }
+
+   //--- Market Structure Shift apres un sweep.
+   //--- BUY : cloture au-dessus du dernier swing high precedant l'extreme du sweep.
+   static bool FindMSS(const ENUM_ICT_DIR dir, const MqlRates &r[], const int count, const int extremeIdx,
+                       const double extreme, const int maxBarsAfter, const double minRangeATR,
+                       const double dispBodyATR, const double atr, const int s, SV6MSS &out)
+   {
+      ZeroMemory(out);
+      if(extremeIdx < 2 || extremeIdx >= count - s - 1 || atr <= 0) return false;
+
+      //--- niveau a casser : swing oppose le plus recent avant l'extreme, a distance minimale
+      double level = 0;
+      int lim = MathMin(count - s - 1, extremeIdx + 60);
+      for(int i = extremeIdx + 1; i <= lim; i++)
+      {
+         if(dir == DIR_BUY && IsSwingHigh(r, i, s, count) && r[i].high >= extreme + minRangeATR * atr)
+         { level = r[i].high; break; }
+         if(dir == DIR_SELL && IsSwingLow(r, i, s, count) && r[i].low <= extreme - minRangeATR * atr)
+         { level = r[i].low; break; }
+      }
+      if(level == 0)
+      {
+         //--- secours : extreme des 10 bougies precedant le sweep
+         int to = MathMin(count - 1, extremeIdx + 10);
+         for(int i = extremeIdx + 1; i <= to; i++)
+         {
+            if(dir == DIR_BUY)  level = (level == 0) ? r[i].high : MathMax(level, r[i].high);
+            else                level = (level == 0) ? r[i].low  : MathMin(level, r[i].low);
+         }
+         if(level == 0) return false;
+         if(dir == DIR_BUY  && level < extreme + minRangeATR * atr) return false;
+         if(dir == DIR_SELL && level > extreme - minRangeATR * atr) return false;
+      }
+
+      //--- premiere cloture au-dela du niveau apres l'extreme
+      int mssBar = -1;
+      int stop = MathMax(1, extremeIdx - maxBarsAfter);
+      for(int j = extremeIdx - 1; j >= stop; j--)
+      {
+         if(dir == DIR_BUY  && r[j].low  < extreme) return false;   // extreme du sweep viole
+         if(dir == DIR_SELL && r[j].high > extreme) return false;
+         if(dir == DIR_BUY  && r[j].close > level) { mssBar = j; break; }
+         if(dir == DIR_SELL && r[j].close < level) { mssBar = j; break; }
+      }
+      if(mssBar < 0) return false;
+
+      //--- displacement : plus grand corps de la jambe extreme -> MSS
+      double body = 0;
+      for(int j = mssBar; j <= extremeIdx - 1; j++)
+         body = MathMax(body, V6BodyOf(r[j]));
+      if(body < dispBodyATR * atr) return false;
+
+      //--- extreme de la jambe depuis le MSS jusqu'a maintenant (bougie 0 incluse)
+      double legExt = (dir == DIR_BUY) ? r[mssBar].high : r[mssBar].low;
+      int legIdx = mssBar;
+      for(int j = mssBar; j >= 0; j--)
+      {
+         if(dir == DIR_BUY  && r[j].high > legExt) { legExt = r[j].high; legIdx = j; }
+         if(dir == DIR_SELL && r[j].low  < legExt) { legExt = r[j].low;  legIdx = j; }
+      }
+
+      out.found = true;
+      out.barIdx = mssBar;
+      out.barTime = r[mssBar].time;
+      out.brokenLevel = level;
+      out.dispBody = body;
+      out.legExtreme = legExt;
+      out.legExtremeIdx = legIdx;
+      return true;
+   }
+
+   //--- Etat UT Bot (ligne de trailing ATR) sur la derniere bougie fermee.
+   static ENUM_ICT_DIR UTBotState(const MqlRates &r[], const double &atr[], const int count, const double key)
+   {
+      if(count < 10) return DIR_NONE;
+      double stop = 0;
+      int start = MathMin(count - 2, 300);
+      for(int i = start; i >= 1; i--)
+      {
+         double nLoss = key * atr[i];
+         double c = r[i].close;
+         double p = r[i + 1].close;
+         double prev = stop;
+         if(prev == 0) { stop = c - nLoss; continue; }
+         if(c > prev && p > prev)       stop = MathMax(prev, c - nLoss);
+         else if(c < prev && p < prev)  stop = MathMin(prev, c + nLoss);
+         else if(c > prev)              stop = c - nLoss;
+         else                           stop = c + nLoss;
+      }
+      if(stop == 0) return DIR_NONE;
+      return (r[1].close > stop) ? DIR_BUY : DIR_SELL;
+   }
+};
+
+#endif // ICTV6_MARKETSTRUCTURE_MQH
+//=== fin V6_MarketStructure.mqh ===
+
+//=== début V6_FVG.mqh ===
+#ifndef ICTV6_FVG_MQH
+#define ICTV6_FVG_MQH
+
+class CV6FVGTools
+{
+public:
+   //--- Tous les FVG dans la jambe [newestIdx .. oldestIdx] (indices serie).
+   //--- Bougie du milieu m : plus vieille m+1, plus recente m-1.
+   //--- BUY : low[m-1] > high[m+1] + minSize.
+   //--- v6.20 : requireBody rend optionnel le corps directionnel de la bougie centrale.
+   //--- Les FVG sont empiles par index croissant : out[n-1] est le PLUS ANCIEN de la
+   //--- jambe, c'est-a-dire le PREMIER forme apres le sweep (1st FVG du displacement).
+   static int FindInLeg(const ENUM_ICT_DIR dir, const MqlRates &r[], const int count,
+                        const int newestIdx, const int oldestIdx, const double minSize, SV6FVG &out[],
+                        const bool requireBody = true)
+   {
+      ArrayResize(out, 0);
+      int from = MathMax(2, newestIdx - 1);
+      int to   = MathMin(count - 2, oldestIdx - 1);
+      for(int m = from; m <= to; m++)
+      {
+         SV6FVG f;
+         ZeroMemory(f);
+         if(dir == DIR_BUY)
+         {
+            double gap = r[m - 1].low - r[m + 1].high;
+            if(gap < minSize) continue;
+            if(requireBody && r[m].close <= r[m].open) continue;   // bougie centrale haussiere
+            f.top = r[m - 1].low;
+            f.bottom = r[m + 1].high;
+         }
+         else
+         {
+            double gap = r[m + 1].low - r[m - 1].high;
+            if(gap < minSize) continue;
+            if(requireBody && r[m].close >= r[m].open) continue;
+            f.top = r[m + 1].low;
+            f.bottom = r[m - 1].high;
+         }
+         f.found = true;
+         f.midIdx = m;
+         f.time = r[m].time;
+         f.size = f.top - f.bottom;
+         f.ce = (f.top + f.bottom) / 2.0;
+         f.touched = false;
+         CheckMitigation(dir, r, f);
+         if(!f.found) continue;
+         int n = ArraySize(out);
+         ArrayResize(out, n + 1);
+         out[n] = f;
+      }
+      return ArraySize(out);
+   }
+
+   //--- Balanced Price Range : un FVG oppose plus ancien recouvre le FVG courant
+   static bool HasOpposingOverlap(const ENUM_ICT_DIR dir, const MqlRates &r[], const int count,
+                                  const SV6FVG &f, const int lookbackBars, const double minSize)
+   {
+      int from = f.midIdx + 2;
+      int to = MathMin(count - 2, f.midIdx + lookbackBars);
+      for(int m = from; m <= to; m++)
+      {
+         double top, bottom;
+         if(dir == DIR_BUY)
+         {
+            double gap = r[m + 1].low - r[m - 1].high;      // FVG baissier
+            if(gap < minSize) continue;
+            top = r[m + 1].low; bottom = r[m - 1].high;
+         }
+         else
+         {
+            double gap = r[m - 1].low - r[m + 1].high;      // FVG haussier
+            if(gap < minSize) continue;
+            top = r[m - 1].low; bottom = r[m + 1].high;
+         }
+         if(bottom <= f.top && top >= f.bottom) return true;
+      }
+      return false;
+   }
+
+   //--- Un FVG BUY est mitige si une bougie posterieure a traverse tout le gap (low < bottom).
+   static void CheckMitigation(const ENUM_ICT_DIR dir, const MqlRates &r[], SV6FVG &f)
+   {
+      for(int k = f.midIdx - 2; k >= 0; k--)
+      {
+         if(dir == DIR_BUY)
+         {
+            if(r[k].low < f.bottom) { f.found = false; return; }
+            if(r[k].low <= f.top)   f.touched = true;
+         }
+         else
+         {
+            if(r[k].high > f.top)    { f.found = false; return; }
+            if(r[k].high >= f.bottom) f.touched = true;
+         }
+      }
+   }
+};
+
+#endif // ICTV6_FVG_MQH
+//=== fin V6_FVG.mqh ===
+
+//=== début V6_LiquidityMap.mqh ===
+#ifndef ICTV6_LIQUIDITYMAP_MQH
+#define ICTV6_LIQUIDITYMAP_MQH
+
+class CV6LiqMap
+{
+private:
+   SV6Level m_levels[];
+   int       m_count;
+   string    m_sym;
+   double    m_drLow;
+   double    m_drHigh;
+   double    m_mergeTol;
+
+public:
+   //--- Ajoute un niveau (fusion si un niveau proche existe deja, le rang le plus eleve gagne)
+   void AddLevel(const double price, const int rank, const ENUM_V6_LIQ type, const datetime time, const bool isHigh)
+   {
+      if(price <= 0) return;
+      for(int i = 0; i < m_count; i++)
+      {
+         if(m_levels[i].isHigh == isHigh && MathAbs(m_levels[i].price - price) <= m_mergeTol)
+         {
+            if(rank > m_levels[i].rank)
+            {
+               m_levels[i].rank = rank;
+               m_levels[i].type = type;
+               m_levels[i].price = price;
+               m_levels[i].time = time;
+            }
+            return;
+         }
+      }
+      ArrayResize(m_levels, m_count + 1);
+      m_levels[m_count].price = price;
+      m_levels[m_count].rank = rank;
+      m_levels[m_count].type = type;
+      m_levels[m_count].time = time;
+      m_levels[m_count].isHigh = isHigh;
+      m_count++;
+   }
+
+private:
+   //--- Extremes des bougies dont l'heure est dans [s, e)
+   static bool RangeInTime(const MqlRates &r[], const int count, const datetime s, const datetime e,
+                           double &hi, double &lo, datetime &hiT, datetime &loT)
+   {
+      hi = 0; lo = 0; hiT = 0; loT = 0;
+      bool any = false;
+      for(int i = 0; i < count; i++)
+      {
+         if(r[i].time < s || r[i].time >= e) continue;
+         if(!any || r[i].high > hi) { hi = r[i].high; hiT = r[i].time; }
+         if(!any || r[i].low < lo)  { lo = r[i].low;  loT = r[i].time; }
+         any = true;
+      }
+      return any;
+   }
+
+   void AddSession(CV6Clock &clock, const MqlRates &ltf[], const int ltfCount, const datetime nowSrv,
+                   const int startMin, const int endMin, const ENUM_V6_LIQ hiType, const ENUM_V6_LIQ loType)
+   {
+      datetime s, e;
+      clock.NYRangeToServer(nowSrv, startMin, endMin, s, e);
+      if(s >= nowSrv) return;               // session pas encore commencee
+      double hi, lo; datetime hiT, loT;
+      if(!RangeInTime(ltf, ltfCount, s, e, hi, lo, hiT, loT)) return;
+      AddLevel(hi, 2, hiType, hiT, true);
+      AddLevel(lo, 2, loType, loT, false);
+   }
+
+public:
+   CV6LiqMap() { m_count = 0; m_sym = ""; m_drLow = 0; m_drHigh = 0; m_mergeTol = 0; }
+
+   int Count() { return m_count; }
+   void Get(const int i, SV6Level &lv) { lv = m_levels[i]; }
+   double DealingRangeLow()  { return m_drLow; }
+   double DealingRangeHigh() { return m_drHigh; }
+
+   //--- Position dans le dealing range : 0 = bas, 0.5 = equilibre, 1 = haut
+   double PremiumDiscountPct(const double price)
+   {
+      if(m_drHigh <= m_drLow) return 0.5;
+      return (price - m_drLow) / (m_drHigh - m_drLow);
+   }
+
+   void Build(const string sym, CV6Clock &clock, const datetime nowSrv,
+              const MqlRates &ltf[], const int ltfCount,
+              const MqlRates &htf[], const int htfCount,
+              const MqlRates &d1[], const int d1Count,
+              const double atr, const int ipda1, const int ipda2, const int ipda3,
+              const int swingStrength, const double eqTolATR)
+   {
+      m_sym = sym;
+      m_count = 0;
+      ArrayResize(m_levels, 0);
+      m_mergeTol = MathMax(atr * 0.05, _Point * 5);
+
+      //--- Jour et semaine precedents
+      if(d1Count > 1)
+      {
+         AddLevel(d1[1].high, 3, V6L_PDH, d1[1].time, true);
+         AddLevel(d1[1].low,  3, V6L_PDL, d1[1].time, false);
+      }
+      double pwh = iHigh(sym, PERIOD_W1, 1);
+      double pwl = iLow(sym, PERIOD_W1, 1);
+      datetime pwt = iTime(sym, PERIOD_W1, 1);
+      if(pwh > 0 && pwl > 0)
+      {
+         AddLevel(pwh, 3, V6L_PWH, pwt, true);
+         AddLevel(pwl, 3, V6L_PWL, pwt, false);
+      }
+
+      //--- IPDA : extremes sur 20/40/60 jours fermes. Dealing range = premier lookback.
+      int look[3];
+      look[0] = ipda1; look[1] = ipda2; look[2] = ipda3;
+      for(int L = 0; L < 3; L++)
+      {
+         int n = MathMin(look[L], d1Count - 1);
+         if(n < 2) continue;
+         double hi = 0, lo = 0; datetime hiT = 0, loT = 0;
+         for(int i = 1; i <= n; i++)
+         {
+            if(hi == 0 || d1[i].high > hi) { hi = d1[i].high; hiT = d1[i].time; }
+            if(lo == 0 || d1[i].low  < lo) { lo = d1[i].low;  loT = d1[i].time; }
+         }
+         AddLevel(hi, 3, V6L_IPDA_HIGH, hiT, true);
+         AddLevel(lo, 3, V6L_IPDA_LOW,  loT, false);
+         if(L == 0) { m_drLow = lo; m_drHigh = hi; }
+      }
+
+      //--- Sessions du jour NY (minutes relatives a minuit NY ; negatif = veille)
+      AddSession(clock, ltf, ltfCount, nowSrv, -240, 0,   V6L_ASIA_HIGH,   V6L_ASIA_LOW);    // Asie 20:00-00:00
+      AddSession(clock, ltf, ltfCount, nowSrv, 120,  300, V6L_LONDON_HIGH, V6L_LONDON_LOW);  // Londres 02:00-05:00
+      AddSession(clock, ltf, ltfCount, nowSrv, 420,  720, V6L_NYAM_HIGH,   V6L_NYAM_LOW);    // NY AM 07:00-12:00
+
+      //--- Swings HTF (rang 2)
+      int added = 0;
+      for(int i = swingStrength + 1; i < htfCount - swingStrength && added < 16; i++)
+      {
+         if(CV6Structure::IsSwingHigh(htf, i, swingStrength, htfCount)) { AddLevel(htf[i].high, 2, V6L_HTF_SWING_HIGH, htf[i].time, true);  added++; }
+         if(CV6Structure::IsSwingLow(htf, i, swingStrength, htfCount))  { AddLevel(htf[i].low,  2, V6L_HTF_SWING_LOW,  htf[i].time, false); added++; }
+      }
+
+      //--- Swings LTF (rang 1) et equal highs/lows (rang 2)
+      double shP[]; datetime shT[]; double slP[]; datetime slT[];
+      int nsh = 0, nsl = 0;
+      int lim = MathMin(ltfCount - swingStrength - 1, 240);
+      for(int i = swingStrength + 1; i <= lim && (nsh < 14 || nsl < 14); i++)
+      {
+         if(nsh < 14 && CV6Structure::IsSwingHigh(ltf, i, swingStrength, ltfCount))
+         {
+            ArrayResize(shP, nsh + 1); ArrayResize(shT, nsh + 1);
+            shP[nsh] = ltf[i].high; shT[nsh] = ltf[i].time; nsh++;
+         }
+         if(nsl < 14 && CV6Structure::IsSwingLow(ltf, i, swingStrength, ltfCount))
+         {
+            ArrayResize(slP, nsl + 1); ArrayResize(slT, nsl + 1);
+            slP[nsl] = ltf[i].low; slT[nsl] = ltf[i].time; nsl++;
+         }
+      }
+      double eqTol = eqTolATR * atr;
+      for(int a = 0; a < nsh; a++)
+      {
+         bool eq = false;
+         for(int b = a + 1; b < nsh; b++)
+            if(MathAbs(shP[a] - shP[b]) <= eqTol) { eq = true; break; }
+         if(eq) AddLevel(shP[a], 2, V6L_EQ_HIGH, shT[a], true);
+         else   AddLevel(shP[a], 1, V6L_LTF_SWING_HIGH, shT[a], true);
+      }
+      for(int a = 0; a < nsl; a++)
+      {
+         bool eq = false;
+         for(int b = a + 1; b < nsl; b++)
+            if(MathAbs(slP[a] - slP[b]) <= eqTol) { eq = true; break; }
+         if(eq) AddLevel(slP[a], 2, V6L_EQ_LOW, slT[a], false);
+         else   AddLevel(slP[a], 1, V6L_LTF_SWING_LOW, slT[a], false);
+      }
+   }
+
+   //--- Sweeps confirmes. dir = DIR_BUY cherche les prises de liquidite sous les lows
+   //--- (sell-side), dir = DIR_SELL au-dessus des highs (buy-side).
+   int FindSweeps(const ENUM_ICT_DIR dir, const MqlRates &r[], const int count, const double atr,
+                  const int lookback, const double minPenATR, const int confirmBars,
+                  const int maxEpisodeBars, const datetime notOlderThan, SV6Sweep &out[])
+   {
+      ArrayResize(out, 0);
+      if(atr <= 0 || count < 10) return 0;
+      int lb = MathMin(lookback, count - 2);
+      double minPen = minPenATR * atr;
+      bool wantHigh = (dir == DIR_SELL);
+
+      for(int L = 0; L < m_count; L++)
+      {
+         if(m_levels[L].isHigh != wantHigh) continue;
+         double level = m_levels[L].price;
+
+         //--- bougie la plus recente ayant depasse le niveau de minPen
+         int v = -1;
+         for(int i = 1; i <= lb; i++)
+         {
+            if(r[i].time <= m_levels[L].time) break;            // le niveau n'existait pas encore
+            bool beyond = wantHigh ? (r[i].high > level + minPen) : (r[i].low < level - minPen);
+            if(beyond) { v = i; break; }
+         }
+         if(v < 0) continue;
+
+         //--- bornes de l'episode (bougies contigues au-dela du niveau)
+         int e1 = v;
+         while(e1 - 1 >= 1)
+         {
+            bool b = wantHigh ? (r[e1 - 1].high > level) : (r[e1 - 1].low < level);
+            if(!b) break;
+            e1--;
+         }
+         int e2 = v;
+         while(e2 + 1 <= lb)
+         {
+            bool b = wantHigh ? (r[e2 + 1].high > level) : (r[e2 + 1].low < level);
+            if(!b) break;
+            e2++;
+         }
+         int episodeBars = e2 - e1 + 1;
+         if(episodeBars > maxEpisodeBars) continue;              // cassure, pas un sweep
+
+         //--- confirmation : cloture de retour a l'interieur du niveau
+         int confirmIdx = -1;
+         bool closeInside = wantHigh ? (r[e1].close < level) : (r[e1].close > level);
+         if(closeInside) confirmIdx = e1;
+         else if(e1 > 1)
+         {
+            closeInside = wantHigh ? (r[e1 - 1].close < level) : (r[e1 - 1].close > level);
+            if(closeInside) confirmIdx = e1 - 1;
+         }
+         if(confirmIdx < 0) continue;
+
+         //--- extreme de l'episode
+         int exIdx = e1;
+         double ex = wantHigh ? r[e1].high : r[e1].low;
+         for(int i = e1; i <= e2; i++)
+         {
+            if(wantHigh  && r[i].high > ex) { ex = r[i].high; exIdx = i; }
+            if(!wantHigh && r[i].low  < ex) { ex = r[i].low;  exIdx = i; }
+         }
+         if(exIdx - confirmIdx > confirmBars) continue;           // retour trop lent
+         if(r[exIdx].time < notOlderThan) continue;
+
+         int n = ArraySize(out);
+         ArrayResize(out, n + 1);
+         out[n].found = true;
+         out[n].level = level;
+         out[n].rank = m_levels[L].rank;
+         out[n].type = m_levels[L].type;
+         out[n].levelTime = m_levels[L].time;
+         out[n].extremeIdx = exIdx;
+         out[n].extreme = ex;
+         out[n].extremeTime = r[exIdx].time;
+         out[n].episodeNewestIdx = e1;
+         out[n].episodeBars = episodeBars;
+         out[n].penetrationATR = MathAbs(ex - level) / atr;
+      }
+
+      //--- tri : rang decroissant puis plus recent d'abord
+      int n = ArraySize(out);
+      for(int a = 0; a < n - 1; a++)
+         for(int b = a + 1; b < n; b++)
+         {
+            bool swap = (out[b].rank > out[a].rank) ||
+                        (out[b].rank == out[a].rank && out[b].extremeIdx < out[a].extremeIdx);
+            if(swap) { SV6Sweep t = out[a]; out[a] = out[b]; out[b] = t; }
+         }
+      if(n > 8) { ArrayResize(out, 8); n = 8; }
+      return n;
+   }
+
+   //--- Pool oppose le plus proche au-dela de minDist (et sous maxDist) depuis entry
+   bool NearestPool(const ENUM_ICT_DIR dir, const double entry, const double minDist, const double maxDist,
+                    double &price, int &type)
+   {
+      price = 0; type = -1;
+      bool wantHigh = (dir == DIR_BUY);
+      for(int i = 0; i < m_count; i++)
+      {
+         if(m_levels[i].isHigh != wantHigh) continue;
+         double d = wantHigh ? (m_levels[i].price - entry) : (entry - m_levels[i].price);
+         if(d < minDist || d > maxDist) continue;
+         if(price == 0 || d < MathAbs(price - entry)) { price = m_levels[i].price; type = (int)m_levels[i].type; }
+      }
+      return (price > 0);
+   }
+
+   //--- Comme NearestPool, avec des niveaux supplementaires (deviations standard)
+   bool NearestPoolWithExtras(const ENUM_ICT_DIR dir, const double entry, const double minDist, const double maxDist,
+                              const double &extras[], double &price, int &type)
+   {
+      NearestPool(dir, entry, minDist, maxDist, price, type);
+      for(int i = 0; i < ArraySize(extras); i++)
+      {
+         double d = (dir == DIR_BUY) ? (extras[i] - entry) : (entry - extras[i]);
+         if(d < minDist || d > maxDist) continue;
+         if(price == 0 || d < MathAbs(price - entry)) { price = extras[i]; type = (int)V6L_SD_TARGET; }
+      }
+      return (price > 0);
+   }
+
+   //--- Equal highs/lows non balayes au-dela de 'price' dans le sens du stop
+   bool HasEqualLevelBeyond(const ENUM_ICT_DIR dir, const double price, const double maxDist, const double excludeLevel, const double tol)
+   {
+      for(int i = 0; i < m_count; i++)
+      {
+         if(dir == DIR_BUY  && m_levels[i].type != V6L_EQ_LOW)  continue;
+         if(dir == DIR_SELL && m_levels[i].type != V6L_EQ_HIGH) continue;
+         if(MathAbs(m_levels[i].price - excludeLevel) <= tol) continue;
+         double d = (dir == DIR_BUY) ? (price - m_levels[i].price) : (m_levels[i].price - price);
+         if(d > 0 && d <= maxDist) return true;
+      }
+      return false;
+   }
+
+   //--- Ajoute les swings d'une serie (ex: M1) comme niveaux de rang 1
+   void AddSwings(const MqlRates &r[], const int count, const int strength, const int maxEach,
+                  const ENUM_V6_LIQ hiType, const ENUM_V6_LIQ loType)
+   {
+      int nh = 0, nl = 0;
+      int lim = MathMin(count - strength - 1, 300);
+      for(int i = strength + 1; i <= lim && (nh < maxEach || nl < maxEach); i++)
+      {
+         if(nh < maxEach && CV6Structure::IsSwingHigh(r, i, strength, count)) { AddLevel(r[i].high, 1, hiType, r[i].time, true);  nh++; }
+         if(nl < maxEach && CV6Structure::IsSwingLow(r, i, strength, count))  { AddLevel(r[i].low,  1, loType, r[i].time, false); nl++; }
+      }
+   }
+
+   string Summary()
+   {
+      int r3 = 0, r2 = 0, r1 = 0;
+      for(int i = 0; i < m_count; i++)
+      {
+         if(m_levels[i].rank == 3) r3++;
+         else if(m_levels[i].rank == 2) r2++;
+         else r1++;
+      }
+      return StringFormat("niveaux %d (r3 %d, r2 %d, r1 %d) DR %.2f-%.2f", m_count, r3, r2, r1, m_drLow, m_drHigh);
+   }
+};
+
+#endif // ICTV6_LIQUIDITYMAP_MQH
+//=== fin V6_LiquidityMap.mqh ===
+
+//=== début V6_Reference.mqh ===
+#ifndef ICTV6_REFERENCE_MQH
+#define ICTV6_REFERENCE_MQH
+
+#define ICTV6_OPR_COUNT 4
+
+class CV6RefLevels
+{
+private:
+   CV6Clock *m_clock;
+   double   m_midnightOpen;
+   double   m_open0730;
+   double   m_ndogHigh, m_ndogLow;
+   double   m_nwogHigh, m_nwogLow;
+   double   m_pdHigh, m_pdLow;
+   double   m_oprHigh[ICTV6_OPR_COUNT], m_oprLow[ICTV6_OPR_COUNT];
+   bool     m_oprValid[ICTV6_OPR_COUNT];
+   int      m_oprStart[ICTV6_OPR_COUNT], m_oprEnd[ICTV6_OPR_COUNT];
+   double   m_tbrHigh, m_tbrLow;
+   bool     m_tbrValid;
+   double   m_adr5;
+   double   m_dayHigh, m_dayLow;
+   bool     m_useOPR, m_useTBR, m_useNDOG;
+   //--- v6.20 : heures de formation reelles, indispensables pour que FindSweeps
+   //--- accepte ces niveaux comme sources de sweep.
+   datetime m_ndogTime, m_nwogTime;
+
+   static bool RangeIn(const MqlRates &r[], const int count, const datetime s, const datetime e, double &hi, double &lo)
+   {
+      hi = 0; lo = 0; bool any = false;
+      for(int i = 0; i < count; i++)
+      {
+         if(r[i].time < s || r[i].time >= e) continue;
+         if(!any || r[i].high > hi) hi = r[i].high;
+         if(!any || r[i].low < lo) lo = r[i].low;
+         any = true;
+      }
+      return any;
+   }
+   static double OpenAtOrAfter(const MqlRates &r[], const int count, const datetime t, const datetime notAfter)
+   {
+      double best = 0; datetime bestT = 0;
+      for(int i = 0; i < count; i++)
+      {
+         if(r[i].time < t || r[i].time > notAfter) continue;
+         if(bestT == 0 || r[i].time < bestT) { bestT = r[i].time; best = r[i].open; }
+      }
+      return best;
+   }
+   static double CloseBefore(const MqlRates &r[], const int count, const datetime t, const datetime notBefore)
+   {
+      double best = 0; datetime bestT = 0;
+      for(int i = 0; i < count; i++)
+      {
+         if(r[i].time >= t || r[i].time < notBefore) continue;
+         if(bestT == 0 || r[i].time > bestT) { bestT = r[i].time; best = r[i].close; }
+      }
+      return best;
+   }
+
+public:
+   CV6RefLevels()
+   {
+      m_clock = NULL; m_midnightOpen = 0; m_open0730 = 0; m_ndogHigh = 0; m_ndogLow = 0; m_nwogHigh = 0; m_nwogLow = 0;
+      m_pdHigh = 0; m_pdLow = 0; m_tbrHigh = 0; m_tbrLow = 0; m_tbrValid = false; m_adr5 = 0; m_dayHigh = 0; m_dayLow = 0;
+      m_useOPR = true; m_useTBR = true; m_useNDOG = true;
+      m_ndogTime = 0; m_nwogTime = 0;
+      m_oprStart[0] = 90;  m_oprEnd[0] = 120;   // 01:30-02:00 Londres
+      m_oprStart[1] = 420; m_oprEnd[1] = 450;   // 07:00-07:30 pre-market
+      m_oprStart[2] = 570; m_oprEnd[2] = 600;   // 09:30-10:00 AM
+      m_oprStart[3] = 810; m_oprEnd[3] = 840;   // 13:30-14:00 PM
+      for(int i = 0; i < ICTV6_OPR_COUNT; i++) { m_oprHigh[i] = 0; m_oprLow[i] = 0; m_oprValid[i] = false; }
+   }
+
+   void Init(CV6Clock *clock, const bool useOPR, const bool useTBR, const bool useNDOG)
+   {
+      m_clock = clock; m_useOPR = useOPR; m_useTBR = useTBR; m_useNDOG = useNDOG;
+   }
+
+   void Build(const datetime nowSrv, const MqlRates &ltf[], const int ltfCount, const MqlRates &m1[], const int m1Count,
+              const MqlRates &htf[], const int htfCount, const MqlRates &d1[], const int d1Count)
+   {
+      datetime dayStart = m_clock.NYDayStartServer(nowSrv);
+
+      //--- true opens
+      m_midnightOpen = OpenAtOrAfter(ltf, ltfCount, dayStart, (datetime)((long)dayStart + 1800));
+      datetime t0730 = m_clock.NYMinuteToServer(nowSrv, 450);
+      m_open0730 = (nowSrv >= t0730) ? OpenAtOrAfter(ltf, ltfCount, t0730, (datetime)((long)t0730 + 1800)) : 0;
+
+      //--- range de la veille et ADR(5)
+      m_pdHigh = 0; m_pdLow = 0; m_adr5 = 0;
+      if(d1Count > 1) { m_pdHigh = d1[1].high; m_pdLow = d1[1].low; }
+      int n = 0;
+      for(int i = 1; i <= 5 && i < d1Count; i++) { m_adr5 += d1[i].high - d1[i].low; n++; }
+      if(n > 0) m_adr5 /= n;
+
+      //--- range du jour NY (depuis 00:00 NY)
+      double hi, lo;
+      if(RangeIn(ltf, ltfCount, dayStart, (datetime)((long)nowSrv + 60), hi, lo)) { m_dayHigh = hi; m_dayLow = lo; }
+      else { m_dayHigh = 0; m_dayLow = 0; }
+
+      //--- NDOG : close 16:59 NY de la veille -> open 18:00 NY de la veille (H1)
+      m_ndogHigh = 0; m_ndogLow = 0; m_nwogHigh = 0; m_nwogLow = 0;
+      m_ndogTime = 0; m_nwogTime = 0;
+      if(m_useNDOG && htfCount > 30)
+      {
+         datetime close17 = m_clock.NYMinuteToServer(nowSrv, 17 * 60, -1);
+         datetime open18  = m_clock.NYMinuteToServer(nowSrv, 18 * 60, -1);
+         double c = CloseBefore(htf, htfCount, close17, (datetime)((long)close17 - 4 * 3600));
+         double o = OpenAtOrAfter(htf, htfCount, open18, (datetime)((long)open18 + 3 * 3600));
+         if(c > 0 && o > 0) { m_ndogHigh = MathMax(c, o); m_ndogLow = MathMin(c, o); m_ndogTime = open18; }
+         //--- NWOG : dernier vendredi 16:59 -> dimanche 18:00
+         int dow = m_clock.NYDayOfWeek(nowSrv);
+         int backToFriday = (dow + 2) % 7;            // dimanche=0 -> 2, lundi -> 3, ... vendredi -> 0
+         if(backToFriday == 0) backToFriday = 7;      // vendredi : semaine precedente
+         datetime fri17 = m_clock.NYMinuteToServer(nowSrv, 17 * 60, -backToFriday);
+         datetime sun18 = m_clock.NYMinuteToServer(nowSrv, 18 * 60, -backToFriday + 2);
+         double fc = CloseBefore(htf, htfCount, fri17, (datetime)((long)fri17 - 4 * 3600));
+         double so = OpenAtOrAfter(htf, htfCount, sun18, (datetime)((long)sun18 + 3 * 3600));
+         if(fc > 0 && so > 0) { m_nwogHigh = MathMax(fc, so); m_nwogLow = MathMin(fc, so); m_nwogTime = sun18; }
+      }
+
+      //--- opening ranges (LTF M5)
+      for(int i = 0; i < ICTV6_OPR_COUNT; i++)
+      {
+         m_oprValid[i] = false;
+         if(!m_useOPR) continue;
+         datetime s, e;
+         m_clock.NYRangeToServer(nowSrv, m_oprStart[i], m_oprEnd[i], s, e);
+         if(nowSrv < e) continue;                     // range pas encore complet
+         if(RangeIn(ltf, ltfCount, s, e, hi, lo)) { m_oprHigh[i] = hi; m_oprLow[i] = lo; m_oprValid[i] = true; }
+      }
+
+      //--- TBR 08:12-09:12 (M1 si disponible, sinon M5 approximatif)
+      m_tbrValid = false;
+      if(m_useTBR)
+      {
+         datetime s, e;
+         m_clock.NYRangeToServer(nowSrv, 492, 552, s, e);
+         if(nowSrv >= e)
+         {
+            if(m1Count > 0 && m1[m1Count - 1].time <= s && RangeIn(m1, m1Count, s, e, hi, lo)) { m_tbrHigh = hi; m_tbrLow = lo; m_tbrValid = true; }
+            else if(RangeIn(ltf, ltfCount, (datetime)((long)s - 120), e, hi, lo)) { m_tbrHigh = hi; m_tbrLow = lo; m_tbrValid = true; }
+         }
+      }
+   }
+
+   //--- Pousse les niveaux de reference dans la carte de liquidite.
+   //--- v6.20 : chaque niveau porte desormais SON heure de formation (fin de l'OPR,
+   //--- fin du TBR, ouverture du gap) et non "maintenant". Sans cela, la condition
+   //--- "if(r[i].time <= level.time) break" de FindSweeps rejetait tout de suite.
+   void PushToMap(CV6LiqMap &map, const datetime nowSrv)
+   {
+      datetime s, e;
+      for(int i = 0; i < ICTV6_OPR_COUNT; i++)
+      {
+         if(!m_oprValid[i]) continue;
+         m_clock.NYRangeToServer(nowSrv, m_oprStart[i], m_oprEnd[i], s, e);
+         map.AddLevel(m_oprHigh[i], 2, V6L_OPR_HIGH, e, true);
+         map.AddLevel(m_oprLow[i],  2, V6L_OPR_LOW,  e, false);
+      }
+      //--- deviations standard de l'opening range AM (2, 2.5, 4, 6) comme cibles
+      if(m_oprValid[2])
+      {
+         m_clock.NYRangeToServer(nowSrv, m_oprStart[2], m_oprEnd[2], s, e);
+         double rng = m_oprHigh[2] - m_oprLow[2];
+         double sd[] = {2.0, 2.5, 4.0, 6.0};
+         for(int k = 0; k < ArraySize(sd); k++)
+         {
+            map.AddLevel(m_oprHigh[2] + sd[k] * rng, 1, V6L_SD_TARGET, e, true);
+            map.AddLevel(m_oprLow[2]  - sd[k] * rng, 1, V6L_SD_TARGET, e, false);
+         }
+      }
+      if(m_tbrValid)
+      {
+         m_clock.NYRangeToServer(nowSrv, 492, 552, s, e);
+         map.AddLevel(m_tbrHigh, 2, V6L_TBR_HIGH, e, true);
+         map.AddLevel(m_tbrLow,  2, V6L_TBR_LOW,  e, false);
+      }
+      if(m_ndogHigh > 0)
+      {
+         map.AddLevel(m_ndogHigh, 2, V6L_NDOG_HIGH, m_ndogTime, true);
+         map.AddLevel(m_ndogLow,  2, V6L_NDOG_LOW,  m_ndogTime, false);
+      }
+      if(m_nwogHigh > 0)
+      {
+         map.AddLevel(m_nwogHigh, 2, V6L_NWOG_HIGH, m_nwogTime, true);
+         map.AddLevel(m_nwogLow,  2, V6L_NWOG_LOW,  m_nwogTime, false);
+      }
+   }
+
+   //--- True open de reference a l'instant srv : 07:30 apres 07:30 NY, sinon minuit
+   double TrueOpen(const datetime srv)
+   {
+      if(m_clock.NYMinuteOfDay(srv) >= 450 && m_open0730 > 0) return m_open0730;
+      return m_midnightOpen;
+   }
+   double MidnightOpen() { return m_midnightOpen; }
+   double Open0730() { return m_open0730; }
+
+   //--- Achat sous le true open (discount du jour), vente au-dessus
+   bool TrueOpenAligned(const ENUM_ICT_DIR dir, const double price, const datetime srv)
+   {
+      double to = TrueOpen(srv);
+      if(to <= 0) return false;
+      return (dir == DIR_BUY) ? (price < to) : (price > to);
+   }
+
+   //--- Une zone [low, high] touche-t-elle un niveau de reference ?
+   bool ZoneHitsRefLevel(const double low, const double high, const double tol, string &name)
+   {
+      name = "";
+      double lo = low - tol, hi = high + tol;
+      if(m_pdHigh > m_pdLow)
+      {
+         double rng = m_pdHigh - m_pdLow;
+         for(int q = 0; q <= 4; q++)
+         {
+            double lvl = m_pdLow + rng * q / 4.0;
+            if(lvl >= lo && lvl <= hi) { name = StringFormat("PD_Q%d", q * 25); return true; }
+         }
+      }
+      for(int i = 0; i < ICTV6_OPR_COUNT; i++)
+      {
+         if(!m_oprValid[i]) continue;
+         double ce = (m_oprHigh[i] + m_oprLow[i]) / 2.0;
+         if(m_oprHigh[i] >= lo && m_oprHigh[i] <= hi) { name = StringFormat("OPR%d_H", i); return true; }
+         if(m_oprLow[i]  >= lo && m_oprLow[i]  <= hi) { name = StringFormat("OPR%d_L", i); return true; }
+         if(ce >= lo && ce <= hi) { name = StringFormat("OPR%d_CE", i); return true; }
+      }
+      if(m_ndogHigh > 0)
+      {
+         double ce = (m_ndogHigh + m_ndogLow) / 2.0;
+         if((m_ndogHigh >= lo && m_ndogHigh <= hi) || (m_ndogLow >= lo && m_ndogLow <= hi) || (ce >= lo && ce <= hi)) { name = "NDOG"; return true; }
+      }
+      if(m_nwogHigh > 0)
+      {
+         double ce = (m_nwogHigh + m_nwogLow) / 2.0;
+         if((m_nwogHigh >= lo && m_nwogHigh <= hi) || (m_nwogLow >= lo && m_nwogLow <= hi) || (ce >= lo && ce <= hi)) { name = "NWOG"; return true; }
+      }
+      return false;
+   }
+
+   //--- Part de l'ADR(5) deja parcourue aujourd'hui (en %)
+   double ADRUsedPct()
+   {
+      if(m_adr5 <= 0 || m_dayHigh <= m_dayLow) return 0;
+      return 100.0 * (m_dayHigh - m_dayLow) / m_adr5;
+   }
+   double ADR5() { return m_adr5; }
+
+   string Summary()
+   {
+      string s = StringFormat("MO %s | 07:30 %s | ADR5 %s utilise %.0f%%", V6D2(m_midnightOpen, _Digits), V6D2(m_open0730, _Digits), V6D2(m_adr5, _Digits), ADRUsedPct());
+      if(m_ndogHigh > 0) s += StringFormat(" | NDOG %s-%s", V6D2(m_ndogLow, _Digits), V6D2(m_ndogHigh, _Digits));
+      for(int i = 0; i < ICTV6_OPR_COUNT; i++) if(m_oprValid[i]) s += StringFormat(" | OPR%d %s-%s", i, V6D2(m_oprLow[i], _Digits), V6D2(m_oprHigh[i], _Digits));
+      return s;
+   }
+};
+
+#endif // ICTV6_REFERENCE_MQH
+//=== fin V6_Reference.mqh ===
+
+//=== début V6_SetupSilverBullet.mqh ===
+#ifndef ICTV6_SETUPSILVERBULLET_MQH
+#define ICTV6_SETUPSILVERBULLET_MQH
+
+struct SV6SBParams
+{
+   int    swingStrength;
+   double sweepMinATR;
+   int    sweepConfirmBars;
+   int    sweepMaxEpisodeBars;
+   int    sweepLookbackBars;
+   int    preSweepMinutes;
+   int    mssMaxBars;
+   double mssMinRangeATR;
+   double dispBodyATR;
+   double fvgMinSizeATR;
+   ENUM_ENTRY_MODE entryMode;
+   bool   requireDiscount;
+   bool   requireHTFAlign;
+   bool   useOTEBonus;
+   bool   useMacroBonus;
+   int    minScore;
+   double slBufferATR;
+   double tpBufferATR;
+   ENUM_TP_MODE tpMode;
+   double minRR;
+   double maxTPDistATRD1;
+   double maxStopATR;
+   bool   allowFixedRRFallback;
+   bool   utbotConfirm;
+   double utbotKey;
+   //--- tips ICT
+   bool   useTrueOpenBonus;
+   bool   requireTrueOpen;
+   bool   useRefLevelBonus;
+   double refLevelTolATR;
+   bool   useDOWScore;
+   bool   useBPRBonus;
+   bool   useSDTargets;
+   double eqWarnATR;
+   //--- v6.20
+   bool   fvgRequireBody;   // exiger un corps directionnel sur la bougie centrale du FVG
+   bool   takeFirstFVG;     // prendre la 1ere FVG formee dans la jambe
+   double minRetrace;       // retracement minimal de la jambe a l'entree
+};
+
+//--- Deviations standard de la jambe de manipulation projetees comme cibles
+void V6BuildSDTargets(const ENUM_ICT_DIR dir, const double origin, const double extreme, double &levels[])
+{
+   double sd[] = {2.0, 2.5, 4.0};
+   ArrayResize(levels, 0);
+   double rng = MathAbs(origin - extreme);
+   if(rng <= 0) return;
+   ArrayResize(levels, ArraySize(sd));
+   for(int i = 0; i < ArraySize(sd); i++)
+      levels[i] = (dir == DIR_BUY) ? extreme + sd[i] * rng : extreme - sd[i] * rng;
+}
+
+class CV6SilverBullet
+{
+private:
+   SV6SBParams      m_p;
+   string            m_sym;
+   CV6Clock    *m_clock;
+   CV6LiqMap    *m_liq;
+   CV6RefLevels *m_ref;
+
+   bool BuildSetup(const ENUM_ICT_DIR dir, const MqlRates &r[], const int count, const SV6Sweep &sw, const SV6MSS &mss,
+                   const SV6FVG &fvg, const double atr, const double atrD1, const double ask, const double bid,
+                   const double minStopDist, const datetime nowSrv, SV6Setup &s, string &why)
+   {
+      why = "";
+      s.setupType = SETUP_SILVER_BULLET;
+      s.dir = dir;
+      s.sweep = sw;
+      s.mss = mss;
+      s.fvg = fvg;
+      s.atr = atr;
+      s.atrD1 = atrD1;
+      s.spreadPts = (ask - bid) / _Point;
+      s.dispBodyATR = mss.dispBody / atr;
+      s.fvgSizeATR = fvg.size / atr;
+      s.fvgUntouched = !fvg.touched;
+      s.inMacro = m_clock.InMacro(mss.barTime) || m_clock.InMacro(nowSrv);
+
+      //--- jambe : extreme du sweep -> extreme apres MSS
+      if(dir == DIR_BUY) { s.legLow = sw.extreme; s.legHigh = mss.legExtreme; }
+      else               { s.legHigh = sw.extreme; s.legLow = mss.legExtreme; }
+      double legRange = s.legHigh - s.legLow;
+      if(legRange <= 0) { why = "jambe nulle"; return false; }
+
+      //--- prix d'entree
+      double price = (m_p.entryMode == ENTRY_FVG_CE) ? fvg.ce : ((dir == DIR_BUY) ? fvg.top : fvg.bottom);
+      s.marketEntry = false;
+      s.needsOBConfirm = false;   // ICT NAS : le mode « OB apres le FVG » n'est pas porte
+      if(m_p.entryMode == ENTRY_MARKET_ON_MSS)
+      {
+         price = (dir == DIR_BUY) ? ask : bid;
+         s.marketEntry = true;
+      }
+      else
+      {
+         if(dir == DIR_BUY && ask <= fvg.top)
+         {
+            if(ask < fvg.bottom) { why = "FVG traverse"; return false; }
+            if(!s.needsOBConfirm) { price = ask; s.marketEntry = true; }
+         }
+         if(dir == DIR_SELL && bid >= fvg.bottom)
+         {
+            if(bid > fvg.top) { why = "FVG traverse"; return false; }
+            if(!s.needsOBConfirm) { price = bid; s.marketEntry = true; }
+         }
+      }
+      s.entry = V6NormPrice(m_sym, price);
+
+      //--- retracement de la jambe, dealing range, OTE
+      s.retracePct = (dir == DIR_BUY) ? (s.legHigh - s.entry) / legRange : (s.entry - s.legLow) / legRange;
+      s.pdPct = m_liq.PremiumDiscountPct(s.entry);
+      s.inDiscount = (s.retracePct >= 0.5);
+      //--- v6.20 : seuil parametrable au lieu du mur a 50 %
+      if(m_p.requireDiscount && s.retracePct < m_p.minRetrace)
+      {
+         why = StringFormat("retracement %.2f < %.2f", s.retracePct, m_p.minRetrace);
+         return false;
+      }
+      double oteNear = (dir == DIR_BUY) ? s.legHigh - 0.62 * legRange : s.legLow + 0.62 * legRange;
+      double oteFar  = (dir == DIR_BUY) ? s.legHigh - 0.79 * legRange : s.legLow + 0.79 * legRange;
+      double oteLo = MathMin(oteNear, oteFar), oteHi = MathMax(oteNear, oteFar);
+      s.inOTE = (fvg.bottom <= oteHi && fvg.top >= oteLo);
+
+      //--- tips : true open, niveau de reference, BPR, equal highs/lows
+      s.trueOpen = m_ref.TrueOpen(nowSrv);
+      s.trueOpenAligned = m_ref.TrueOpenAligned(dir, s.entry, nowSrv);
+      if(m_p.requireTrueOpen && s.trueOpen > 0 && !s.trueOpenAligned)
+      {
+         why = (dir == DIR_BUY) ? "entree au-dessus du true open" : "entree sous le true open";
+         return false;
+      }
+      string refName = "";
+      s.refLevelHit = m_p.useRefLevelBonus && m_ref.ZoneHitsRefLevel(fvg.bottom, fvg.top, m_p.refLevelTolATR * atr, refName);
+      s.refLevelName = refName;
+      s.bpr = m_p.useBPRBonus && CV6FVGTools::HasOpposingOverlap(dir, r, count, fvg, 30, m_p.fvgMinSizeATR * atr);
+
+      //--- stop derriere l'extreme du sweep + buffer
+      double buffer = m_p.slBufferATR * atr + (ask - bid);
+      s.sl = V6NormPrice(m_sym, (dir == DIR_BUY) ? sw.extreme - buffer : sw.extreme + buffer);
+      s.riskDist = MathAbs(s.entry - s.sl);
+      if(s.riskDist < minStopDist) { why = "distance de stop sous le stops level"; return false; }
+      if(s.riskDist > m_p.maxStopATR * atr) { why = StringFormat("stop trop large (> %.0f ATR)", m_p.maxStopATR); return false; }
+      s.eqWarning = m_liq.HasEqualLevelBeyond(dir, s.sl, m_p.eqWarnATR * atr, sw.level, 0.05 * atr);
+
+      //--- cible : pool le plus proche (+ deviations standard) avec RR minimum
+      double minDist = m_p.minRR * s.riskDist;
+      double maxDist = (atrD1 > 0) ? m_p.maxTPDistATRD1 * atrD1 : 50.0 * atr;
+      double tpPrice = 0; int tpType = -1;
+      double tpBuf = m_p.tpBufferATR * atr;
+      if(m_p.tpMode == TP_NEAREST_POOL)
+      {
+         double sdLevels[];
+         if(m_p.useSDTargets) V6BuildSDTargets(dir, mss.brokenLevel, sw.extreme, sdLevels);
+         if(m_liq.NearestPoolWithExtras(dir, s.entry, minDist + tpBuf, maxDist, sdLevels, tpPrice, tpType))
+            tpPrice = (dir == DIR_BUY) ? tpPrice - tpBuf : tpPrice + tpBuf;
+         else if(m_p.allowFixedRRFallback)
+         {
+            tpPrice = (dir == DIR_BUY) ? s.entry + m_p.minRR * s.riskDist : s.entry - m_p.minRR * s.riskDist;
+            tpType = -1;
+         }
+         else { why = "aucun pool de liquidite oppose atteignable"; return false; }
+      }
+      else
+      {
+         tpPrice = (dir == DIR_BUY) ? s.entry + m_p.minRR * s.riskDist : s.entry - m_p.minRR * s.riskDist;
+         tpType = -1;
+      }
+      s.tp = V6NormPrice(m_sym, tpPrice);
+      s.tpSource = tpType;
+      s.rr = MathAbs(s.tp - s.entry) / s.riskDist;
+      if(s.rr < m_p.minRR - 1e-6) { why = StringFormat("RR %.2f sous le minimum %.2f", s.rr, m_p.minRR); return false; }
+
+      //--- score
+      int score = 0;
+      if(s.biasAligned) score += 2;
+      if(sw.rank >= 3) score += 2; else if(sw.rank == 2) score += 1;
+      if(s.dispBodyATR >= 1.5) score += 1;
+      if(s.fvgUntouched) score += 1;
+      if(m_p.useOTEBonus && s.inOTE) score += 1;
+      if(m_p.useMacroBonus && s.inMacro) score += 1;
+      if(s.rr >= 3.0) score += 1;
+      if(m_p.useTrueOpenBonus && s.trueOpenAligned) score += 1;
+      if(s.refLevelHit) score += 1;
+      if(s.bpr) score += 1;
+      if(m_p.useDOWScore) score += s.dowScore;
+      if(s.eqWarning) score -= 2;
+      s.score = score;
+      if(score < m_p.minScore) { why = StringFormat("score %d < %d", score, m_p.minScore); return false; }
+
+      s.id = StringFormat("SB_%s_%s_%s_%I64d", m_sym, TimeToString(s.windowStart, TIME_DATE | TIME_MINUTES), V6DirToStr(dir), (long)sw.extremeTime);
+      StringReplace(s.id, " ", "T");
+      StringReplace(s.id, ":", "");
+      StringReplace(s.id, ".", "");
+      s.valid = true;
+      return true;
+   }
+
+public:
+   CV6SilverBullet() { m_sym = ""; m_clock = NULL; m_liq = NULL; m_ref = NULL; }
+
+   void Init(const string sym, CV6Clock *clock, CV6LiqMap *liq, CV6RefLevels *ref, const SV6SBParams &p)
+   {
+      m_sym = sym; m_clock = clock; m_liq = liq; m_ref = ref; m_p = p;
+   }
+   //--- v6.20 : permet la 2e passe relachee sans reconstruire l'objet
+   void SetParams(const SV6SBParams &p) { m_p = p; }
+
+   //--- Evalue les deux directions. best.valid = true si un setup passe tous les filtres.
+   bool Evaluate(const MqlRates &ltf[], const int ltfCount, const double &atrSeries[],
+                 const ENUM_ICT_DIR bias, const ENUM_SB_WINDOW window, const datetime winStart, const datetime winEnd,
+                 const datetime nowSrv, const double atr, const double atrD1, const double minStopDist,
+                 SV6Setup &best, string &rejectSummary)
+   {
+      V6ResetSetup(best);
+      rejectSummary = "";
+      if(atr <= 0 || ltfCount < 60) { rejectSummary = "donnees insuffisantes"; return false; }
+
+      double ask = SymbolInfoDouble(m_sym, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(m_sym, SYMBOL_BID);
+      datetime notOlderThan = (datetime)((long)winStart - (long)m_p.preSweepMinutes * 60);
+      int dow = m_clock.DayOfWeekScore(nowSrv);
+      ENUM_ICT_DIR utState = m_p.utbotConfirm ? CV6Structure::UTBotState(ltf, atrSeries, ltfCount, m_p.utbotKey) : DIR_NONE;
+
+      ENUM_ICT_DIR dirs[2];
+      dirs[0] = DIR_BUY; dirs[1] = DIR_SELL;
+      for(int d = 0; d < 2; d++)
+      {
+         ENUM_ICT_DIR dir = dirs[d];
+         string dirReason = "";
+         if(m_p.requireHTFAlign && bias != DIR_NONE && bias != dir)
+         {
+            rejectSummary += V6DirToStr(dir) + ":biais HTF oppose; ";
+            continue;
+         }
+         if(m_p.utbotConfirm && utState != DIR_NONE && utState != dir)
+         {
+            rejectSummary += V6DirToStr(dir) + ":UT Bot oppose; ";
+            continue;
+         }
+
+         SV6Sweep sweeps[];
+         int ns = m_liq.FindSweeps(dir, ltf, ltfCount, atr, m_p.sweepLookbackBars, m_p.sweepMinATR,
+                                   m_p.sweepConfirmBars, m_p.sweepMaxEpisodeBars, notOlderThan, sweeps);
+         if(ns == 0) { rejectSummary += V6DirToStr(dir) + ":aucun sweep; "; continue; }
+
+         for(int k = 0; k < ns; k++)
+         {
+            SV6MSS mss;
+            if(!CV6Structure::FindMSS(dir, ltf, ltfCount, sweeps[k].extremeIdx, sweeps[k].extreme, m_p.mssMaxBars,
+                                          m_p.mssMinRangeATR, m_p.dispBodyATR, atr, m_p.swingStrength, mss))
+            {
+               if(dirReason == "") dirReason = "pas de MSS avec displacement";
+               continue;
+            }
+            SV6FVG fvgs[];
+            int nf = CV6FVGTools::FindInLeg(dir, ltf, ltfCount, mss.barIdx, sweeps[k].extremeIdx,
+                                     m_p.fvgMinSizeATR * atr, fvgs, m_p.fvgRequireBody);
+            if(nf == 0) { if(dirReason == "" || dirReason == "pas de MSS avec displacement") dirReason = "pas de FVG dans la jambe"; continue; }
+
+            //--- v6.20 : FindInLeg empile par index croissant, donc fvgs[nf-1] est le
+            //--- FVG le plus ancien de la jambe = 1ere FVG du displacement.
+            bool picked = false;
+            for(int q = 0; q < nf && !picked; q++)
+            {
+               int f = m_p.takeFirstFVG ? (nf - 1 - q) : q;
+               SV6Setup s;
+               V6ResetSetup(s);
+               s.window = window; s.windowStart = winStart; s.windowEnd = winEnd;
+               s.bias = bias; s.biasAligned = (bias == dir); s.dowScore = dow;
+               string why;
+               if(!BuildSetup(dir, ltf, ltfCount, sweeps[k], mss, fvgs[f], atr, atrD1, ask, bid, minStopDist, nowSrv, s, why))
+               {
+                  dirReason = why;
+                  continue;
+               }
+               if(!best.valid || s.score > best.score || (s.score == best.score && s.rr > best.rr))
+                  best = s;
+               if(m_p.takeFirstFVG) picked = true;   // 1er FVG valide : on arrete pour ce sweep
+            }
+         }
+         if(dirReason != "") rejectSummary += V6DirToStr(dir) + ":" + dirReason + "; ";
+      }
+      return best.valid;
+   }
+};
+
+#endif // ICTV6_SETUPSILVERBULLET_MQH
+//=== fin V6_SetupSilverBullet.mqh ===
+
+//=== début V6_SetupMacroBreaker.mqh ===
+#ifndef ICTV6_SETUPMACROBREAKER_MQH
+#define ICTV6_SETUPMACROBREAKER_MQH
+
+struct SV6MBParams
+{
+   int    swingStrength;
+   int    lookbackBars;
+   int    swingLookback;
+   int    maxBarsToConfirm;
+   double sweepMinATR;
+   int    sweepConfirmBars;
+   int    sweepMaxEpisodeBars;
+   int    preMacroMinutes;
+   double minRangeATR;
+   double dispBodyATR;
+   double fvgMinSizeATR;
+   double minBreakerATR;
+   ENUM_MB_ENTRY entryLevel;
+   bool   requireUnicorn;
+   bool   requireHTFAlign;
+   bool   requireTrueOpen;
+   int    minScore;
+   double slBufferATR;
+   double generousMacroMult;
+   double tpBufferATR;
+   double minRR;
+   double maxTPDistATRD1;
+   double maxStopATR;
+   bool   allowFixedRRFallback;
+   bool   useSDTargets;
+   bool   useRefLevelBonus;
+   double refLevelTolATR;
+   bool   useDOWScore;
+   double eqWarnATR;
+   //--- v6.20
+   bool   fvgRequireBody;
+   bool   allowRetested;    // accepter un breaker deja touche tant qu'il n'est pas viole
+};
+
+class CV6MacroBreaker
+{
+private:
+   SV6MBParams         m_p;
+   string            m_sym;
+   CV6Clock    *m_clock;
+   CV6LiqMap    *m_liq;
+   CV6RefLevels *m_ref;
+
+   //--- Bougie breaker : down-close (achat) a partir du swing, sinon la bougie du swing
+   int BreakerCandle(const ENUM_ICT_DIR dir, const MqlRates &r[], const int swingIdx)
+   {
+      for(int i = swingIdx; i >= MathMax(1, swingIdx - 2); i--)
+      {
+         if(dir == DIR_BUY  && r[i].close < r[i].open) return i;
+         if(dir == DIR_SELL && r[i].close > r[i].open) return i;
+      }
+      return swingIdx;
+   }
+
+   bool BuildSetup(const ENUM_ICT_DIR dir, const MqlRates &r[], const int count, const SV6Sweep &sw,
+                   const double atr, const double atrM5, const double atrD1, const double ask, const double bid,
+                   const double minStopDist, const datetime nowSrv, const datetime macroStart, const datetime macroEnd,
+                   SV6Setup &s, string &why)
+   {
+      why = "";
+      s.setupType = SETUP_MACRO_BREAKER;
+      s.dir = dir;
+      s.sweep = sw;
+      s.atr = atr;
+      s.atrD1 = atrD1;
+      s.spreadPts = (ask - bid) / _Point;
+      int ex = sw.extremeIdx;
+
+      //--- swing oppose precedant le stop hunt (sequence L1 -> H1 -> stop hunt sous L1)
+      int swingIdx = -1;
+      int lim = MathMin(count - m_p.swingStrength - 1, ex + m_p.swingLookback);
+      for(int i = ex + 1; i <= lim; i++)
+      {
+         if(sw.levelTime > 0 && r[i].time <= sw.levelTime) break;   // le swing doit etre posterieur au niveau balaye
+         if(dir == DIR_BUY && CV6Structure::IsSwingHigh(r, i, m_p.swingStrength, count) && r[i].high >= sw.extreme + m_p.minRangeATR * atr) { swingIdx = i; break; }
+         if(dir == DIR_SELL && CV6Structure::IsSwingLow(r, i, m_p.swingStrength, count) && r[i].low <= sw.extreme - m_p.minRangeATR * atr) { swingIdx = i; break; }
+      }
+      if(swingIdx < 0) { why = "pas de swing oppose avant le stop hunt"; return false; }
+
+      SV6Breaker b;
+      ZeroMemory(b);
+      int bc = BreakerCandle(dir, r, swingIdx);
+      b.candleIdx = bc;
+      b.time = r[bc].time;
+      b.top = r[bc].high; b.bottom = r[bc].low;
+      b.bodyTop = V6BodyTop(r[bc]); b.bodyBottom = V6BodyBottom(r[bc]);
+      b.swingLevel = (dir == DIR_BUY) ? r[swingIdx].high : r[swingIdx].low;
+
+      //--- expansion + confirmation par le corps
+      int confirmIdx = -1;
+      double body = 0, legExt = (dir == DIR_BUY) ? -1 : DBL_MAX;
+      int stop = MathMax(1, ex - m_p.maxBarsToConfirm);
+      for(int j = ex - 1; j >= stop; j--)
+      {
+         if(dir == DIR_BUY  && r[j].low  < sw.extreme) { why = "extreme du sweep viole avant confirmation"; return false; }
+         if(dir == DIR_SELL && r[j].high > sw.extreme) { why = "extreme du sweep viole avant confirmation"; return false; }
+         body = MathMax(body, V6BodyOf(r[j]));
+         if(dir == DIR_BUY)  legExt = MathMax(legExt, r[j].high);
+         else                legExt = MathMin(legExt, r[j].low);
+         bool bodyClose = (dir == DIR_BUY) ? (r[j].close > b.bodyTop && r[j].close > r[j].open)
+                                           : (r[j].close < b.bodyBottom && r[j].close < r[j].open);
+         bool newExtreme = (dir == DIR_BUY) ? (legExt > b.swingLevel) : (legExt < b.swingLevel);
+         if(bodyClose && newExtreme) { confirmIdx = j; break; }
+      }
+      if(confirmIdx < 0) { why = "pas de confirmation (corps au-dela du corps du swing)"; return false; }
+      if(body < m_p.dispBodyATR * atr) { why = "displacement insuffisant"; return false; }
+      b.confirmIdx = confirmIdx;
+      b.confirmTime = r[confirmIdx].time;
+      b.dispBody = body;
+
+      //--- le breaker doit se former dans la macro, ou jusqu'a preMacroMinutes avant
+      //--- (cf. exemples : le breaker se forme souvent AVANT le debut de la macro,
+      //---  c'est le retest/l'expansion qui se produit dans la macro)
+      datetime earliest = (datetime)((long)macroStart - (long)m_p.preMacroMinutes * 60);
+      if(b.confirmTime < earliest || b.confirmTime > macroEnd) { why = "confirmation hors macro"; return false; }
+
+      //--- zone d'entree : breaker, ou FVG dans le breaker (Unicorn)
+      b.zoneTop = b.top; b.zoneBottom = b.bottom;
+      SV6FVG fvgs[];
+      int nf = CV6FVGTools::FindInLeg(dir, r, count, confirmIdx, ex, m_p.fvgMinSizeATR * atr, fvgs, m_p.fvgRequireBody);
+      for(int f = 0; f < nf; f++)
+      {
+         if(fvgs[f].bottom <= b.top && fvgs[f].top >= b.bottom)
+         {
+            b.unicorn = true;
+            b.zoneTop = MathMin(b.top, fvgs[f].top);
+            b.zoneBottom = MathMax(b.bottom, fvgs[f].bottom);
+            s.fvg = fvgs[f];
+            s.fvgSizeATR = fvgs[f].size / atr;
+            s.fvgUntouched = !fvgs[f].touched;
+            break;
+         }
+      }
+      if(m_p.requireUnicorn && !b.unicorn) { why = "pas de FVG dans le breaker (Unicorn requis)"; return false; }
+      s.breaker = b;
+      s.unicorn = b.unicorn;
+      s.dispBodyATR = body / atr;
+      s.legLow = (dir == DIR_BUY) ? sw.extreme : legExt;
+      s.legHigh = (dir == DIR_BUY) ? legExt : sw.extreme;
+
+      //--- v6.20 : un breaker deja touche n'est plus rejete d'office. Seule une
+      //--- cloture au-dela de la zone (violation) l'invalide.
+      double zoneEdge = (dir == DIR_BUY) ? b.zoneTop : b.zoneBottom;
+      bool alreadyTested = false;
+      for(int j = confirmIdx - 1; j >= 1; j--)
+      {
+         bool touched = (dir == DIR_BUY) ? (r[j].low <= zoneEdge) : (r[j].high >= zoneEdge);
+         bool violated = (dir == DIR_BUY) ? (r[j].close < b.zoneBottom) : (r[j].close > b.zoneTop);
+         if(violated) { why = "breaker deja viole"; return false; }
+         if(touched) alreadyTested = true;
+      }
+      if(alreadyTested && !m_p.allowRetested) { why = "breaker deja reteste"; return false; }
+
+      //--- prix d'entree
+      double price;
+      if(m_p.entryLevel == MB_ENTRY_BREAKER_BODY)
+         price = (dir == DIR_BUY) ? MathMin(b.zoneTop, b.bodyTop) : MathMax(b.zoneBottom, b.bodyBottom);
+      else if(m_p.entryLevel == MB_ENTRY_BREAKER_CE)
+         price = (b.zoneTop + b.zoneBottom) / 2.0;
+      else
+         price = zoneEdge;
+      s.marketEntry = false;
+      if(dir == DIR_BUY && ask <= price)
+      {
+         if(ask < b.zoneBottom) { why = "breaker traverse"; return false; }
+         price = ask; s.marketEntry = true;
+      }
+      if(dir == DIR_SELL && bid >= price)
+      {
+         if(bid > b.zoneTop) { why = "breaker traverse"; return false; }
+         price = bid; s.marketEntry = true;
+      }
+      s.entry = V6NormPrice(m_sym, price);
+      double legRange = s.legHigh - s.legLow;
+      s.retracePct = (legRange > 0) ? ((dir == DIR_BUY) ? (s.legHigh - s.entry) / legRange : (s.entry - s.legLow) / legRange) : 0;
+      s.pdPct = m_liq.PremiumDiscountPct(s.entry);
+      s.inDiscount = (s.retracePct >= 0.5);
+      s.inMacro = true;
+
+      //--- tips : true open, niveau de reference
+      s.trueOpen = m_ref.TrueOpen(nowSrv);
+      s.trueOpenAligned = m_ref.TrueOpenAligned(dir, s.entry, nowSrv);
+      if(m_p.requireTrueOpen && s.trueOpen > 0 && !s.trueOpenAligned) { why = "true open non aligne"; return false; }
+      string refName = "";
+      s.refLevelHit = m_p.useRefLevelBonus && m_ref.ZoneHitsRefLevel(b.zoneBottom, b.zoneTop, m_p.refLevelTolATR * atrM5, refName);
+      s.refLevelName = refName;
+
+      //--- stop : sous le breaker, ou sous l'extreme du sweep si le breaker est petit
+      double mult = (s.macroId == 920) ? m_p.generousMacroMult : 1.0;
+      double buffer = m_p.slBufferATR * atr * mult + (ask - bid);
+      double slBreaker = (dir == DIR_BUY) ? b.bottom - buffer : b.top + buffer;
+      bool small = (b.top - b.bottom) < m_p.minBreakerATR * atr;
+      double sl = small ? ((dir == DIR_BUY) ? sw.extreme - buffer : sw.extreme + buffer) : slBreaker;
+      if(dir == DIR_BUY)  sl = MathMin(sl, slBreaker);
+      else                sl = MathMax(sl, slBreaker);
+      s.sl = V6NormPrice(m_sym, sl);
+      s.riskDist = MathAbs(s.entry - s.sl);
+      if(s.riskDist < minStopDist) { why = "distance de stop sous le stops level"; return false; }
+      if(s.riskDist > m_p.maxStopATR * atr) { why = StringFormat("stop trop large (> %.0f ATR M1)", m_p.maxStopATR); return false; }
+      s.eqWarning = m_liq.HasEqualLevelBeyond(dir, s.sl, m_p.eqWarnATR * atrM5, sw.level, 0.05 * atrM5);
+
+      //--- cible : pool le plus proche (+ deviations standard de la jambe)
+      double minDist = m_p.minRR * s.riskDist;
+      double maxDist = (atrD1 > 0) ? m_p.maxTPDistATRD1 * atrD1 : 50.0 * atrM5;
+      double tpPrice = 0; int tpType = -1;
+      double tpBuf = m_p.tpBufferATR * atrM5;
+      double sdLevels[];
+      if(m_p.useSDTargets) V6BuildSDTargets(dir, b.swingLevel, sw.extreme, sdLevels);
+      if(m_liq.NearestPoolWithExtras(dir, s.entry, minDist + tpBuf, maxDist, sdLevels, tpPrice, tpType))
+         tpPrice = (dir == DIR_BUY) ? tpPrice - tpBuf : tpPrice + tpBuf;
+      else if(m_p.allowFixedRRFallback)
+      {
+         tpPrice = (dir == DIR_BUY) ? s.entry + m_p.minRR * s.riskDist : s.entry - m_p.minRR * s.riskDist;
+         tpType = -1;
+      }
+      else { why = "aucune cible atteignable (pas d'entree sans target)"; return false; }
+      s.tp = V6NormPrice(m_sym, tpPrice);
+      s.tpSource = tpType;
+      s.rr = MathAbs(s.tp - s.entry) / s.riskDist;
+      if(s.rr < m_p.minRR - 1e-6) { why = StringFormat("RR %.2f sous le minimum %.2f", s.rr, m_p.minRR); return false; }
+      //--- cible deja prise avant l'entree = pas de trade
+      bool tpTaken = (dir == DIR_BUY) ? (legExt >= s.tp) : (legExt <= s.tp);
+      if(tpTaken) { why = "cible atteinte avant l'entree"; return false; }
+
+      //--- score
+      int score = 0;
+      if(s.macroHighProb) score += 1;
+      if(sw.rank >= 3) score += 2; else if(sw.rank == 2) score += 1;
+      if(b.unicorn) score += 2;
+      if(s.dispBodyATR >= 1.5) score += 1;
+      if(s.biasAligned) score += 1;
+      if(s.trueOpenAligned) score += 1;
+      if(s.refLevelHit) score += 1;
+      if(s.rr >= 3.0) score += 1;
+      if(m_p.useDOWScore) score += s.dowScore;
+      if(s.eqWarning) score -= 2;
+      s.score = score;
+      if(score < m_p.minScore) { why = StringFormat("score %d < %d", score, m_p.minScore); return false; }
+
+      s.id = StringFormat("MB_%s_%d_%s_%s_%I64d", m_sym, s.macroId, TimeToString(macroStart, TIME_DATE), V6DirToStr(dir), (long)sw.extremeTime);
+      StringReplace(s.id, " ", "T");
+      StringReplace(s.id, ":", "");
+      StringReplace(s.id, ".", "");
+      s.valid = true;
+      return true;
+   }
+
+public:
+   CV6MacroBreaker() { m_sym = ""; m_clock = NULL; m_liq = NULL; m_ref = NULL; }
+
+   void Init(const string sym, CV6Clock *clock, CV6LiqMap *liq, CV6RefLevels *ref, const SV6MBParams &p)
+   {
+      m_sym = sym; m_clock = clock; m_liq = liq; m_ref = ref; m_p = p;
+   }
+   //--- v6.20
+   void SetParams(const SV6MBParams &p) { m_p = p; }
+
+   //--- Evalue les deux directions sur M1 pour la macro donnee.
+   bool Evaluate(const MqlRates &m1[], const int m1Count, const ENUM_ICT_DIR bias,
+                 const int macroId, const bool macroHighProb, const datetime macroStart, const datetime macroEnd,
+                 const datetime nowSrv, const double atrM1, const double atrM5, const double atrD1, const double minStopDist,
+                 SV6Setup &best, string &rejectSummary)
+   {
+      V6ResetSetup(best);
+      rejectSummary = "";
+      if(atrM1 <= 0 || m1Count < 60) { rejectSummary = "donnees M1 insuffisantes"; return false; }
+
+      double ask = SymbolInfoDouble(m_sym, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(m_sym, SYMBOL_BID);
+      datetime notOlderThan = (datetime)((long)macroStart - (long)(m_p.preMacroMinutes + 10) * 60);
+      int dow = m_clock.DayOfWeekScore(nowSrv);
+      datetime bestConfirm = 0;
+
+      ENUM_ICT_DIR dirs[2];
+      dirs[0] = DIR_BUY; dirs[1] = DIR_SELL;
+      for(int d = 0; d < 2; d++)
+      {
+         ENUM_ICT_DIR dir = dirs[d];
+         string dirReason = "";
+         if(m_p.requireHTFAlign && bias != DIR_NONE && bias != dir)
+         {
+            rejectSummary += V6DirToStr(dir) + ":biais HTF oppose; ";
+            continue;
+         }
+         SV6Sweep sweeps[];
+         int ns = m_liq.FindSweeps(dir, m1, m1Count, atrM1, m_p.lookbackBars, m_p.sweepMinATR,
+                                   m_p.sweepConfirmBars, m_p.sweepMaxEpisodeBars, notOlderThan, sweeps);
+         if(ns == 0) { rejectSummary += V6DirToStr(dir) + ":aucun stop hunt; "; continue; }
+
+         for(int k = 0; k < ns; k++)
+         {
+            SV6Setup s;
+            V6ResetSetup(s);
+            s.macroId = macroId; s.macroHighProb = macroHighProb;
+            s.windowStart = macroStart; s.windowEnd = macroEnd;
+            s.bias = bias; s.biasAligned = (bias == dir); s.dowScore = dow;
+            string why;
+            if(!BuildSetup(dir, m1, m1Count, sweeps[k], atrM1, atrM5, atrD1, ask, bid, minStopDist, nowSrv, macroStart, macroEnd, s, why))
+            {
+               dirReason = why;
+               continue;
+            }
+            //--- premier breaker forme d'abord, puis meilleur score
+            bool better = !best.valid || (s.breaker.confirmTime < bestConfirm) ||
+                          (s.breaker.confirmTime == bestConfirm && s.score > best.score);
+            if(better) { best = s; bestConfirm = s.breaker.confirmTime; }
+         }
+         if(dirReason != "") rejectSummary += V6DirToStr(dir) + ":" + dirReason + "; ";
+      }
+      return best.valid;
+   }
+};
+
+#endif // ICTV6_SETUPMACROBREAKER_MQH
+//=== fin V6_SetupMacroBreaker.mqh ===
+
+//+------------------------------------------------------------------+
 //| Inputs                                                           |
 //+------------------------------------------------------------------+
 input group "=== Général ==="
@@ -6259,6 +8421,90 @@ input bool             InpLOJournalCsv    = true;           // Journal CSV de ch
 input bool             InpLOJournalPrint  = true;           // Décisions importantes dans le journal Experts
 input bool             InpLOPersist       = true;           // Sauvegarder les OPR finalisés (redémarrage de MT5)
 
+input group "=== v6.20 : Silver Bullet 1er FVG et Macro Breaker (ICT Ultimate Pro) ==="
+input bool             InpV6EnableSB      = true;           // Silver Bullet v6.20 (M5 : sweep confirmé -> MSS -> 1er FVG)
+input bool             InpV6EnableMB      = true;           // Macro Breaker v6.20 (M1 : stop hunt -> breaker dans une macro)
+input int              InpV6MaxTradesPerWindow = 1;         // Trades max par fenêtre SB / par macro (ordres + entrées, 0 = aucun plafond)
+input bool             InpV6SBTakeFirstFVG= true;           // SB : entrer sur le 1er FVG du displacement
+input double           InpV6SBMinRetrace  = 0.35;           // SB : retracement minimal de la jambe à l'entrée
+input bool             InpV6FVGRequireBody= false;          // Exiger un corps directionnel sur la bougie centrale du FVG
+input bool             InpV6MBAllowRetested = true;         // MB : accepter un breaker déjà touché (non violé)
+input int              InpV6SBRelaxAfterMin = 30;           // SB : 2e passe relâchée N min après le début de fenêtre (0 = off)
+input int              InpV6MBRelaxAfterMin = 8;            // MB : 2e passe relâchée N min après le début de macro (0 = off)
+input bool             InpV6UseLondonSB   = true;           // Fenêtre Silver Bullet Londres 03:00-04:00 NY
+input bool             InpV6UseNYAMSB     = true;           // Fenêtre Silver Bullet NY AM 10:00-11:00 NY
+input bool             InpV6UseNYPMSB     = true;           // Fenêtre Silver Bullet NY PM 14:00-15:00 NY
+
+input group "=== v6.20 : Silver Bullet (M5) ==="
+input ENUM_TIMEFRAMES  InpV6LTF           = PERIOD_M5;      // Timeframe d'entrée
+input ENUM_TIMEFRAMES  InpV6HTF           = PERIOD_H1;      // Timeframe du biais
+input int              InpV6SwingStrength = 2;              // Force des swings fractals
+input double           InpV6SweepMinATR   = 0.04;           // Pénétration minimale du sweep (ATR M5)
+input int              InpV6SweepConfirmBars = 3;           // Bougies max entre l'extrême et la clôture de retour
+input int              InpV6SweepMaxEpisodeBars = 6;        // Bougies max au-delà du niveau (sinon cassure)
+input int              InpV6SweepLookbackBars = 48;         // Bougies M5 de recherche du sweep
+input int              InpV6PreSweepMinutes = 45;           // Le sweep peut précéder la fenêtre de N minutes
+input int              InpV6MSSMaxBars    = 15;             // Bougies max entre sweep et MSS
+input double           InpV6MSSMinRangeATR= 0.3;            // Distance min entre l'extrême du sweep et le niveau cassé (ATR)
+input double           InpV6DispBodyATR   = 0.8;            // Corps minimal de displacement (ATR M5)
+input double           InpV6FVGMinSizeATR = 0.12;           // Taille minimale du FVG (ATR M5)
+input double           InpV6EqualHighsTolATR = 0.10;        // Tolérance equal highs / lows (ATR M5)
+input ENUM_ENTRY_MODE  InpV6EntryMode     = ENTRY_FVG_TOP;  // Mode d'entrée
+input int              InpV6OrderExpiryMinutes = 45;        // Expiration de l'ordre limite après la fin de fenêtre
+input bool             InpV6RequireDiscount = true;         // Appliquer le seuil de retracement
+input bool             InpV6RequireHTFAlign = false;        // Exiger l'alignement avec le biais HTF
+input bool             InpV6UseOTEBonus   = true;           // Bonus si le FVG recouvre l'OTE 62-79 %
+input bool             InpV6UseMacroBonus = true;           // Bonus si le MSS se forme dans une macro
+input int              InpV6MinSetupScore = 3;              // Score minimal Silver Bullet
+input double           InpV6SLBufferATR   = 0.10;           // Buffer du SL derrière l'extrême du sweep (ATR)
+input double           InpV6MaxStopATR    = 6.0;            // Distance de stop maximale (ATR M5)
+input double           InpV6TPBufferATR   = 0.05;           // TP placé juste avant le pool (ATR)
+input ENUM_TP_MODE     InpV6TPMode        = TP_NEAREST_POOL;// Mode de cible
+input double           InpV6MinRR         = 2.0;            // RR minimum planifié (passe relâchée : max(1,5 ; RR - 0,5))
+input double           InpV6MaxTPDistATRD1= 1.5;            // Distance max du TP (ATR D1)
+input bool             InpV6AllowFixedRRFallback = true;    // Sans pool atteignable : TP au RR minimum
+input int              InpV6IPDA1         = 20;             // IPDA lookback 1 (jours) = dealing range
+input int              InpV6IPDA2         = 40;             // IPDA lookback 2 (jours)
+input int              InpV6IPDA3         = 60;             // IPDA lookback 3 (jours)
+input bool             InpV6UTBotConfirm  = false;          // Confirmation UT Bot (ligne ATR)
+input double           InpV6UTBotKey      = 1.0;            // Sensibilité UT Bot
+
+input group "=== v6.20 : Macro Breaker (M1, macros ICT) ==="
+input ENUM_TIMEFRAMES  InpV6MBTimeframe   = PERIOD_M1;      // Timeframe du breaker
+input string           InpV6MBMacros      = "0320,0350,0820,0920,0950,1020,1050,1120,1320,1420,1515,1550"; // Macros autorisées (HHMM NY)
+input int              InpV6MBRetestGraceMinutes = 25;      // Retest accepté jusqu'à N min après la fin de macro
+input int              InpV6MBOrderExpiryMinutes = 35;      // Expiration de l'ordre après la fin de macro
+input int              InpV6MBSwingStrength = 2;            // Force des swings M1
+input int              InpV6MBLookbackBars= 90;             // Bougies M1 de recherche du stop hunt
+input int              InpV6MBSwingLookback = 75;           // Bougies M1 de recherche du swing opposé
+input int              InpV6MBMaxBarsToConfirm = 30;        // Bougies max entre stop hunt et confirmation
+input double           InpV6MBSweepMinATR = 0.05;           // Pénétration minimale du stop hunt (ATR M1)
+input int              InpV6MBPreMacroMinutes = 25;         // Confirmation acceptée N min avant le début de macro
+input double           InpV6MBMinRangeATR = 0.4;            // Distance min extrême -> swing (ATR M1)
+input double           InpV6MBDispBodyATR = 0.8;            // Corps minimal de displacement (ATR M1)
+input double           InpV6MBFVGMinSizeATR = 0.15;         // Taille minimale du FVG Unicorn (ATR M1)
+input double           InpV6MBMinBreakerATR = 0.5;          // Breaker plus petit : SL derrière l'extrême du sweep
+input ENUM_MB_ENTRY    InpV6MBEntryLevel  = MB_ENTRY_BREAKER_EDGE; // Niveau d'entrée dans le breaker
+input bool             InpV6MBRequireUnicorn = false;       // Exiger un FVG dans le breaker (Unicorn)
+input bool             InpV6MBRequireHTFAlign = false;      // Exiger l'alignement HTF
+input int              InpV6MBMinScore    = 2;              // Score minimal Macro Breaker
+input double           InpV6MBSLBufferATR = 0.2;            // Buffer du SL (ATR M1)
+input double           InpV6MBGenerousMacroMult = 1.5;      // Multiplicateur du buffer pendant la macro 09:20
+input double           InpV6MBMaxStopATR  = 12.0;           // Distance de stop maximale (ATR M1)
+
+input group "=== v6.20 : tips ICT (score et cibles) ==="
+input bool             InpV6UseTrueOpenBonus = true;        // Bonus : achat sous le true open, vente au-dessus
+input bool             InpV6RequireTrueOpen = false;        // ... en filtre dur
+input bool             InpV6UseRefLevelBonus = true;        // Bonus : FVG / breaker sur quadrant daily, OPR, NDOG / NWOG
+input double           InpV6RefLevelTolATR = 0.15;          // Tolérance (ATR M5)
+input bool             InpV6UseDOWScore   = true;           // Profil hebdo : mar / mer / jeu +1, ven -1
+input bool             InpV6UseBPRBonus   = true;           // Bonus : Balanced Price Range
+input bool             InpV6UseSDTargets  = true;           // Cibles : déviations standard 2 / 2,5 / 4
+input double           InpV6EqWarnATR     = 1.5;            // Equal highs / lows à moins de N ATR au-delà du stop : -2
+input bool             InpV6UseOPRLevels  = true;           // Opening ranges 01:30, 07:00, 09:30, 13:30 NY
+input bool             InpV6UseTBRLevels  = true;           // Time based range 08:12-09:12 NY
+input bool             InpV6UseNDOGLevels = true;           // NDOG / NWOG
+
 input group "=== Séquence d'entrée ==="
 input ENUM_TIMEFRAMES  InpExecTF          = PERIOD_M1;      // UT d'exécution (M1, M3 ou M5)
 input double           InpMinFVGPts       = 5.0;            // [Personnalisé] Taille minimale du FVG (points d'indice)
@@ -6325,6 +8571,14 @@ input bool             InpTrailing        = false;          // Trailing structur
 input double           InpTrailBufPts     = 2.0;            // Buffer du trailing (points)
 input double           InpTestSLPts       = 20.0;           // Panneau : SL de test pour la taille de lot
 
+input group "=== Garde-fous (RiskGuard / v6.20) ==="
+input double           InpMinLotRiskTol   = 1.5;            // Lot minimum accepté si son risque <= x fois le risque voulu (v6.20 : 1,5 ; 1 = refus strict)
+input double           InpMaxLots         = 0.0;            // Lot maximum absolu (0 = aucun ; RiskGuard : 1,00)
+input double           InpMaxOpenRiskPct  = 3.0;            // Risque ouvert cumulé max % (positions hors BE + ordres en attente ; 0 = aucun)
+input int              InpMinSecondsBetweenTrades = 0;      // Délai minimum entre deux ordres en secondes (0 = aucun ; RiskGuard : 900)
+input double           InpMaxSpreadATR    = 0.0;            // Spread max en fraction de l'ATR M5 (0 = aucun ; v6.20 : 0,15)
+input ENUM_SL_CAP_MODE InpSLCapMode       = SLCAP_REJECT;   // SL au-delà du plafond ATR du profil : rejet ou ramené au plafond
+
 input group "=== Données ==="
 input bool             InpCollect         = true;           // Enregistrer contexte, signaux et trades (SQLite)
 input string           InpDBFile          = "ICTNAS\\ict_nas.sqlite"; // Base SQLite (Common\Files)
@@ -6334,7 +8588,7 @@ input bool             InpFreshDBInTester = true;           // Testeur : base vi
 input group "=== Diagnostic ==="
 input bool             InpDebugLog        = false;          // Journal détaillé de chaque setup
 input bool             InpDailyDiagnostic = true;           // Résumé de l'entonnoir chaque jour dans le journal
-input bool             InpSelfTest        = true;           // Testeur : ordre de test (lot min) au démarrage pour vérifier l'exécution
+input bool             InpSelfTest        = false;          // Testeur : ordre de test (lot min) au démarrage (v2.40 : off, il apparaissait comme un trade du rapport)
 input double           InpMaxMarginPct    = 80.0;           // Marge max utilisée par un trade (% de la marge libre)
 
 input group "=== Affichage ==="
@@ -6391,6 +8645,7 @@ string            g_tzMsg="";
 bool              g_tzOk=true;
 int               g_gapsAbove0930=-1,g_gapsBelow0930=-1;
 int               g_tradesToday=0;  // ordres envoyés aujourd'hui (information ; la limite compte les exécutions)
+datetime          g_lastOrderSrv=0; // v2.40 : heure du dernier ordre envoyé (délai minimum entre deux trades)
 double            g_dayOpen=0;
 bool              g_flatDone=false;
 bool              g_limitClosed=false;
@@ -6422,6 +8677,8 @@ int               g_diagCnt[];
 //|  ERL/IRL : modèle séparé (sweep H1 -> MSS M5 -> cible FVG H1).   |
 //|  v2.30 : RR minimal par famille (ICT / CRT / PDF), score ICT non |
 //|  bloquant pour les modèles PDF, limite de trades sur exécutions. |
+//|  v2.40 : modèles v6.20 (SB_V6, MACRO_BREAKER) : RR et score      |
+//|  contrôlés par leur moteur ; risque ouvert, spread, délai.       |
 //|                                                                  |
 //|  Ce fichier utilise les objets globaux et les inputs de l'EA :   |
 //|  il est inclus APRÈS leur déclaration.                           |
@@ -6434,7 +8691,9 @@ int ModelRank(const string m)
    if(m=="SHADOW")        return(0);
    if(m=="CRT_45MIN")     return(1);
    if(m=="SILVER_BULLET") return(2);
+   if(m=="SB_V6")         return(2);
    if(m=="CRT_0830")      return(3);
+   if(m=="MACRO_BREAKER") return(3);
    if(m=="LONDON_OPR")    return(4);
    if(m==LO_MODEL)        return(4);
    if(m=="CRT_0250")      return(5);
@@ -6450,6 +8709,8 @@ string ModelCode(const string m)
   {
    if(m=="SHADOW") return("SH");
    if(m=="SILVER_BULLET") return("SB");
+   if(m=="SB_V6") return("S6");
+   if(m=="MACRO_BREAKER") return("MB");
    if(m=="LONDON_OPR") return("LO");
    if(m==LO_MODEL) return("LP");
    if(StringFind(m,"OPRPDF_")==0) return("P"+StringSubstr(m,7));
@@ -6488,6 +8749,8 @@ int g_liqTargetW=0;                 // >0 : la DOL est choisie dans la carte de 
 
 //--- v2.30 : modèles issus du moteur OPR + FVG (PDF London OPR)
 bool IsPdfModel(const string m) { return(m==LO_MODEL || StringFind(m,"OPRPDF_")==0); }
+//--- v2.40 : modèles portés de la v6.20 (leur moteur applique son RR minimal et son score)
+bool IsV6Model(const string m) { return(m=="SB_V6" || m=="MACRO_BREAKER"); }
 
 //--- v2.30 : RR minimal par famille de modèles
 //---   PDF : la cible est la déviation standard de l'OPR (InpLondonMinRR, 0 = acceptée telle quelle)
@@ -6496,12 +8759,13 @@ bool IsPdfModel(const string m) { return(m==LO_MODEL || StringFind(m,"OPRPDF_")=
 double ModelMinRR(const string model)
   {
    if(IsPdfModel(model)) return(InpLondonMinRR);
+   if(IsV6Model(model)) return(0);
    if(StringFind(model,"CRT_")==0) return(InpCRTMinRR);
    return(g_pMinRR);
   }
 
 //--- v2.30 : le score ICT n'est pas une règle du PDF : il est calculé et enregistré, sans bloquer
-bool ModelUsesScore(const string model) { return(!IsPdfModel(model)); }
+bool ModelUsesScore(const string model) { return(!IsPdfModel(model) && !IsV6Model(model)); }
 
 //--- DOL ICT : premier pool de liquidité intact (poids >= minW) situé à au moins g_pMinRR x R.
 //--- Les pools plus proches sont des aimants sur le chemin, pas des obstacles. 0 = aucun.
@@ -6799,7 +9063,7 @@ bool BuildSignal(SSetup &c,SSignal &s)
    s.tSrv=now;
    s.tNY=nowNY;
    s.uid=ModelCode(model)+"-"+StringFormat("%04d%02d%02d%02d%02d",st.year,st.mon,st.day,st.hour,st.min)+(c.dir==1?"L":"S");
-   s.fixedUid=false; s.extId=0; s.slot=-1; s.cancelPx=0; s.chaseR=0;
+   s.fixedUid=false; s.extId=0; s.slot=-1; s.cancelPx=0; s.chaseR=0; s.extKey="";
    //--- temps
    FillTimeContext(s,nowNY);
    //--- liquidité / structure
@@ -6836,6 +9100,7 @@ bool BuildSignal(SSetup &c,SSignal &s)
          double alt=(c.fvgC1Ext!=0)?c.fvgC1Ext-c.dir*InpSLBufferPts:0;
          double altDist=(alt!=0)?c.dir*(s.entry-alt):0;
          if(altDist>0 && altDist<=hi) dist=MathMax(altDist,(g_pSLFloorATR>0)?lo:0.0);
+         else if(InpSLCapMode==SLCAP_CLAMP) dist=hi;                          // v2.40 (RiskGuard) : SL ramené au plafond
          else preReject="SL trop large ("+DoubleToString(dist,1)+" > "+DoubleToString(hi,1)+" pts)";
         }
       s.sl=s.entry-c.dir*dist;
@@ -6945,22 +9210,48 @@ void Decide(SSignal &s,bool conflictThisBar)
    int ad=g_tm_trades.ActiveDirection();
    if(conflictThisBar || (ad!=0 && ad!=s.dir) || g_tm_trades.ActiveCount()>=InpMaxConcurrent)
      { s.decision="REJECTED_CONFLICT"; s.reason="position/ordre deja actif"; return; }
+   //--- v2.40 (v6.20 / RiskGuard) : spread et délai minimum entre deux ordres
+   double spr=SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   double atrSpr=g_atr.Get(PERIOD_M5);
+   if(InpMaxSpreadATR>0 && atrSpr>0 && spr>InpMaxSpreadATR*atrSpr)
+     { s.decision="REJECTED_FILTER"; s.reason="spread "+DoubleToString(spr,2)+" > "+DoubleToString(InpMaxSpreadATR,2)+" ATR M5"; return; }
+   if(InpMinSecondsBetweenTrades>0 && g_lastOrderSrv>0 && now-g_lastOrderSrv<InpMinSecondsBetweenTrades)
+     { s.decision="REJECTED_RISK"; s.reason="delai minimum entre deux trades"; return; }
    if(!InpTradingEnabled) { s.decision="OBSERVED"; s.reason="trading desactive (input)"; return; }
    //--- 7. taille et exécution
    double lots=g_risk.CalcLots(s.dir==1,s.entry,s.sl);
-   if(lots<=0) { s.decision="REJECTED_RISK"; s.reason="lot < lot minimum (risque trop faible pour ce SL)"; return; }
+   if(lots<=0)
+     {
+      s.decision="REJECTED_RISK";
+      s.reason=(g_risk.LotNote()!="") ? g_risk.LotNote() : "lot < lot minimum (risque trop faible pour ce SL)";
+      return;
+     }
+   if(g_risk.LotNote()!="") Print("Setup ",s.uid," : ",g_risk.LotNote());
    string mnote;
    lots=FitMargin(s.dir,lots,s.entry,mnote);
    if(mnote!="") Print("Setup ",s.uid," : ",mnote);
    if(lots<=0) { s.decision="REJECTED_RISK"; s.reason=mnote; return; }
    double loss=0;
    OrderCalcProfit(s.dir==1?ORDER_TYPE_BUY:ORDER_TYPE_SELL,_Symbol,lots,s.entry,s.sl,loss);
+   //--- v2.40 (RiskGuard) : risque ouvert cumulé plafonné
+   if(InpMaxOpenRiskPct>0)
+     {
+      double cap=AccountInfoDouble(ACCOUNT_EQUITY)*InpMaxOpenRiskPct/100.0;
+      double openRisk=g_tm_trades.OpenRiskMoney();
+      if(openRisk+MathAbs(loss)>cap+1e-6)
+        {
+         s.decision="REJECTED_RISK";
+         s.reason="risque ouvert "+DoubleToString(openRisk,2)+" + "+DoubleToString(MathAbs(loss),2)+" > plafond "+DoubleToString(cap,2);
+         return;
+        }
+     }
    SetExitWeights(s);
    string err;
    if(!g_tm_trades.Place(s,lots,MathAbs(loss),err)) { s.decision="REJECTED_RISK"; s.reason=err; return; }
    s.decision="TAKEN";
    s.taken=true;
    g_tradesToday++;
+   g_lastOrderSrv=now;
   }
 
 #endif
@@ -7343,6 +9634,7 @@ bool LoBuildSignal(const int slot,SSignal &s)
    s.fixedUid=true;
    s.extId=id;
    s.slot=slot;
+   s.extKey="";
    FillTimeContext(s,nowNY);
    //--- liquidité prise (règle du PDF : « la macro doit commencer par prendre une liquidité »)
    int src=g_lo.su[slot].sweepSrc;
@@ -7449,6 +9741,499 @@ void LoDiagLines(string &a[])
 //+------------------------------------------------------------------+
 //=== fin LondonBridge.mqh ===
 
+//=== début V6Bridge.mqh ===
+//+------------------------------------------------------------------+
+//|                                                    V6Bridge.mqh  |
+//|  v2.40 : branche les modèles de la v6.20 (SB_V6, MACRO_BREAKER)  |
+//|  sur la chaîne de décision d'ICT NAS.                            |
+//|  À chaque nouvelle bougie M1, dans une fenêtre Silver Bullet ou  |
+//|  une macro autorisée : carte de liquidité v6.20, niveaux de      |
+//|  référence, évaluation stricte puis relâchée (après N minutes),  |
+//|  arbitrage de la v6.20 (strict > relâché > score > Unicorn), puis|
+//|  un signal ICT NAS -> Decide() (filtres, ML, risque, conflit).   |
+//|  Un setup n'est décidé qu'une fois ; une fenêtre / macro ne donne|
+//|  qu'InpV6MaxTradesPerWindow trade(s) (« 1 macro = 1 trade »),    |
+//|  compté comme la v6.20 : ordres v6.20 en attente + entrées v6.20 |
+//|  depuis le début de la fenêtre / macro.                          |
+//+------------------------------------------------------------------+
+#ifndef ICTNAS_V6BRIDGE_MQH
+#define ICTNAS_V6BRIDGE_MQH
+
+#define V6_LTF_BARS 400
+#define V6_M1_BARS  420
+#define V6_HTF_BARS 400
+#define V6_D1_BARS  80
+
+CV6Clock          g_v6clock;
+CV6LiqMap         g_v6liq;
+CV6RefLevels      g_v6ref;
+CV6SilverBullet   g_v6sb;
+CV6MacroBreaker   g_v6mb;
+SV6SBParams       g_v6spStrict,g_v6spRelax;
+SV6MBParams       g_v6mpStrict,g_v6mpRelax;
+int               g_v6hLTF=INVALID_HANDLE,g_v6hM1=INVALID_HANDLE,g_v6hD1=INVALID_HANDLE;
+MqlRates          g_v6ltf[],g_v6m1[],g_v6htf[],g_v6d1[];
+double            g_v6atrLTF[],g_v6atrM1[],g_v6atrD1[];
+int               g_v6ltfN=0,g_v6m1N=0,g_v6htfN=0,g_v6d1N=0;
+string            g_v6consumed[];
+string            g_v6Status="";
+//--- diagnostic (cumul depuis le lancement)
+int               g_v6nSB=0,g_v6nMB=0,g_v6nRelax=0,g_v6nWinCap=0,g_v6nTaken=0;
+string            g_v6rejKey[];
+int               g_v6rejCnt[];
+
+bool V6Enabled(void) { return(InpV6EnableSB || InpV6EnableMB); }
+
+bool V6ValidateInputs(string &err)
+  {
+   err="";
+   if(!V6Enabled()) return(true);
+   if(PeriodSeconds(InpV6LTF)>=PeriodSeconds(InpV6HTF)) err="InpV6LTF doit etre inferieur a InpV6HTF";
+   else if(PeriodSeconds(InpV6MBTimeframe)>PeriodSeconds(InpV6LTF)) err="InpV6MBTimeframe doit etre <= InpV6LTF";
+   else if(InpV6SwingStrength<1 || InpV6SwingStrength>5) err="InpV6SwingStrength entre 1 et 5";
+   else if(InpV6MinRR<1.0) err="InpV6MinRR doit etre >= 1";
+   else if(InpV6SBMinRetrace<0 || InpV6SBMinRetrace>1) err="InpV6SBMinRetrace entre 0 et 1";
+   else if(InpV6EnableSB && !InpV6UseLondonSB && !InpV6UseNYAMSB && !InpV6UseNYPMSB) err="aucune fenetre Silver Bullet v6 activee";
+   return(err=="");
+  }
+
+void V6Init(void)
+  {
+   ArrayResize(g_v6consumed,0);
+   ArrayResize(g_v6rejKey,0);
+   ArrayResize(g_v6rejCnt,0);
+   g_v6nSB=0; g_v6nMB=0; g_v6nRelax=0; g_v6nWinCap=0; g_v6nTaken=0;
+   g_v6Status="";
+   if(!V6Enabled()) return;
+   g_v6hLTF=iATR(_Symbol,InpV6LTF,14);
+   g_v6hM1=iATR(_Symbol,InpV6MBTimeframe,14);
+   g_v6hD1=iATR(_Symbol,PERIOD_D1,14);
+   ArraySetAsSeries(g_v6ltf,true);
+   ArraySetAsSeries(g_v6m1,true);
+   ArraySetAsSeries(g_v6htf,true);
+   ArraySetAsSeries(g_v6d1,true);
+   ArraySetAsSeries(g_v6atrLTF,true);
+   ArraySetAsSeries(g_v6atrM1,true);
+   ArraySetAsSeries(g_v6atrD1,true);
+   g_v6clock.Init(GetPointer(g_tm),InpV6UseLondonSB,InpV6UseNYAMSB,InpV6UseNYPMSB,InpV6MBMacros);
+   g_v6ref.Init(GetPointer(g_v6clock),InpV6UseOPRLevels,InpV6UseTBRLevels,InpV6UseNDOGLevels);
+
+   //--- paramètres Silver Bullet (valeurs de la v6.20)
+   SV6SBParams sp;
+   sp.swingStrength=InpV6SwingStrength;
+   sp.sweepMinATR=InpV6SweepMinATR;
+   sp.sweepConfirmBars=InpV6SweepConfirmBars;
+   sp.sweepMaxEpisodeBars=InpV6SweepMaxEpisodeBars;
+   sp.sweepLookbackBars=InpV6SweepLookbackBars;
+   sp.preSweepMinutes=InpV6PreSweepMinutes;
+   sp.mssMaxBars=InpV6MSSMaxBars;
+   sp.mssMinRangeATR=InpV6MSSMinRangeATR;
+   sp.dispBodyATR=InpV6DispBodyATR;
+   sp.fvgMinSizeATR=InpV6FVGMinSizeATR;
+   sp.entryMode=InpV6EntryMode;
+   sp.requireDiscount=InpV6RequireDiscount;
+   sp.requireHTFAlign=InpV6RequireHTFAlign;
+   sp.useOTEBonus=InpV6UseOTEBonus;
+   sp.useMacroBonus=InpV6UseMacroBonus;
+   sp.minScore=InpV6MinSetupScore;
+   sp.slBufferATR=InpV6SLBufferATR;
+   sp.tpBufferATR=InpV6TPBufferATR;
+   sp.tpMode=InpV6TPMode;
+   sp.minRR=InpV6MinRR;
+   sp.maxTPDistATRD1=InpV6MaxTPDistATRD1;
+   sp.maxStopATR=InpV6MaxStopATR;
+   sp.allowFixedRRFallback=InpV6AllowFixedRRFallback;
+   sp.utbotConfirm=InpV6UTBotConfirm;
+   sp.utbotKey=InpV6UTBotKey;
+   sp.useTrueOpenBonus=InpV6UseTrueOpenBonus;
+   sp.requireTrueOpen=InpV6RequireTrueOpen;
+   sp.useRefLevelBonus=InpV6UseRefLevelBonus;
+   sp.refLevelTolATR=InpV6RefLevelTolATR;
+   sp.useDOWScore=InpV6UseDOWScore;
+   sp.useBPRBonus=InpV6UseBPRBonus;
+   sp.useSDTargets=InpV6UseSDTargets;
+   sp.eqWarnATR=InpV6EqWarnATR;
+   sp.fvgRequireBody=InpV6FVGRequireBody;
+   sp.takeFirstFVG=InpV6SBTakeFirstFVG;
+   sp.minRetrace=InpV6SBMinRetrace;
+   g_v6spStrict=sp;
+   g_v6spRelax=sp;
+   g_v6spRelax.requireHTFAlign=false;
+   g_v6spRelax.requireDiscount=false;
+   g_v6spRelax.requireTrueOpen=false;
+   g_v6spRelax.fvgRequireBody=false;
+   g_v6spRelax.minScore=(int)MathMax(0,InpV6MinSetupScore-3);
+   g_v6spRelax.minRR=MathMax(1.5,InpV6MinRR-0.5);
+   g_v6spRelax.dispBodyATR=InpV6DispBodyATR*0.6;
+   g_v6spRelax.fvgMinSizeATR=InpV6FVGMinSizeATR*0.6;
+   g_v6spRelax.sweepMinATR=InpV6SweepMinATR*0.6;
+   g_v6spRelax.minRetrace=0.0;
+   g_v6sb.Init(_Symbol,GetPointer(g_v6clock),GetPointer(g_v6liq),GetPointer(g_v6ref),g_v6spStrict);
+
+   //--- paramètres Macro Breaker (valeurs de la v6.20)
+   SV6MBParams mp;
+   mp.swingStrength=InpV6MBSwingStrength;
+   mp.lookbackBars=InpV6MBLookbackBars;
+   mp.swingLookback=InpV6MBSwingLookback;
+   mp.maxBarsToConfirm=InpV6MBMaxBarsToConfirm;
+   mp.sweepMinATR=InpV6MBSweepMinATR;
+   mp.sweepConfirmBars=3;
+   mp.sweepMaxEpisodeBars=8;
+   mp.preMacroMinutes=InpV6MBPreMacroMinutes;
+   mp.minRangeATR=InpV6MBMinRangeATR;
+   mp.dispBodyATR=InpV6MBDispBodyATR;
+   mp.fvgMinSizeATR=InpV6MBFVGMinSizeATR;
+   mp.minBreakerATR=InpV6MBMinBreakerATR;
+   mp.entryLevel=InpV6MBEntryLevel;
+   mp.requireUnicorn=InpV6MBRequireUnicorn;
+   mp.requireHTFAlign=InpV6MBRequireHTFAlign;
+   mp.requireTrueOpen=InpV6RequireTrueOpen;
+   mp.minScore=InpV6MBMinScore;
+   mp.slBufferATR=InpV6MBSLBufferATR;
+   mp.generousMacroMult=InpV6MBGenerousMacroMult;
+   mp.tpBufferATR=InpV6TPBufferATR;
+   mp.minRR=InpV6MinRR;
+   mp.maxTPDistATRD1=InpV6MaxTPDistATRD1;
+   mp.maxStopATR=InpV6MBMaxStopATR;
+   mp.allowFixedRRFallback=InpV6AllowFixedRRFallback;
+   mp.useSDTargets=InpV6UseSDTargets;
+   mp.useRefLevelBonus=InpV6UseRefLevelBonus;
+   mp.refLevelTolATR=InpV6RefLevelTolATR;
+   mp.useDOWScore=InpV6UseDOWScore;
+   mp.eqWarnATR=InpV6EqWarnATR;
+   mp.fvgRequireBody=InpV6FVGRequireBody;
+   mp.allowRetested=InpV6MBAllowRetested;
+   g_v6mpStrict=mp;
+   g_v6mpRelax=mp;
+   g_v6mpRelax.requireHTFAlign=false;
+   g_v6mpRelax.requireTrueOpen=false;
+   g_v6mpRelax.requireUnicorn=false;
+   g_v6mpRelax.fvgRequireBody=false;
+   g_v6mpRelax.allowRetested=true;
+   g_v6mpRelax.minScore=(int)MathMax(0,InpV6MBMinScore-2);
+   g_v6mpRelax.minRR=MathMax(1.5,InpV6MinRR-0.5);
+   g_v6mpRelax.dispBodyATR=InpV6MBDispBodyATR*0.6;
+   g_v6mpRelax.sweepMinATR=InpV6MBSweepMinATR*0.6;
+   g_v6mpRelax.minRangeATR=InpV6MBMinRangeATR*0.6;
+   g_v6mb.Init(_Symbol,GetPointer(g_v6clock),GetPointer(g_v6liq),GetPointer(g_v6ref),g_v6mpStrict);
+   PrintFormat("Modeles v6.20 : Silver Bullet 1er FVG %s, Macro Breaker %s (%d macros) | passe relachee SB %d min, MB %d min | %d trade(s) par fenetre",
+               InpV6EnableSB?"on":"off",InpV6EnableMB?"on":"off",g_v6clock.EnabledCount(),InpV6SBRelaxAfterMin,InpV6MBRelaxAfterMin,InpV6MaxTradesPerWindow);
+  }
+
+void V6Deinit(void)
+  {
+   if(g_v6hLTF!=INVALID_HANDLE) IndicatorRelease(g_v6hLTF);
+   if(g_v6hM1!=INVALID_HANDLE)  IndicatorRelease(g_v6hM1);
+   if(g_v6hD1!=INVALID_HANDLE)  IndicatorRelease(g_v6hD1);
+   g_v6hLTF=INVALID_HANDLE; g_v6hM1=INVALID_HANDLE; g_v6hD1=INVALID_HANDLE;
+  }
+
+//--- séries de la v6.20 (LoadFast + LoadFull)
+bool V6Load(void)
+  {
+   g_v6ltfN=CopyRates(_Symbol,InpV6LTF,0,V6_LTF_BARS,g_v6ltf);
+   if(g_v6ltfN<60) return(false);
+   int na=CopyBuffer(g_v6hLTF,0,0,V6_LTF_BARS,g_v6atrLTF);
+   if(na<20 || g_v6atrLTF[1]<=0) return(false);
+   if(na<g_v6ltfN) g_v6ltfN=na;
+   g_v6htfN=CopyRates(_Symbol,InpV6HTF,0,V6_HTF_BARS,g_v6htf);
+   g_v6d1N=CopyRates(_Symbol,PERIOD_D1,0,V6_D1_BARS,g_v6d1);
+   int nd=CopyBuffer(g_v6hD1,0,0,3,g_v6atrD1);
+   g_v6m1N=CopyRates(_Symbol,InpV6MBTimeframe,0,V6_M1_BARS,g_v6m1);
+   int nm=CopyBuffer(g_v6hM1,0,0,V6_M1_BARS,g_v6atrM1);
+   if(nm<g_v6m1N) g_v6m1N=nm;
+   if(g_v6m1N<0) g_v6m1N=0;
+   return(g_v6htfN>50 && g_v6d1N>5 && nd>=2);
+  }
+
+bool V6IsConsumed(const string id)
+  {
+   for(int i=0;i<ArraySize(g_v6consumed);i++) if(g_v6consumed[i]==id) return(true);
+   return(false);
+  }
+void V6Consume(const string id)
+  {
+   int n=ArraySize(g_v6consumed);
+   if(n>=200)
+     {
+      for(int i=0;i<n-1;i++) g_v6consumed[i]=g_v6consumed[i+1];
+      n--;
+     }
+   ArrayResize(g_v6consumed,n+1);
+   g_v6consumed[n]=id;
+  }
+//--- trades de la fenêtre / macro commencée à « from » (règle « TradesInWindow » de la v6.20)
+int V6WindowCount(const datetime from) { return(g_tm_trades.V6CountSince(from)); }
+
+//--- raison de rejet sans les valeurs numériques (« RR 1.52 sous le minimum 2.00 » -> « RR sous le minimum »)
+string V6ReasonKey(const string why)
+  {
+   string k="";
+   int n=StringLen(why);
+   bool sp=false;
+   for(int i=0;i<n;i++)
+     {
+      ushort c=StringGetCharacter(why,i);
+      if((c>='0' && c<='9') || c=='.' || c=='%' || c=='(' || c==')' || c=='>' || c=='<' || c=='=')
+        { sp=true; continue; }
+      if(c==' ') { sp=true; continue; }
+      if(sp && StringLen(k)>0) k+=" ";
+      sp=false;
+      k+=ShortToString(c);
+     }
+   return(k);
+  }
+void V6CountReject(const string prefix,const string why)
+  {
+   if(why=="") return;
+   string key=prefix+V6ReasonKey(why);
+   for(int i=0;i<ArraySize(g_v6rejKey);i++) if(g_v6rejKey[i]==key) { g_v6rejCnt[i]++; return; }
+   int n=ArraySize(g_v6rejKey);
+   if(n>=40) return;
+   ArrayResize(g_v6rejKey,n+1);
+   ArrayResize(g_v6rejCnt,n+1);
+   g_v6rejKey[n]=key;
+   g_v6rejCnt[n]=1;
+  }
+
+//--- filtres horaires d'ICT NAS appliqués AVANT l'évaluation (comme le blackout news de la v6.20) :
+//--- un setup n'est pas consommé par un rejet purement horaire et reste prenable à la sortie du filtre
+string V6TimeBlocked(const datetime now)
+  {
+   datetime nowNY=g_tm.ServerToNY(now);
+   int m=CTimeManager::MinuteOfDay(nowNY);
+   if(g_anchor>0 && now>=g_tm.NYToServer(g_anchor+ParseHHMM(InpFlatTime)*SEC_MIN)) return("apres l'heure de flat (ICT NAS)");
+   if(InpBlockLunch && (InMin(m,5*60,7*60) || InMin(m,12*60,13*60+30))) return("lunch (ICT NAS)");
+   if(InpBlockAccumMacro && InMin(m,15*60+15,15*60+45)) return("macro d'accumulation 15:15-15:45 (ICT NAS)");
+   if(g_news.InWindow(now)) return("news (ICT NAS)");
+   return("");
+  }
+
+string V6Model(const SV6Setup &b) { return(b.setupType==SETUP_MACRO_BREAKER ? "MACRO_BREAKER" : "SB_V6"); }
+
+//--- identifiant court et déterministe (commentaire d'ordre <= 31 caractères, pas de doublon après redémarrage)
+string V6Uid(const SV6Setup &b)
+  {
+   string head=(b.setupType==SETUP_MACRO_BREAKER) ? StringFormat("MB%04d",b.macroId) : "SB"+IntegerToString((int)b.window);
+   return(head+IntegerToString((long)b.sweep.extremeTime%100000000)+(b.dir==DIR_BUY?"L":"S")+(b.relaxed?"R":""));
+  }
+
+//--- setup v6.20 -> signal ICT NAS (mêmes colonnes SQLite que les autres modèles)
+bool V6ToSignal(const SV6Setup &b,const string winKey,SSignal &s)
+  {
+   datetime now=TimeCurrent();
+   datetime nowNY=g_tm.ServerToNY(now);
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID),ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   int dir=(b.dir==DIR_BUY) ? 1 : -1;
+   bool mbk=(b.setupType==SETUP_MACRO_BREAKER);
+   s.model=V6Model(b);
+   s.dir=dir;
+   s.tSrv=now;
+   s.tNY=nowNY;
+   s.uid=V6Uid(b);
+   s.fixedUid=true;
+   s.extId=0;
+   s.slot=-1;
+   s.extKey=winKey;
+   FillTimeContext(s,nowNY);
+   //--- liquidité prise
+   s.liqType=V6LiqTypeToStr((int)b.sweep.type);
+   s.liqWeight=(b.sweep.rank>=3) ? 8 : (b.sweep.rank==2 ? 5 : 3);
+   s.liqPrice=b.sweep.level;
+   s.tSweep=b.sweep.extremeTime;
+   s.tSweepNY=g_tm.ServerToNY(s.tSweep);
+   //--- structure
+   s.mss=1; s.cisd=0; s.disp=1;
+   s.dispBodyATR=b.dispBodyATR; s.dispCandles=0; s.dispSize=b.dispBodyATR*b.atr;
+   s.atr1=g_atr.Get(PERIOD_M1); s.atr5=g_atr.Get(PERIOD_M5); s.atr15=g_atr.Get(PERIOD_M15);
+   s.ifvg=0; s.breaker=mbk?1:0; s.unicorn=b.unicorn?1:0; s.ob=0;
+   s.fvgTop=mbk ? b.breaker.zoneTop    : b.fvg.top;
+   s.fvgBot=mbk ? b.breaker.zoneBottom : b.fvg.bottom;
+   s.fvgCE=(s.fvgTop+s.fvgBot)/2.0;
+   s.fvgSize=s.fvgTop-s.fvgBot;
+   s.tFVG=mbk ? b.breaker.time : b.fvg.time;
+   if(mbk) s.fvgType=b.unicorn ? "UNICORN" : "BREAKER";
+   else    s.fvgType=OverlapsFPFVG(s.fvgTop,s.fvgBot) ? "FPFVG" : "CLASSIC";
+   //--- plan du moteur v6.20 ; gestion ICT NAS (BE à x R, 50 % au TP1, reste à la cible)
+   s.market=b.marketEntry;
+   s.entry=b.entry;
+   s.sl=b.sl;
+   double tp=b.tp;
+   if(dir*(s.entry-s.sl)<=0 || dir*(tp-s.entry)<=0) return(false);
+   s.inval=0;
+   s.riskPts=MathAbs(s.entry-s.sl);
+   double r=s.riskPts;
+   s.tp1=tp; s.tp2=tp; s.tp3=tp;
+   if(g_pTP1R>0 && dir*(tp-(s.entry+dir*g_pTP1R*r))>0) s.tp1=s.entry+dir*g_pTP1R*r;
+   s.planRR=b.rr;
+   s.bePts=InpBEPts;
+   s.beTrigger=(InpBEAtR>0) ? s.entry+dir*InpBEAtR*r : 0;
+   s.cancelPx=tp;                       // cible prise avant l'exécution : pas de trade
+   s.chaseR=0;
+   FillMarketContext(s,now,bid,ask);
+   s.ote=b.inOTE?1:0;
+   s.smt=-1;
+   s.stdvReached=0;
+   //--- expiration de la v6.20 : fin de fenêtre / macro + N minutes, jamais après le flat
+   int expMin=mbk ? InpV6MBOrderExpiryMinutes : InpV6OrderExpiryMinutes;
+   datetime flatSrv=g_tm.NYToServer(g_anchor+ParseHHMM(InpFlatTime)*SEC_MIN);
+   datetime expSrv=(datetime)((long)b.windowEnd+(long)expMin*60);
+   s.expirySrv=(expSrv<flatSrv) ? expSrv : flatSrv;
+   s.flatSrv=flatSrv;
+   s.mlProb=-1; s.mlModel=""; s.score=0; s.taken=false;
+   s.decision=""; s.reason="";
+   return(true);
+  }
+
+//--- pipeline de la v6.20 sur la bougie : renvoie le nouveau nombre de signaux
+int V6CollectSignals(SSignal &sigs[],int k)
+  {
+   if(!V6Enabled()) return(k);
+   datetime now=TimeCurrent();
+   datetime ws=0,we=0;
+   ENUM_SB_WINDOW window=InpV6EnableSB ? g_v6clock.WindowAt(now,ws,we) : WIN_NONE;
+   int mi=-1;
+   if(InpV6EnableMB)
+     {
+      mi=g_v6clock.MacroIndexAt(now);
+      if(mi<0 || !g_v6clock.MacroEnabled(mi))
+        {
+         int rec=g_v6clock.MacroIndexRecent(now,InpV6MBRetestGraceMinutes);
+         mi=(rec>=0 && g_v6clock.MacroEnabled(rec)) ? rec : -1;
+        }
+     }
+   if(window==WIN_NONE && mi<0) { g_v6Status="hors fenetre SB et hors macro"; return(k); }
+   string blocked=V6TimeBlocked(now);
+   if(blocked!="") { g_v6Status=blocked; return(k); }
+   if(!V6Load()) { g_v6Status="donnees insuffisantes"; return(k); }
+
+   double atr=g_v6atrLTF[1];
+   double atrD1=g_v6atrD1[1];
+   double atrM1=(g_v6m1N>20) ? g_v6atrM1[1] : 0;
+   double minStop=MathMax((double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point,_Point);
+   double sh,sl;
+   ENUM_ICT_DIR bias=CV6Structure::Bias(g_v6htf,g_v6htfN,InpV6SwingStrength,sh,sl);
+   g_v6liq.Build(_Symbol,g_v6clock,now,g_v6ltf,g_v6ltfN,g_v6htf,g_v6htfN,g_v6d1,g_v6d1N,atr,
+                 InpV6IPDA1,InpV6IPDA2,InpV6IPDA3,InpV6SwingStrength,InpV6EqualHighsTolATR);
+   g_v6ref.Build(now,g_v6ltf,g_v6ltfN,g_v6m1,g_v6m1N,g_v6htf,g_v6htfN,g_v6d1,g_v6d1N);
+   g_v6ref.PushToMap(g_v6liq,now);
+   if(g_v6m1N>60) g_v6liq.AddSwings(g_v6m1,g_v6m1N,3,12,V6L_M1_SWING_HIGH,V6L_M1_SWING_LOW);
+
+   SV6Setup sb,mb;
+   V6ResetSetup(sb);
+   V6ResetSetup(mb);
+   string rejSB="",rejMB="";
+   bool haveSB=false,haveMB=false;
+   //--- Silver Bullet : passe stricte, puis relâchée si rien n'est passé
+   if(window!=WIN_NONE)
+     {
+      haveSB=g_v6sb.Evaluate(g_v6ltf,g_v6ltfN,g_v6atrLTF,bias,window,ws,we,now,atr,atrD1,minStop,sb,rejSB);
+      if(!haveSB && InpV6SBRelaxAfterMin>0 && now>=(datetime)((long)ws+(long)InpV6SBRelaxAfterMin*60))
+        {
+         g_v6sb.SetParams(g_v6spRelax);
+         haveSB=g_v6sb.Evaluate(g_v6ltf,g_v6ltfN,g_v6atrLTF,bias,window,ws,we,now,atr,atrD1,minStop,sb,rejSB);
+         g_v6sb.SetParams(g_v6spStrict);
+         if(haveSB) { sb.relaxed=true; sb.id+="_RLX"; }
+        }
+     }
+   //--- Macro Breaker : idem
+   datetime ms=0,me=0;
+   if(mi>=0 && atrM1>0)
+     {
+      g_v6clock.MacroRangeServer(now,mi,ms,me);
+      haveMB=g_v6mb.Evaluate(g_v6m1,g_v6m1N,bias,g_v6clock.MacroId(mi),g_v6clock.MacroHighProb(mi),ms,me,now,
+                             atrM1,atr,atrD1,minStop,mb,rejMB);
+      if(!haveMB && InpV6MBRelaxAfterMin>0 && now>=(datetime)((long)ms+(long)InpV6MBRelaxAfterMin*60))
+        {
+         g_v6mb.SetParams(g_v6mpRelax);
+         haveMB=g_v6mb.Evaluate(g_v6m1,g_v6m1N,bias,g_v6clock.MacroId(mi),g_v6clock.MacroHighProb(mi),ms,me,now,
+                                atrM1,atr,atrD1,minStop,mb,rejMB);
+         g_v6mb.SetParams(g_v6mpStrict);
+         if(haveMB) { mb.relaxed=true; mb.id+="_RLX"; }
+        }
+     }
+   if(!haveSB) V6CountReject("SB : ",rejSB);
+   if(!haveMB) V6CountReject("MB : ",rejMB);
+   if(haveSB && V6IsConsumed(sb.id)) haveSB=false;
+   if(haveMB && V6IsConsumed(mb.id)) haveMB=false;
+   //--- une fenêtre / macro = InpV6MaxTradesPerWindow trade(s)
+   string keySB="SB"+IntegerToString((long)ws);
+   string keyMB="MB"+IntegerToString((long)ms);
+   if(haveSB && InpV6MaxTradesPerWindow>0 && V6WindowCount(ws)>=InpV6MaxTradesPerWindow) { haveSB=false; g_v6nWinCap++; V6Consume(sb.id); rejSB="fenetre deja tradee"; }
+   if(haveMB && InpV6MaxTradesPerWindow>0 && V6WindowCount(ms)>=InpV6MaxTradesPerWindow) { haveMB=false; g_v6nWinCap++; V6Consume(mb.id); rejMB="macro deja tradee"; }
+   if(!haveSB && !haveMB)
+     {
+      g_v6Status=(window!=WIN_NONE?V6WindowToStr(window):"")+(mi>=0?" "+g_v6clock.MacroName(mi):"")+
+                 " | SB: "+(rejSB==""?"-":rejSB)+" | MB: "+(rejMB==""?"-":rejMB);
+      return(k);
+     }
+   //--- arbitrage de la v6.20 : setup strict prioritaire, puis meilleur score, puis MB Unicorn
+   SV6Setup best;
+   V6ResetSetup(best);
+   if(haveSB && haveMB)
+     {
+      if(sb.relaxed!=mb.relaxed)                   best=sb.relaxed ? mb : sb;
+      else if(mb.score>sb.score)                   best=mb;
+      else if(mb.score==sb.score && mb.unicorn)    best=mb;
+      else                                         best=sb;
+     }
+   else best=haveSB ? sb : mb;
+   V6Consume(best.id);
+   if(best.setupType==SETUP_MACRO_BREAKER) g_v6nMB++; else g_v6nSB++;
+   if(best.relaxed) g_v6nRelax++;
+   string uid=V6Uid(best);
+   if(g_tm_trades.ExistsOnServer(uid)) return(k);                 // déjà envoyé avant un redémarrage
+   SSignal sg;
+   if(!V6ToSignal(best,(best.setupType==SETUP_MACRO_BREAKER) ? keyMB : keySB,sg)) return(k);
+   g_v6Status=V6SetupTypeToStr(best.setupType)+" "+V6DirToStr(best.dir)+" S"+IntegerToString(best.score)+
+              (best.relaxed?" RLX":"")+" RR "+DoubleToString(best.rr,1)+" sweep "+V6LiqTypeToStr((int)best.sweep.type);
+   ArrayResize(sigs,k+1);
+   sigs[k]=sg;
+   return(k+1);
+  }
+
+//--- après la décision (diagnostic)
+void V6AfterDecision(SSignal &s)
+  {
+   if(s.taken && StringLen(s.extKey)>0) g_v6nTaken++;
+  }
+
+//--- panneau et diagnostic
+void V6PanelLines(string &L[])
+  {
+   if(!V6Enabled()) { LoAdd(L,"v6.20 SB / Macro Breaker : OFF"); return; }
+   LoAdd(L,"v6.20 SB "+(InpV6EnableSB?"on":"off")+" / MB "+(InpV6EnableMB?"on":"off")+" | setups "+IntegerToString(g_v6nSB+g_v6nMB)+
+           " | pris "+IntegerToString(g_v6nTaken));
+   if(g_v6Status!="") LoAdd(L,"  "+StringSubstr(g_v6Status,0,110));
+  }
+
+void V6DiagLines(string &a[])
+  {
+   ArrayResize(a,0);
+   if(!V6Enabled()) return;
+   LoAdd(a,"7. Modeles v6.20 : setups Silver Bullet "+IntegerToString(g_v6nSB)+" | Macro Breaker "+IntegerToString(g_v6nMB)+
+           " (dont passe relachee "+IntegerToString(g_v6nRelax)+") | ordres envoyes "+IntegerToString(g_v6nTaken)+
+           " | ignores (fenetre / macro deja tradee) "+IntegerToString(g_v6nWinCap));
+   //--- raisons les plus fréquentes (bougies M1 évaluées sans setup)
+   int n=ArraySize(g_v6rejKey);
+   int idx[];
+   ArrayResize(idx,n);
+   for(int i=0;i<n;i++) idx[i]=i;
+   for(int i=1;i<n;i++)
+     {
+      int v=idx[i],j=i-1;
+      while(j>=0 && g_v6rejCnt[idx[j]]<g_v6rejCnt[v]) { idx[j+1]=idx[j]; j--; }
+      idx[j+1]=v;
+     }
+   for(int i=0;i<n && i<8;i++)
+      LoAdd(a,"   "+g_v6rejKey[idx[i]]+" : "+IntegerToString(g_v6rejCnt[idx[i]])+" bougie(s)");
+  }
+
+#endif
+//+------------------------------------------------------------------+
+//=== fin V6Bridge.mqh ===
+
+
 
 //+------------------------------------------------------------------+
 //| Aides                                                            |
@@ -7501,7 +10286,7 @@ void StartDay(datetime anchor)
    g_gap.NewDay(anchor);
    g_q.NewDay(anchor);
    g_risk.NewDay();
-   g_tm_trades.NewDay();
+   g_tm_trades.NewDay(g_tm.NYToServer(anchor-6*SEC_HOUR));
    g_draw.NewDay(anchor);
    g_smt.Check();
    g_setup.NewDay();
@@ -7810,6 +10595,7 @@ void UpdatePanel(datetime nowNY,double bid)
    if(g_fpAsia.valid) AddLine(L,"FPFVG Asie "+(g_fpAsia.dir==1?"haussier ":"baissier ")+PxStr(g_fpAsia.bottom)+"-"+PxStr(g_fpAsia.top));
    if(g_fpMid.valid)  AddLine(L,"FPFVG Midnight "+(g_fpMid.dir==1?"haussier ":"baissier ")+PxStr(g_fpMid.bottom)+"-"+PxStr(g_fpMid.top));
    LoPanelLines(L);
+   V6PanelLines(L);
    for(int i=ArraySize(g_recent)-1;i>=0;i--) AddLine(L,"> "+g_recent[i]);
    if(g_tm_trades.LastMessage()!="") AddLine(L,"Dernier ordre: "+g_tm_trades.LastMessage());
    g_panel.Show(L);
@@ -8064,6 +10850,35 @@ void DiagCount(const string key)
    g_diagCnt[n]=1;
   }
 
+//--- v2.40 : nombre de décisions dont la clé contient un texte
+int DiagSum(const string part)
+  {
+   int n=0;
+   for(int i=0;i<ArraySize(g_diagKey);i++) if(StringFind(g_diagKey[i],part)>=0) n+=g_diagCnt[i];
+   return(n);
+  }
+
+//--- v2.40 : pistes quand l'EA trade peu (réponse à « il ne prend qu'un seul trade »)
+void DiagHints(string &a[])
+  {
+   ArrayResize(a,0);
+   int taken=DiagSum("TAKEN");
+   LoAdd(a,"8. Ordres envoyes : "+IntegerToString(taken)+" | executes aujourd'hui : "+IntegerToString(g_tm_trades.FilledToday()));
+   if(DiagSum("lot < lot minimum")>0)
+      LoAdd(a,"   -> "+IntegerToString(DiagSum("lot < lot minimum"))+" setup(s) refuses : lot minimum trop risque pour ce capital / ce SL. "+
+              "Augmenter le capital du testeur, InpRiskPct ou InpMinLotRiskTol.");
+   if(DiagSum("DD total")>0 || StringFind(g_tradeReady,"DD total")>=0)
+      LoAdd(a,"   -> DD total atteint : l'EA s'arrete DEFINITIVEMENT (regle prop firm). Backtest long : InpMaxTotalDDPct=0.");
+   if(DiagSum("SL trop large")>0)
+      LoAdd(a,"   -> "+IntegerToString(DiagSum("SL trop large"))+" setup(s) refuses : SL au-dela du plafond ATR. Option RiskGuard : InpSLCapMode=SL ramene au plafond.");
+   if(DiagSum("max trades/jour")>0)
+      LoAdd(a,"   -> "+IntegerToString(DiagSum("max trades/jour"))+" setup(s) apres la limite InpMaxTradesDay.");
+   if(DiagSum("Stop journalier")>0 || DiagSum("Objectif journalier")>0)
+      LoAdd(a,"   -> limites journalieres atteintes "+IntegerToString(DiagSum("Stop journalier")+DiagSum("Objectif journalier"))+" fois (InpDailyLossPct / InpDailyTargetPct).");
+   if(InpSelfTest && MQLInfoInteger(MQL_TESTER))
+      LoAdd(a,"   -> InpSelfTest=true : le rapport du testeur contient aussi l'ordre de test (lot minimum, magic+999).");
+  }
+
 //--- Entonnoir complet : de la liquidité prise jusqu'à l'ordre
 void PrintDiagnostic(const string title)
   {
@@ -8078,6 +10893,12 @@ void PrintDiagnostic(const string title)
    string lo[];
    LoDiagLines(lo);
    for(int i=0;i<ArraySize(lo);i++) Print(lo[i]);
+   string v6[];
+   V6DiagLines(v6);
+   for(int i=0;i<ArraySize(v6);i++) Print(v6[i]);
+   string hints[];
+   DiagHints(hints);
+   for(int i=0;i<ArraySize(hints);i++) Print(hints[i]);
    if(g_setup.nSweeps==0)
       Print("   -> Aucune liquidite prise : verifier le mode de ticks du testeur (utiliser 'Every tick based on real ticks') et l'historique.");
    else if(g_setup.nEmitted==0)
@@ -8096,6 +10917,8 @@ void PrintDiagnostic(const string title)
       FileWriteString(h,"Setups complets : "+IntegerToString(g_setup.nEmitted)+" | hors modele : "+IntegerToString(g_nNoModel)+"\r\n");
       for(int i=0;i<ArraySize(g_diagKey);i++) FileWriteString(h,"  "+g_diagKey[i]+" : "+IntegerToString(g_diagCnt[i])+"\r\n");
       for(int i=0;i<ArraySize(lo);i++) FileWriteString(h,lo[i]+"\r\n");
+      for(int i=0;i<ArraySize(v6);i++) FileWriteString(h,v6[i]+"\r\n");
+      for(int i=0;i<ArraySize(hints);i++) FileWriteString(h,hints[i]+"\r\n");
       FileClose(h);
       Print("   Diagnostic ecrit dans : ",TerminalInfoString(TERMINAL_COMMONDATA_PATH),"\\Files\\ICTNAS\\diagnostic.txt");
      }
@@ -8125,6 +10948,8 @@ void ProcessSetups(void)
      }
    //--- v2.30 : setups autorisés par le moteur London OPR (PDF) sur cette bougie
    k=LoCollectSignals(sigs,k);
+   //--- v2.40 : Silver Bullet 1er FVG / Macro Breaker de la v6.20 sur cette bougie
+   k=V6CollectSignals(sigs,k);
    if(k==0) return;
    //--- tri par priorité de modèle (insertion)
    for(int i=1;i<k;i++)
@@ -8140,6 +10965,7 @@ void ProcessSetups(void)
       g_setupsToday++;
       if(!sigs[i].fixedUid) sigs[i].uid+=IntegerToString(g_setupsToday);
       Decide(sigs[i],takenThisBar);
+      V6AfterDecision(sigs[i]);
       string rk=sigs[i].decision;
       if(sigs[i].decision!="TAKEN" && sigs[i].reason!="")
         {
@@ -8153,6 +10979,8 @@ void ProcessSetups(void)
          else if(StringFind(rr,"lot < lot minimum")==0) rr="lot < lot minimum";
          else if(StringFind(rr,"DD total")==0) rr="DD total atteint";
          else if(StringFind(rr,"setup manque")==0) rr="setup manque (prix trop loin)";
+         else if(StringFind(rr,"risque ouvert")==0) rr="risque ouvert cumule";
+         else if(StringFind(rr,"spread ")==0) rr="spread";
          rk+=" ("+rr+")";
         }
       DiagCount(rk);
@@ -8197,7 +11025,7 @@ int OnInit()
   {
    //--- v2.30 : MT5 ne réinitialise pas les globales sur un changement de graphique / de paramètres
    g_anchor=0; g_lastM1=0; g_lastM15=0; g_lastM5=0; g_lastH1=0; g_lastExec=0;
-   g_setupsToday=0; g_tradesToday=0; g_nNoModel=0;
+   g_setupsToday=0; g_tradesToday=0; g_nNoModel=0; g_lastOrderSrv=0; g_selfTestDone=false;
    ArrayResize(g_recent,0); ArrayResize(g_diagKey,0); ArrayResize(g_diagCnt,0);
    g_tm.Init(InpServerTZ,InpServerGMTOff);
    g_tzMsg=g_tm.CheckLiveOffset(g_tzOk);
@@ -8235,6 +11063,13 @@ int OnInit()
    g_lo.logContext=true;
    g_lo.logAllFvg=false;
    g_lo.Init(oc);
+   //--- v2.40 : modèles v6.20
+   string v6err="";
+   if(!V6ValidateInputs(v6err))
+     {
+      Print("Modeles v6.20 - parametre invalide : ",v6err);
+      return(INIT_PARAMETERS_INCORRECT);
+     }
 
    ParseList(InpWeeklyProfile,g_profile);
    g_atr.Init(_Symbol);
@@ -8246,6 +11081,7 @@ int OnInit()
    g_smt.Check();
    ApplyProfile();
    g_risk.Init(_Symbol,InpRiskPct,InpDailyLossPct,InpDailyTargetPct,InpMaxTotalDDPct,g_pMinRR,InpInitialBalance);
+   g_risk.SetLotLimits(InpMinLotRiskTol,InpMaxLots);
    g_draw.Init(InpDraw,InpKeepDays);
    g_panel.Init(InpShowPanel);
    g_setup.Init(_Symbol,GetPointer(g_liq),GetPointer(g_smt),GetPointer(g_atr),InpExecTF,g_pMinFVG,
@@ -8266,6 +11102,7 @@ int OnInit()
      }
    g_log.Init(GetPointer(g_db),_Symbol);
    g_tm_trades.Init(_Symbol,InpMagic,GetPointer(g_db),GetPointer(g_tm),InpBEPts,InpTrailing,InpTrailBufPts);
+   V6Init();
 
    g_fpAsia.Clear();
    g_fpMid.Clear();
@@ -8295,6 +11132,7 @@ void OnDeinit(const int reason)
      }
    g_db.Close();
    LoCloseJournal();
+   V6Deinit();
    g_liq.Deinit();
    g_atr.Deinit();
    g_ml.Release();
@@ -8337,6 +11175,7 @@ void OnTick()
       //--- contexte
       g_opr.OnNewBar(now);
       g_liq.OnNewBar(now);
+      g_liq.OnClosedBar();
       g_gap.OnNewBar(now);
       g_q.Update(nowNY);
       datetime m15=iTime(_Symbol,PERIOD_M15,0);

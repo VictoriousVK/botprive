@@ -117,8 +117,11 @@ T fmt_arg(T v) { return v; }
 
 template <class... A>
 string StringFormat(const string &f, A... a) {
+  // MQL5 : %I64d / %I64u = entier 64 bits (long en C++ sous Linux)
+  std::string g = f;
+  for (size_t p; (p = g.find("%I64")) != std::string::npos;) g.replace(p, 4, "%l");
   char buf[4096];
-  snprintf(buf, sizeof(buf), f.c_str(), fmt_arg(a)...);
+  snprintf(buf, sizeof(buf), g.c_str(), fmt_arg(a)...);
   return string(buf);
 }
 extern bool g_shim_quiet;
@@ -223,3 +226,4 @@ inline int StringReplace(string &s, const string &from, const string &to) {
 inline ushort StringGetCharacter(const string &s, int pos) {
   return (pos >= 0 && pos < (int)s.size()) ? (ushort)(unsigned char)s[pos] : 0;
 }
+inline string ShortToString(ushort c) { return string(1, (char)c); }
