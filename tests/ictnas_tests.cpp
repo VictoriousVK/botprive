@@ -1,5 +1,6 @@
 // Test de bout en bout d'ICT_NAS_Institutional (converti en C++) sur un marché simulé tick par tick.
-//   -DV230=1 -DV240=1 : version courante (v2.40 : modèles v6.20, garde-fous RiskGuard)
+//   -DV230=1 -DV240=1 -DV250=1 : version courante (v2.50 : objectif journalier sans fermeture, DD testeur, apprentissage)
+//   -DV230=1 -DV240=1 : v2.40 (modèles v6.20, garde-fous RiskGuard, référence)
 //   -DV230=1 -DV240=0 : v2.30 (fusion avec le moteur OPR + FVG, référence)
 //   -DV230=0          : v2.22, version d'origine (référence du comparatif avant / après)
 // Chaque exécution écrit aussi une ligne « STATS;... » lue par compare_ictnas.py.
@@ -33,7 +34,10 @@ ENUM_TIMEFRAMES _Period = PERIOD_M1;
 #ifndef V240
 #define V240 0
 #endif
-#define VER_NAME (V240 ? "v2.40" : (V230 ? "v2.30" : "v2.22"))
+#ifndef V250
+#define V250 0
+#endif
+#define VER_NAME (V250 ? "v2.50" : (V240 ? "v2.40" : (V230 ? "v2.30" : "v2.22")))
 #define V_DEFAULT 0   // paramètres par défaut
 #define V_SIGNALS 1   // observation : aucun ordre
 #define V_RESTART 2   // redémarrage de l'EA en cours de route
@@ -93,6 +97,20 @@ struct JLine {
                    atof(c[7].c_str()), atof(c[8].c_str()), atof(c[9].c_str())});
   }
   return out;
+}
+
+// somme d'une colonne réelle (ex. R des trades) dans la base écrite par l'EA
+static double sqlSum(const char *sql) {
+  double v = 0;
+  sqlite3 *db = nullptr;
+  if (sqlite3_open_v2("build/common/ICTNAS/ict_nas.sqlite", &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) return 0;
+  sqlite3_stmt *st = nullptr;
+  if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) == SQLITE_OK) {
+    if (sqlite3_step(st) == SQLITE_ROW) v = sqlite3_column_double(st, 0);
+    sqlite3_finalize(st);
+  }
+  sqlite3_close(db);
+  return v;
 }
 
 static std::map<std::string, int> sqlCount(const char *sql) {
@@ -268,6 +286,7 @@ int main(int argc, char **argv) {
   // ligne lue par compare_ictnas.py
   printf("STATS;%s;%s;%d;%d;%d;%d;%d;%.2f;%.3f;%d", LABEL, VER_NAME, seed, days, fills, wins, losses, netPct,
          maxLossPct, sigTotal);
+  printf(";R:total=%.2f", sqlSum("SELECT COALESCE(SUM(r_multiple),0) FROM trades"));
   for (auto &kv : fillsByModel) printf(";F:%s=%d", kv.first.c_str(), kv.second);
   for (auto &kv : sigByDecision) printf(";D:%s=%d", kv.first.c_str(), kv.second);
   printf("\n");
@@ -365,8 +384,13 @@ int main(int argc, char **argv) {
   printf("  v2.40 : entrées v6.20 %d (SB_V6 %d, MACRO_BREAKER %d) | fenêtres / macros tradées %d\n", v6Fills,
          fillsByModel["SB_V6"], fillsByModel["MACRO_BREAKER"], (int)v6PerWindow.size());
   CHECK(v6Over == 0, "une seule entrée v6.20 par fenêtre Silver Bullet / par macro");
+  // positions encore ouvertes à la fin des données : leur ligne « trades » s'écrit à la clôture (v2.50 : les gagnants
+  // ne sont plus fermés à l'objectif journalier, une position peut donc être ouverte quand le test s'arrête)
+  int openAtEnd = 0;
+  for (auto &p : g_sim.positions)
+    if (p.magic == kMagic) openAtEnd++;
   if (VARIANT != V_RESTART)
-    CHECK(tradeRows["n"] == fills, "chaque exécution a sa ligne dans « trades » (y compris exécution + clôture sur le même tick)");
+    CHECK(tradeRows["n"] == fills - openAtEnd, "chaque exécution clôturée a sa ligne dans « trades » (y compris exécution + clôture sur le même tick)");
   if (VARIANT == V_DEFAULT || VARIANT == V_OPEN || VARIANT == V_SMALL)
     CHECK(v6Fills > 0, "les modèles v6.20 (Silver Bullet 1er FVG / Macro Breaker) prennent des trades");
   if (VARIANT != V_COMPARE && VARIANT != V_SIGNALS)

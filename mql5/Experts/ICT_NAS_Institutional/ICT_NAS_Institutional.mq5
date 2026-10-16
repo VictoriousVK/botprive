@@ -76,9 +76,22 @@
 //|     plafond ATR : rejet (ICT) ou ramené au plafond (RiskGuard)   |
 //|   - diagnostic : entonnoir v6.20 et pistes quand l'EA ne trade   |
 //|     pas (lot minimum, DD total, SL trop large)                   |
+//|                                                                  |
+//|  v2.50 : « pas vraiment rentable, fais qu'il prenne des trades » |
+//|   - objectif journalier atteint : plus de nouvelle entrée, mais  |
+//|     les positions ouvertes vont à leur SL / cible (DOL) au lieu  |
+//|     d'être fermées (InpCloseOnDailyTarget) ; le stop journalier  |
+//|     ferme toujours tout                                          |
+//|   - testeur : DD total atteint = signalé (date, journal,         |
+//|     diagnostic), le backtest continue (InpDDHaltInTester) ; en   |
+//|     réel, arrêt définitif inchangé                               |
+//|   - apprentissage de la v6.20 (règle ADAPT_SIZE_AND_GATE) par    |
+//|     modèle x session, sur le résultat virtuel de chaque plan     |
+//|     conforme (pris ou non) : signalé dans diagnostic.txt,        |
+//|     bloqué seulement si InpAdaptGate = true                      |
 //+------------------------------------------------------------------+
 #property copyright "Victor — ICT NAS Institutional"
-#property version   "2.40"
+#property version   "2.50"
 #property description "EA ICT complet NAS100 : modeles ICT, London OPR (PDF), Silver Bullet 1er FVG et Macro Breaker (v6.20), score, filtre ML ONNX, garde-fous RiskGuard, collecte de donnees."
 
 #include <Trade\Trade.mqh>
@@ -95,7 +108,7 @@
 #define ICTNAS_DEFINES_MQH
 
 #define ICTNAS_PREFIX   "ICTNAS_"
-#define ICTNAS_VERSION  "2.40"
+#define ICTNAS_VERSION  "2.50"
 #define SEC_MIN         60
 #define SEC_HOUR        3600
 #define SEC_DAY         86400
@@ -1620,6 +1633,9 @@ private:
    double            m_minLotTol;        // v2.40 : lot min accepté jusqu'à x fois le risque voulu (1 = refus strict)
    double            m_maxLots;          // v2.40 : lot maximum absolu (0 = aucun)
    string            m_lotNote;          // v2.40 : explication du dernier calcul (refus ou lot minimum)
+   bool              m_ddReportOnly;     // v2.50 : testeur, DD total signalé sans arrêt définitif
+   bool              m_ddReported;       // v2.50 : DD total déjà signalé
+   datetime          m_ddHitTime;        // v2.50 : heure serveur du premier dépassement du DD total
 
    static int        VolDigits(double step)
      {
@@ -1646,7 +1662,14 @@ public:
       m_minLotTol=1.0;
       m_maxLots=0;
       m_lotNote="";
+      m_ddReportOnly=false;
+      m_ddReported=false;
+      m_ddHitTime=0;
      }
+   //--- v2.50 : true = DD total signalé une fois, sans arrêt définitif (testeur uniquement)
+   void              SetDDReportOnly(bool on) { m_ddReportOnly=on; }
+   bool              DDReported(void)  { return(m_ddReported); }
+   datetime          DDHitTime(void)   { return(m_ddHitTime); }
    void              SetLotLimits(double minLotTol,double maxLots) { m_minLotTol=MathMax(minLotTol,1.0); m_maxLots=MathMax(maxLots,0.0); }
    string            LotNote(void)   { return(m_lotNote); }
    double            RiskPct(void)   { return(m_riskPct); }
@@ -1674,7 +1697,18 @@ public:
    void              Update(void)
      {
       if(m_hardBlocked) return;
-      if(m_maxTotalDDPct>0 && TotalDDPct()>=m_maxTotalDDPct)
+      if(m_maxTotalDDPct>0 && TotalDDPct()>=m_maxTotalDDPct && m_ddReportOnly)
+        {
+         //--- v2.50 : testeur, le DD total est signalé (date) mais le backtest continue
+         if(!m_ddReported)
+           {
+            m_ddReported=true;
+            m_ddHitTime=TimeCurrent();
+            Print("!!! DD total ",DoubleToString(m_maxTotalDDPct,1),"% atteint le ",TimeToString(m_ddHitTime,TIME_DATE|TIME_MINUTES),
+                  " : en reel, ARRET DEFINITIF. Testeur : le test continue (InpDDHaltInTester=false)");
+           }
+        }
+      else if(m_maxTotalDDPct>0 && TotalDDPct()>=m_maxTotalDDPct)
         {
          //--- règle prop firm : DD total atteint = compte en échec -> plus aucun trade (0 = désactivé)
          m_hardBlocked=true;
@@ -2780,6 +2814,8 @@ struct SSignal
    int               slot;            // OPR du moteur London (-1 = aucun)
    //--- v2.40
    string            extKey;          // fenêtre / macro v6.20 du signal ("" = aucune) : 1 trade par fenêtre
+   //--- v2.50
+   bool              adaptOk;         // plan conforme aux règles du modèle (filtres, RR, score, ML passés) : compte dans l'apprentissage
   };
 
 //--- Répartition des sorties selon que les TP sont distincts ou non
@@ -2800,6 +2836,33 @@ private:
    string            m_sym;
    SSignal           m_open[];        // signaux en cours de suivi virtuel
    int               m_written;
+   //--- v2.50 : apprentissage par bucket « modèle|session » (règle de la v6.20), alimenté par le
+   //---         résultat virtuel de CHAQUE setup exécuté virtuellement (pris ou rejeté)
+   string            m_aKey[];
+   int               m_aN[];
+   double            m_aSum[];
+   double            m_aSum2[];
+
+   int               AdaptFind(const string k)
+     {
+      for(int i=0;i<ArraySize(m_aKey);i++) if(m_aKey[i]==k) return(i);
+      return(-1);
+     }
+   void              AdaptAdd(SSignal &s)
+     {
+      if(!s.adaptOk || !s.filled || (s.outcome!="WIN" && s.outcome!="LOSS" && s.outcome!="BE")) return;
+      string k=s.model+"|"+s.session;
+      int i=AdaptFind(k);
+      if(i<0)
+        {
+         i=ArraySize(m_aKey);
+         ArrayResize(m_aKey,i+1); ArrayResize(m_aN,i+1); ArrayResize(m_aSum,i+1); ArrayResize(m_aSum2,i+1);
+         m_aKey[i]=k; m_aN[i]=0; m_aSum[i]=0.0; m_aSum2[i]=0.0;
+        }
+      m_aN[i]++;
+      m_aSum[i]+=s.rReal;
+      m_aSum2[i]+=s.rReal*s.rReal;
+     }
 
    static string     NYStr(datetime ny)
      {
@@ -2895,7 +2958,44 @@ private:
      }
 
 public:
-   void              Init(CDataCollector *db,const string sym) { m_db=db; m_sym=sym; m_written=0; ArrayResize(m_open,0); }
+   void              Init(CDataCollector *db,const string sym)
+     {
+      m_db=db; m_sym=sym; m_written=0; ArrayResize(m_open,0);
+      ArrayResize(m_aKey,0); ArrayResize(m_aN,0); ArrayResize(m_aSum,0); ArrayResize(m_aSum2,0);
+     }
+
+   //--- v2.50 : règle ADAPT_SIZE_AND_GATE de la v6.20 : bucket bloqué si n >= minimum
+   //---         et E[R] + 1 erreur standard < 0 (perte démontrée, pas un simple mauvais passage)
+   bool              AdaptBucketBlocked(int i,int minSamples,double &mean,double &se)
+     {
+      mean=0; se=0;
+      if(i<0 || i>=ArraySize(m_aKey) || m_aN[i]<MathMax(minSamples,5)) return(false);
+      double n=(double)m_aN[i];
+      mean=m_aSum[i]/n;
+      double var=MathMax(0.0,m_aSum2[i]/n-mean*mean);
+      se=MathSqrt(var/n);
+      return(mean+se<0);
+     }
+   bool              AdaptBlocked(SSignal &s,int minSamples,string &why)
+     {
+      why="";
+      double mean,se;
+      int i=AdaptFind(s.model+"|"+s.session);
+      if(!AdaptBucketBlocked(i,minSamples,mean,se)) return(false);
+      why="adaptatif : "+m_aKey[i]+" E[R]="+DoubleToString(mean,2)+" +/- "+DoubleToString(se,2)+" sur "+IntegerToString(m_aN[i])+" setups";
+      return(true);
+     }
+   //--- v2.50 : diagnostic, une ligne par bucket ayant assez de setups résolus ("" sinon)
+   int               AdaptCount(void) { return(ArraySize(m_aKey)); }
+   string            AdaptLine(int i,int minSamples)
+     {
+      if(i<0 || i>=ArraySize(m_aKey) || m_aN[i]<MathMax(minSamples,5)) return("");
+      double mean,se;
+      bool neg=AdaptBucketBlocked(i,minSamples,mean,se);
+      string l=m_aKey[i]+" : n="+IntegerToString(m_aN[i])+" E[R]="+DoubleToString(mean,2)+" +/- "+DoubleToString(se,2);
+      if(neg) l+=" -> ESPERANCE NEGATIVE DEMONTREE";
+      return(l);
+     }
    int               Written(void) { return(m_written); }
    int               Tracking(void) { return(ArraySize(m_open)); }
 
@@ -2922,6 +3022,7 @@ public:
          Step(m_open[i],b[0]);
          if(m_open[i].done)
            {
+            AdaptAdd(m_open[i]);              // v2.50
             Write(m_open[i]);
             int n=ArraySize(m_open);
             for(int k=i;k<n-1;k++) m_open[k]=m_open[k+1];
@@ -3937,6 +4038,15 @@ public:
       ArrayResize(m_t,k);
      }
 
+   //--- v2.50 : supprime les ordres en attente, garde les positions (objectif journalier atteint)
+   void              DeletePendingOrders(void)
+     {
+      for(int i=0;i<ArraySize(m_t);i++)
+        {
+         if(!m_t[i].active || m_t[i].filled) continue;
+         if(OrderSelect(m_t[i].order) && m_trade.OrderDelete(m_t[i].order)) m_t[i].active=false;
+        }
+     }
    //--- Ferme tout (flat de fin de journée, limite journalière)
    void              CloseAll(void)
      {
@@ -8563,7 +8673,9 @@ input double           InpRiskPct         = 1.0;            // Risque par trade 
 input double           InpDailyLossPct    = 2.0;            // Stop journalier % (0 = désactivé ; 2 % = 2 pertes à 1 %)
 input double           InpDailyTargetPct  = 3.0;            // Objectif journalier % (0 = désactivé)
 input double           InpMaxTotalDDPct   = 8.0;            // DD total max % (prop firm) : arrêt définitif, 0 = désactivé
+input bool             InpDDHaltInTester  = false;          // v2.50 : testeur : DD total = arrêt définitif (false = signalé avec sa date, le test continue)
 input bool             InpCloseOnDailyLimit = true;         // Tout fermer quand une limite journalière est atteinte
+input bool             InpCloseOnDailyTarget = false;       // v2.50 : objectif atteint -> fermer aussi les positions (false = plus d'entrée, positions jusqu'à leur SL / cible)
 input double           InpInitialBalance  = 0;              // Solde de référence DD total (0 = solde au lancement)
 input double           InpBEAtR           = 1.0;            // Break-even quand le prix atteint x R
 input double           InpBEPts           = 1.0;            // Break-even : entrée + x points
@@ -8578,6 +8690,10 @@ input double           InpMaxOpenRiskPct  = 3.0;            // Risque ouvert cum
 input int              InpMinSecondsBetweenTrades = 0;      // Délai minimum entre deux ordres en secondes (0 = aucun ; RiskGuard : 900)
 input double           InpMaxSpreadATR    = 0.0;            // Spread max en fraction de l'ATR M5 (0 = aucun ; v6.20 : 0,15)
 input ENUM_SL_CAP_MODE InpSLCapMode       = SLCAP_REJECT;   // SL au-delà du plafond ATR du profil : rejet ou ramené au plafond
+
+input group "=== v2.50 : apprentissage par modèle x session (règle v6.20) ==="
+input bool             InpAdaptGate       = false;          // Bloquer un modèle x session à espérance négative démontrée (v6.20 : ADAPT_SIZE_AND_GATE ; false = signalé dans diagnostic.txt)
+input int              InpAdaptMinSamples = 25;             // Setups résolus minimum avant de pouvoir bloquer (v6.20 : 25, min 5)
 
 input group "=== Données ==="
 input bool             InpCollect         = true;           // Enregistrer contexte, signaux et trades (SQLite)
@@ -8649,6 +8765,7 @@ datetime          g_lastOrderSrv=0; // v2.40 : heure du dernier ordre envoyé (d
 double            g_dayOpen=0;
 bool              g_flatDone=false;
 bool              g_limitClosed=false;
+bool              g_targetKept=false;   // v2.50 : objectif journalier atteint, positions conservées (ordres en attente supprimés)
 bool              g_oprLvl0000=false,g_oprLvl0930=false,g_oprLvl1330=false;
 SFVG              g_fpAsia;
 SFVG              g_fpMid;
@@ -9063,7 +9180,7 @@ bool BuildSignal(SSetup &c,SSignal &s)
    s.tSrv=now;
    s.tNY=nowNY;
    s.uid=ModelCode(model)+"-"+StringFormat("%04d%02d%02d%02d%02d",st.year,st.mon,st.day,st.hour,st.min)+(c.dir==1?"L":"S");
-   s.fixedUid=false; s.extId=0; s.slot=-1; s.cancelPx=0; s.chaseR=0; s.extKey="";
+   s.fixedUid=false; s.extId=0; s.slot=-1; s.cancelPx=0; s.chaseR=0; s.extKey=""; s.adaptOk=false;
    //--- temps
    FillTimeContext(s,nowNY);
    //--- liquidité / structure
@@ -9166,6 +9283,7 @@ void Factors(SSignal &s,int &f[])
 //--- Chaîne de décision. Renvoie la décision (et exécute si TAKEN).
 void Decide(SSignal &s,bool conflictThisBar)
   {
+   s.adaptOk=false;                                        // v2.50 : vrai seulement si le plan passe les règles du modèle
    datetime now=TimeCurrent();
    int m=CTimeManager::MinuteOfDay(s.tNY);
    int f[];
@@ -9200,6 +9318,12 @@ void Decide(SSignal &s,bool conflictThisBar)
    //--- 4. ML (filtre seulement si le modèle est promu ET le mode FILTRE choisi)
    if(InpMLMode==ML_FILTER && g_ml.Ready() && g_ml.Promoted() && s.mlProb>=0 && s.mlProb<g_ml.Threshold())
      { s.decision="REJECTED_ML"; s.reason="p="+DoubleToString(s.mlProb,2); return; }
+   //--- 4 bis. v2.50 (apprentissage v6.20) : modèle x session dont l'espérance est négative
+   //---        sur les setups déjà résolus (pris ou non : résultat virtuel du CSignalLogger)
+   s.adaptOk=true;
+   string aw;
+   if(InpAdaptGate && g_log.AdaptBlocked(s,InpAdaptMinSamples,aw))
+     { s.decision="REJECTED_FILTER"; s.reason=aw; return; }
    //--- 5. risque
    string rs;
    if(!g_risk.CanTrade(rs)) { s.decision="REJECTED_RISK"; s.reason=rs; return; }
@@ -9635,6 +9759,7 @@ bool LoBuildSignal(const int slot,SSignal &s)
    s.extId=id;
    s.slot=slot;
    s.extKey="";
+   s.adaptOk=false;
    FillTimeContext(s,nowNY);
    //--- liquidité prise (règle du PDF : « la macro doit commencer par prendre une liquidité »)
    int src=g_lo.su[slot].sweepSrc;
@@ -10035,6 +10160,7 @@ bool V6ToSignal(const SV6Setup &b,const string winKey,SSignal &s)
    s.extId=0;
    s.slot=-1;
    s.extKey=winKey;
+   s.adaptOk=false;
    FillTimeContext(s,nowNY);
    //--- liquidité prise
    s.liqType=V6LiqTypeToStr((int)b.sweep.type);
@@ -10299,6 +10425,7 @@ void StartDay(datetime anchor)
    g_dayOpen=0;
    g_flatDone=false;
    g_limitClosed=false;
+   g_targetKept=false;
    g_oprLvl0000=false; g_oprLvl0930=false; g_oprLvl1330=false;
    g_fpAsia.Clear();
    g_fpMid.Clear();
@@ -10875,6 +11002,21 @@ void DiagHints(string &a[])
       LoAdd(a,"   -> "+IntegerToString(DiagSum("max trades/jour"))+" setup(s) apres la limite InpMaxTradesDay.");
    if(DiagSum("Stop journalier")>0 || DiagSum("Objectif journalier")>0)
       LoAdd(a,"   -> limites journalieres atteintes "+IntegerToString(DiagSum("Stop journalier")+DiagSum("Objectif journalier"))+" fois (InpDailyLossPct / InpDailyTargetPct).");
+   if(g_risk.DDReported())
+      LoAdd(a,"   -> DD total "+DoubleToString(InpMaxTotalDDPct,1)+" % atteint le "+TimeToString(g_risk.DDHitTime(),TIME_DATE|TIME_MINUTES)+
+              " : en reel l'EA se serait arrete DEFINITIVEMENT a cette date. Testeur : le test a continue (InpDDHaltInTester=false).");
+   //--- v2.50 : ce que l'EA a appris de TES données, modèle x session (règle v6.20), même avec InpAdaptGate=false
+   string head="9. Modele x session (resultat virtuel des plans conformes ; regle v6.20 : n >= "+IntegerToString(MathMax(InpAdaptMinSamples,5))+
+               " et E[R] + 1 erreur standard < 0)";
+   if(!InpAdaptGate) head+=" - InpAdaptGate=false : signale, rien n'est bloque";
+   LoAdd(a,head);
+   for(int i=0;i<g_log.AdaptCount();i++)
+     {
+      string l=g_log.AdaptLine(i,InpAdaptMinSamples);
+      if(l!="") LoAdd(a,"   "+l);
+     }
+   if(DiagSum("adaptatif")>0)
+      LoAdd(a,"   -> "+IntegerToString(DiagSum("adaptatif"))+" setup(s) refuses par l'apprentissage (InpAdaptGate=true).");
    if(InpSelfTest && MQLInfoInteger(MQL_TESTER))
       LoAdd(a,"   -> InpSelfTest=true : le rapport du testeur contient aussi l'ordre de test (lot minimum, magic+999).");
   }
@@ -10981,6 +11123,7 @@ void ProcessSetups(void)
          else if(StringFind(rr,"setup manque")==0) rr="setup manque (prix trop loin)";
          else if(StringFind(rr,"risque ouvert")==0) rr="risque ouvert cumule";
          else if(StringFind(rr,"spread ")==0) rr="spread";
+         else if(StringFind(rr,"adaptatif")==0) rr="adaptatif (esperance negative)";
          rk+=" ("+rr+")";
         }
       DiagCount(rk);
@@ -11012,6 +11155,24 @@ void CheckDayGuards(datetime nowNY)
    string why;
    if(InpCloseOnDailyLimit && !g_limitClosed && !g_risk.CanTrade(why))
      {
+      //--- v2.50 : objectif journalier atteint -> plus de nouvelle entrée (CanTrade), mais les positions
+      //---         ouvertes gardent leur SL / cible (DOL). Le stop journalier reste surveillé ici.
+      if(StringFind(why,"Objectif journalier")==0 && !InpCloseOnDailyTarget)
+        {
+         if(!g_targetKept)
+           {
+            g_targetKept=true;
+            g_tm_trades.DeletePendingOrders();        // plus aucune nouvelle entrée, y compris par un ordre limite déjà posé
+            Print("Objectif journalier atteint : ordres en attente supprimes, positions conservees jusqu'a leur SL / cible");
+           }
+         if(InpDailyLossPct>0 && g_risk.DayPnLPct()<=-InpDailyLossPct)
+           {
+            g_tm_trades.CloseAll();
+            g_limitClosed=true;
+            Print("Stop journalier -",DoubleToString(InpDailyLossPct,1),"% apres l'objectif -> positions fermees");
+           }
+         return;
+        }
       g_tm_trades.CloseAll();
       g_limitClosed=true;
       Print("Limite atteinte : ",why," -> positions fermees, plus d'entree aujourd'hui");
@@ -11026,6 +11187,7 @@ int OnInit()
    //--- v2.30 : MT5 ne réinitialise pas les globales sur un changement de graphique / de paramètres
    g_anchor=0; g_lastM1=0; g_lastM15=0; g_lastM5=0; g_lastH1=0; g_lastExec=0;
    g_setupsToday=0; g_tradesToday=0; g_nNoModel=0; g_lastOrderSrv=0; g_selfTestDone=false;
+   g_limitClosed=false; g_targetKept=false;                                  // v2.50
    ArrayResize(g_recent,0); ArrayResize(g_diagKey,0); ArrayResize(g_diagCnt,0);
    g_tm.Init(InpServerTZ,InpServerGMTOff);
    g_tzMsg=g_tm.CheckLiveOffset(g_tzOk);
@@ -11082,6 +11244,7 @@ int OnInit()
    ApplyProfile();
    g_risk.Init(_Symbol,InpRiskPct,InpDailyLossPct,InpDailyTargetPct,InpMaxTotalDDPct,g_pMinRR,InpInitialBalance);
    g_risk.SetLotLimits(InpMinLotRiskTol,InpMaxLots);
+   g_risk.SetDDReportOnly(MQLInfoInteger(MQL_TESTER)!=0 && !InpDDHaltInTester);   // v2.50
    g_draw.Init(InpDraw,InpKeepDays);
    g_panel.Init(InpShowPanel);
    g_setup.Init(_Symbol,GetPointer(g_liq),GetPointer(g_smt),GetPointer(g_atr),InpExecTF,g_pMinFVG,

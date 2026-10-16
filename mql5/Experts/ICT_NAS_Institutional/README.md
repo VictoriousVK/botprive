@@ -1,4 +1,180 @@
-# ICT NAS Institutional v2.40
+# ICT NAS Institutional v2.50
+
+La v2.50 répond à « il n'est pas vraiment rentable, fais qu'il prenne des trades et trouve des entrées adaptées à mes stratégies ». **Tes entrées, tes SL, tes RR et ton risque ne changent pas.** Trois choses changent :
+
+| # | Changement | Paramètre (défaut) | Revenir à la v2.40 |
+|---|---|---|---|
+| 1 | **Objectif journalier +3 % atteint** : plus aucune nouvelle entrée et les ordres en attente sont supprimés, mais **les positions ouvertes vont à leur SL ou à leur cible** (DOL, 2 STD du MOR). Le stop journalier -2 % ferme toujours tout, même après l'objectif. | `InpCloseOnDailyTarget = false` | `true` |
+| 2 | **Testeur seulement** : le DD total de 8 % est signalé avec sa date (journal et `diagnostic.txt`), et le backtest continue. **En réel, l'arrêt définitif est inchangé.** | `InpDDHaltInTester = false` | `true` |
+| 3 | **Apprentissage par modèle × session** (règle de ta v6.20) : l'EA mesure le résultat de chaque setup conforme aux règles de son modèle, pris ou non, et l'écrit dans `diagnostic.txt`, section 9. Le blocage automatique des combinaisons perdantes est une option. | `InpAdaptGate = false`, `InpAdaptMinSamples = 25` | rien à faire (désactivé par défaut) |
+
+Le reste est identique à la v2.40 :
+
+- schéma SQLite (seule la valeur `ea_version` devient « 2.50 ») ;
+- entrées, règles de SL, RR minimaux, score et ML ;
+- risque de 1 %, stop journalier de -2 %, objectif de +3 % (plus d'entrée une fois atteint) ;
+- 3 trades par jour, 2 positions, flat à 15:50.
+
+Aucune fonctionnalité n'est supprimée.
+
+## 1. Pourquoi
+
+### 1.1 L'objectif journalier coupait les gagnants
+
+Le plan de chaque trade, c'est ta stratégie : BE à 1 R, 50 % au TP1 (2 R), le reste à la DOL (jusqu'à 5 R), ou une cible unique à 2 STD du MOR pour le London PDF.
+
+L'objectif journalier se mesure sur l'**équité**, donc flottant compris. En v2.40, dès que l'équité du jour atteignait +3 %, `CheckDayGuards()` fermait tout, y compris la moitié restante qui visait la DOL et le second trade ouvert. À 1 % de risque, +3 % = 3 R : un seul trade London PDF ou un trade ICT à +4 R suffisait à déclencher la fermeture.
+
+Ta v6.20 n'a pas d'objectif de gain journalier. Ton RiskGuard ne ferme les positions que sur la perte. La v2.50 garde ta règle « objectif +3 % » au sens « on arrête de prendre des trades », sans couper les trades en cours.
+
+### 1.2 Le DD total arrêtait le backtest
+
+Au premier -8 % sous le solde de départ, la v2.40 ne prenait plus aucun trade jusqu'à la fin du test. Sur le banc, avec le seuil forcé à 1 % pour provoquer le cas, voici les trades sur 3 × 60 jours :
+
+| Version | Trades |
+|---|---|
+| v2.40 | **171** (0,95 par jour) : l'EA s'arrête en cours de test |
+| v2.50 | **459** (2,55 par jour) : le DD est signalé, le test continue |
+
+C'est le symptôme « il ne prend presque pas de trades » sur un long backtest. En réel, c'est ta règle prop firm, et elle est conservée.
+
+### 1.3 Quelles entrées marchent chez toi
+
+Les R par modèle du simulateur viennent de données synthétiques : ils ne permettent pas de choisir tes entrées. La v2.50 mesure donc chaque **modèle × session** sur ton historique, avec la règle `ADAPT_SIZE_AND_GATE` de ta v6.20 (n ≥ 25 et E[R] + 1 erreur standard < 0 = perte démontrée).
+
+Ce qui est compté :
+
+- **compte** : le résultat virtuel de chaque setup dont le plan passe les règles du modèle (filtres, RR, score, ML), qu'il ait été pris ou refusé ensuite pour le risque du jour, le quota ou un conflit ;
+- **ne compte pas** : les plans rejetés pour « SL trop large », un RR insuffisant ou un filtre horaire, puisqu'ils n'auraient jamais été tradés.
+
+`diagnostic.txt` affiche en section 9 une ligne par combinaison ayant au moins 25 setups, par exemple `MACRO_BREAKER|NY AM KZ : n=71 E[R]=-0.09 +/- 0.11`. La mention `-> ESPERANCE NEGATIVE DEMONTREE` apparaît quand la règle s'applique.
+
+Avec `InpAdaptGate = true`, ces combinaisons sont refusées (`REJECTED_FILTER`, raison `adaptatif : …`). Leurs setups restent simulés, donc une combinaison se débloque si son espérance remonte. Le défaut est `false`, comme dans ta v6.20 : sur des données aléatoires, le blocage ne peut réagir qu'au bruit.
+
+## 2. Résultats sur le banc de test (données synthétiques)
+
+Mêmes données, 3 graines × 60 jours, avec les mêmes contrôles que la v2.40 (tous OK) :
+
+| Configuration | Trades / jour | R total (R / trade) | Gagnants / perdants | Perte max / trade |
+|---|---|---|---|---|
+| v2.40 | 2,55 | 164 R (0,36) | 243 / 216 | 1,02 % |
+| **v2.50** | **2,55** (mêmes trades) | **266 R (0,58)** | 238 / 221 | 1,02 % |
+| v2.50 + `InpAdaptGate = true` | 2,54 | 261 R (0,57) | 236 / 221 | 1,02 % |
+| v2.50 sans les modèles v6.20 | 2,28 | 291 R (0,71) | 217 / 194 | 1,00 % |
+| v2.50, petit compte (10 000, lot min 0,1) | 2,54 | 309 R (0,67) | 248 / 209 | 1,50 % |
+| v2.40, DD total forcé à 1 % | **0,95** | 48 R (0,28) | 87 / 84 | 1,01 % |
+| v2.50, DD total forcé à 1 % | **2,55** | 266 R (0,58) | 238 / 221 | 1,02 % |
+| option RiskGuard : SL ramené au plafond | 2,57 | 445 R (0,96) | 277 / 185 | 1,02 % |
+
+Ce que montre le tableau :
+
+- **Mêmes entrées, sorties différentes.** La v2.50 prend exactement les 459 trades de la v2.40. Le total passe de 164 R à 266 R uniquement parce que les gagnants ne sont plus fermés à +3 % d'équité.
+- **Le DD total ne vide plus le backtest** : 171 trades en v2.40 contre 459 en v2.50 quand le seuil est atteint tôt.
+- **Le blocage par l'apprentissage n'apporte rien sur ces données** (261 R contre 266 R). C'est attendu sur une marche aléatoire : il n'a de valeur que si tes modèles ont un avantage durable par session sur le vrai NAS100. C'est pourquoi il est désactivé par défaut.
+- **Sur ces données, les modèles v6.20 diminuent le total en R** (291 R sans eux contre 266 R avec). Ils prennent des places dans la limite de 3 trades par jour. Vérifie-le sur ton historique avec `InpV6EnableSB` / `InpV6EnableMB` et la requête de l'étape 2 ci-dessous.
+- **L'option « SL ramené au plafond » donne le meilleur total ici**, mais elle place le SL à l'intérieur de la zone du sweep, contrairement à ta règle. Ne l'adopte que si ton historique réel le confirme.
+
+**Ce sont des données synthétiques : elles montrent l'effet du mécanisme, pas la rentabilité sur le NAS100.** Seul ton testeur MT5 dira si le marché va plus souvent jusqu'à tes DOL qu'il ne revient en arrière après +3 %.
+
+## 3. Vérifier dans le testeur MT5
+
+### Étape 0 : mesurer le changement 1 sur un backtest v2.40 déjà fait
+
+Ouvre `Common\Files\ICTNAS\ict_nas.sqlite` avec ict_quant ou DB Browser for SQLite (onglet « Exécuter le SQL ») :
+
+```sql
+-- R réel (trades) contre R du plan (simulation virtuelle, sans fermeture à l'objectif journalier)
+SELECT s.model, COUNT(*) AS n,
+       ROUND(SUM(t.r_multiple),1) AS R_reel,
+       ROUND(SUM(s.r_multiple),1) AS R_plan
+FROM trades t JOIN signals s ON s.signal_uid = t.signal_uid
+WHERE s.decision = 'TAKEN'
+GROUP BY s.model ORDER BY R_plan DESC;
+```
+
+- Si `R_plan` est nettement au-dessus de `R_reel`, la fermeture à l'objectif t'a coûté la différence.
+- Sinon, sur ton historique le marché revenait en arrière après +3 %. Garde alors `InpCloseOnDailyTarget = true`.
+
+### Étape 1 : test A/B, même période, mêmes réglages
+
+- **Testeur** : ton NAS100 / US100, graphique M1, « Chaque tick basé sur les ticks réels ». Période d'au moins 6 mois, si possible 12, avec le même dépôt pour tous les tests.
+- **Test A, v2.50** : réglages par défaut.
+- **Test B, comportement v2.40** : `InpCloseOnDailyTarget = true` et `InpDDHaltInTester = true`.
+- **Après chaque test**, copie `Common\Files\ICTNAS\ict_nas.sqlite` et `diagnostic.txt` sous un autre nom. La base est vidée au test suivant.
+
+Compare dans l'onglet Backtest :
+
+- nombre de trades ;
+- profit net ;
+- facteur de profit ;
+- espérance ;
+- drawdown maximal.
+
+Dans le Journal du test A, cherche :
+
+- `Objectif journalier atteint` : les jours où les gagnants ont continué ;
+- `DD total … atteint le` : la date à laquelle un compte prop se serait arrêté.
+
+### Étape 2 : quelles entrées marchent sur ton marché
+
+Lis la section 9 de `diagnostic.txt` du test A. Pour le détail, lance sur la base du test A :
+
+```sql
+-- Plans conformes aux règles du modèle, pris ou non
+SELECT model, session, COUNT(*) AS n, ROUND(AVG(r_multiple),2) AS R_moyen,
+       ROUND(SUM(r_multiple),1) AS R_total, SUM(decision='TAKEN') AS pris
+FROM signals
+WHERE filled = 1 AND outcome IN ('WIN','LOSS','BE')
+  AND decision NOT IN ('REJECTED_SCORE','REJECTED_ML')
+  AND NOT (decision = 'REJECTED_FILTER' AND reject_reason NOT LIKE 'adaptatif%')
+  AND NOT (decision = 'REJECTED_RISK' AND (reject_reason LIKE 'SL trop large%'
+           OR reject_reason LIKE 'RR %' OR reject_reason LIKE 'pas de cible%'))
+GROUP BY model, session HAVING COUNT(*) >= 25
+ORDER BY R_moyen;
+```
+
+Ensuite, deux voies possibles :
+
+- **Voie manuelle** : coupe un modèle qui perd sur toutes ses sessions avec son interrupteur :
+
+  | Modèle | Interrupteur |
+  |---|---|
+  | `SHADOW` | `InpUseShadow` |
+  | `SILVER_BULLET` | `InpUseSB` |
+  | `KILLZONE` | `InpUseKillzoneModel` |
+  | `SB_MOMENTUM` | `InpUseMomentum` |
+  | `CRT_*` | `InpUseCRT45` / `InpUseCRTOPR` / `InpUseCRT0830` / `InpUseCRT0250` / `InpUseCRTPM` |
+  | `OPR_*` | `InpUseOPR0130` / `0700` / `0930` / `1330` |
+  | `ERL_IRL` | `InpUseERL` |
+  | `LONDON_OPR_PDF` | `InpLOOpr1Trade` |
+  | `SB_V6` | `InpV6EnableSB` |
+  | `MACRO_BREAKER` | `InpV6EnableMB` |
+
+- **Voie automatique** : refais le test A avec `InpAdaptGate = true`.
+
+**Ne valide jamais un choix sur la période qui a servi à le faire.** Choisis sur les 6 premiers mois, puis vérifie sur les 6 suivants.
+
+### Étape 3 (option) : encore plus de trades
+
+Deux règles de ta v6.20 changent tes règles ICT NAS, elles ne sont donc pas activées par défaut :
+
+- `InpMaxTradesDay = 8`, au lieu de 3 ;
+- `InpDailyTargetPct = 0`, car la v6.20 n'a pas d'objectif de gain.
+
+Teste-les dans un test D, contre le test A.
+
+## 4. Limites (v2.50)
+
+- **Compilation** : le code est vérifié par traduction en C++ et par le banc de test, pas dans MetaEditor. Si MetaEditor signale une erreur, envoie-la-moi telle quelle.
+- **Après l'objectif, la journée peut finir sous +3 %** si les positions conservées reviennent à leur BE ou à leur SL. C'est le prix à payer pour les laisser aller à leur cible. Le stop -2 % reste le plancher.
+- **`InpDDHaltInTester = false` montre des trades qu'un compte prop n'aurait plus pris** après la date du DD. Le journal et le diagnostic donnent cette date, et `true` reproduit le compte réel.
+- **L'apprentissage vit en mémoire.** En réel, un redémarrage de l'EA le remet à zéro. Dans le testeur, chaque passe repart de zéro, comme la base SQLite.
+- **Fin de test** : une position encore ouverte à la fin des données n'a pas de ligne dans `trades`. Le banc de test le prend en compte.
+- **Origine** : la v2.50 vient du tournoi `/arena` lancé à ta demande. Il a été interrompu par la limite d'usage et une seule solution a été terminée, donc sans match ni jugement. Je l'ai appliquée puis vérifiée avec le banc de test complet.
+
+---
+
+# Historique : v2.40 (union des EA)
 
 La v2.40 réunit **tes EA ICT dans un seul EA**, avec une seule chaîne de décision, de risque et de données :
 

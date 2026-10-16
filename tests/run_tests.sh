@@ -69,39 +69,47 @@ ICT=../mql5/Experts/ICT_NAS_Institutional/ICT_NAS_Institutional.mq5
 mkdir -p build/ict
 ICXX="g++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wno-misleading-indentation -Werror -Ishim -Ibuild/ict"
 python3 check_embedded.py "$ICT" "$OPR"
-build_ict() {  # $1 = source .mq5, $2 = binaire, $3 = version (222 / 230 / 240), $4 = variante, $5 = libellé, puis surcharges --set=...
+build_ict() {  # $1 = source .mq5, $2 = binaire, $3 = version (222 / 230 / 240 / 250), $4 = variante, $5 = libellé, puis surcharges --set=...
   local src=$1 bin=$2 ver=$3 var=$4 label=$5
   shift 5
   python3 mq2cpp.py "$src" "build/ict/$bin.cpp" "$@"
-  $ICXX -DICT_SRC="\"$bin.cpp\"" -DV230=$((ver >= 230 ? 1 : 0)) -DV240=$((ver >= 240 ? 1 : 0)) -DVARIANT="$var" -DLABEL="\"$label\"" \
+  $ICXX -DICT_SRC="\"$bin.cpp\"" -DV230=$((ver >= 230 ? 1 : 0)) -DV240=$((ver >= 240 ? 1 : 0)) -DV250=$((ver >= 250 ? 1 : 0)) -DVARIANT="$var" -DLABEL="\"$label\"" \
     ictnas_tests.cpp -o "build/ict/$bin" -lsqlite3
 }
 run3() { for s in 71 72 73; do ./build/ict/$1 $s | tee -a $STATS | grep -v '^STATS'; done; }
 STATS=build/ict/stats.txt
 : > $STATS
 echo
-build_ict "$ICT" ict_def 240 0 "v2.40 (union ICT NAS + OPR/FVG + v6.20 + RiskGuard)"
+build_ict "$ICT" ict_def 250 0 "v2.50 (gagnants jusqu'à leur cible, DD testeur, apprentissage)"
 run3 ict_def
-build_ict "$ICT" ict_sig 240 1 "-" --set=InpTradingEnabled=false
+build_ict "$ICT" ict_sig 250 1 "-" --set=InpTradingEnabled=false
 ./build/ict/ict_sig 71 | grep -v '^STATS'
-build_ict "$ICT" ict_rst 240 2 "-" --set=InpFreshDBInTester=false
+build_ict "$ICT" ict_rst 250 2 "-" --set=InpFreshDBInTester=false
 ./build/ict/ict_rst 71 | grep -v '^STATS'
-build_ict "$ICT" ict_leg 240 3 "v2.40 sans le modèle London PDF" --set=InpLondonMode=LONDON_LEGACY
+build_ict "$ICT" ict_leg 250 3 "v2.50 sans le modèle London PDF" --set=InpLondonMode=LONDON_LEGACY
 run3 ict_leg
-build_ict "$ICT" ict_bad 240 4 "-" --set=InpLOOpr2Trade=true
+build_ict "$ICT" ict_bad 250 4 "-" --set=InpLOOpr2Trade=true
 ./build/ict/ict_bad 71 | grep -v '^STATS'
-build_ict "$ICT" ict_vis 240 5 "-" --set=InpLondonManage=LM_ICTNAS
+build_ict "$ICT" ict_vis 250 5 "-" --set=InpLondonManage=LM_ICTNAS
 ./build/ict/ict_vis 71 | grep -v '^STATS'
-build_ict "$ICT" ict_open 240 7 "-"
+build_ict "$ICT" ict_open 250 7 "-"
 ./build/ict/ict_open 71 | grep -v '^STATS'
-build_ict "$ICT" ict_nov6 240 9 "v2.40 sans les modèles v6.20" --set=InpV6EnableSB=false --set=InpV6EnableMB=false
+build_ict "$ICT" ict_nov6 250 9 "v2.50 sans les modèles v6.20" --set=InpV6EnableSB=false --set=InpV6EnableMB=false
 run3 ict_nov6
-build_ict "$ICT" ict_clamp 240 9 "option RiskGuard : SL ramené au plafond ATR" --set=InpSLCapMode=SLCAP_CLAMP
+build_ict "$ICT" ict_clamp 250 9 "option RiskGuard : SL ramené au plafond ATR" --set=InpSLCapMode=SLCAP_CLAMP
 run3 ict_clamp
-build_ict "$ICT" ict_small 240 6 "v2.40 petit compte (10 000, lot min 0,1)"
+build_ict "$ICT" ict_small 250 6 "v2.50 petit compte (10 000, lot min 0,1)"
 run3 ict_small
 build_ict ref/ICT_NAS_Institutional_v230.mq5 ict_small230 230 6 "v2.30 petit compte (10 000, lot min 0,1)"
 run3 ict_small230
+build_ict "$ICT" ict_gate 250 9 "v2.50 + blocage par l'apprentissage (InpAdaptGate)" --set=InpAdaptGate=true
+run3 ict_gate
+build_ict "$ICT" ict_dd 250 9 "v2.50, DD total forcé à 1 % (le test continue)" --set=InpMaxTotalDDPct=1.0
+run3 ict_dd
+build_ict ref/ICT_NAS_Institutional_v240.mq5 ict_v240dd 240 9 "v2.40, DD total forcé à 1 % (arrêt définitif)" --set=InpMaxTotalDDPct=1.0
+run3 ict_v240dd
+build_ict ref/ICT_NAS_Institutional_v240.mq5 ict_v240 240 9 "v2.40"
+run3 ict_v240
 build_ict ref/ICT_NAS_Institutional_v230.mq5 ict_v230 230 9 "v2.30"
 run3 ict_v230
 build_ict ref/ICT_NAS_Institutional_v222.mq5 ict_v222 222 9 "v2.22 (origine)"

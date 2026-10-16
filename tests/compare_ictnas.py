@@ -10,18 +10,21 @@ for line in open(sys.argv[1], encoding="utf-8"):
         continue
     f = line.rstrip("\n").split(";")
     label, ver, seed, days, fills, wins, losses, net, maxloss, sigs = f[1:11]
-    models, decisions = {}, {}
+    models, decisions, rtot = {}, {}, None
     for kv in f[11:]:
         k, v = kv.rsplit("=", 1)
+        if k.startswith("R:"):
+            rtot = float(v)
+            continue
         (models if k.startswith("F:") else decisions)[k[2:]] = int(v)
     if label not in runs:
         order.append(label)
     runs[label].append(dict(ver=ver, seed=int(seed), days=int(days), fills=int(fills), wins=int(wins), losses=int(losses),
-                            net=float(net), maxloss=float(maxloss), sigs=int(sigs), models=models, decisions=decisions))
+                            net=float(net), maxloss=float(maxloss), sigs=int(sigs), models=models, decisions=decisions, rtot=rtot))
 
 print("| Configuration | trades exécutés / jour | dont London OPR PDF | dont SB Momentum | dont v6.20 (SB 1er FVG + Macro Breaker) "
-      "| autres modèles | gagnants / perdants | perte max par trade | setups refusés « lot < lot minimum » |")
-print("|---|---|---|---|---|---|---|---|---|")
+      "| autres modèles | gagnants / perdants | R total (R / trade) | perte max par trade | setups refusés « lot < lot minimum » |")
+print("|---|---|---|---|---|---|---|---|---|---|")
 for label in order:
     rs = runs[label]
     days = sum(r["days"] for r in rs)
@@ -33,8 +36,10 @@ for label in order:
     v6 = sum(r["models"].get("SB_V6", 0) + r["models"].get("MACRO_BREAKER", 0) for r in rs)
     ml = max(r["maxloss"] for r in rs)
     lot = sum(v for r in rs for k, v in r["decisions"].items() if "lot < lot minimum" in k)
+    rs_r = [r["rtot"] for r in rs if r["rtot"] is not None]
+    rcell = "-" if not rs_r else f"{sum(rs_r):.0f} R ({sum(rs_r) / max(1, fills):.2f})"
     print(f"| {label} | {fills / days:.2f} ({fills} sur {days} j) | {lo / days:.2f} | {sm / days:.2f} | {v6 / days:.2f} "
-          f"| {(fills - lo - sm - v6) / days:.2f} | {w} / {l} | {ml:.2f} % | {lot} |")
+          f"| {(fills - lo - sm - v6) / days:.2f} | {w} / {l} | {rcell} | {ml:.2f} % | {lot} |")
 print()
 print("Principales décisions sur les signaux ICT complets (cumul des graines) :")
 for label in order:
