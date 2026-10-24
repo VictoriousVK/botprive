@@ -67,10 +67,13 @@ export function signWavePayload(rawBody: string, secret: string, now: Date): str
 export class WaveProvider implements PaymentProvider {
   readonly id = "wave" as const;
   readonly capabilities = { card: false, mobileMoney: true, recurring: false, refund: true };
+  /** Wave n'a pas de sandbox documentée : seul le faux serveur local compte comme test. */
+  readonly testMode: boolean;
   private readonly fetchImpl: FetchLike;
 
   constructor(private readonly config: WaveConfig) {
     this.fetchImpl = config.fetch ?? fetch;
+    this.testMode = !config.baseUrl.startsWith("https://api.wave.com");
   }
 
   private call<T>(path: string, init: { method?: "GET" | "POST"; body?: unknown; idempotencyKey?: string } = {}) {

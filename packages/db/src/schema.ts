@@ -76,6 +76,8 @@ export const subscriptions = pgTable(
     currentPeriodEnd: ts("current_period_end"),
     graceEndsAt: ts("grace_ends_at"),
     renewalCanceledAt: ts("renewal_canceled_at"),
+    // Montant prélevé par le prestataire à chaque échéance (figé à l'activation du prélèvement automatique).
+    recurringAmount: integer("recurring_amount"),
     createdAt: ts("created_at").notNull().defaultNow(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
   },
@@ -222,6 +224,14 @@ export const sessions = pgTable("sessions", {
     .references(() => members.id, { onDelete: "cascade" }),
   createdAt: ts("created_at").notNull().defaultNow(),
   expiresAt: ts("expires_at").notNull(),
+});
+
+// Réglages modifiables depuis le tableau de bord (tarifs, horaires, Telegram, mode Discord…).
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+  updatedBy: text("updated_by"),
 });
 
 export type Member = typeof members.$inferSelect;

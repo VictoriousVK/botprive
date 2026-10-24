@@ -1,7 +1,12 @@
 import Link from "next/link";
-import { CLUB, formatDate, formatXof, PLANS } from "@vk/core";
+import { CLUB, formatDate, formatXof, getCatalog, getSettings, telegramLinkFor, WEEK_DAYS } from "@vk/core";
 import { Candles } from "@/components/Candles";
 import { PlanCards } from "@/components/PlanCards";
+import { TelegramButton } from "@/components/TelegramButton";
+import { listPosters } from "@/lib/posters";
+import { getDeps } from "@/lib/server";
+
+export const dynamic = "force-dynamic";
 
 const ADVANTAGES = [
   { title: "Nasdaq en direct", text: "Analyse en temps réel et prises de position live sur NAS100." },
@@ -15,7 +20,7 @@ const ADVANTAGES = [
 const FAQ = [
   {
     q: "Comment se passe le paiement ?",
-    a: "En ligne, en FCFA, par Mobile Money (Wave, Orange Money selon le prestataire actif) ou par carte bancaire, via un prestataire de paiement agréé. Nous ne voyons jamais tes données de carte.",
+    a: "En ligne, en FCFA, par Mobile Money (Wave, Orange Money selon le prestataire actif) ou par carte bancaire, via un prestataire de paiement agréé par la BCEAO. Nous ne voyons jamais tes données de carte.",
   },
   {
     q: "Le renouvellement est-il automatique ?",
@@ -43,9 +48,15 @@ const FAQ = [
   },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
   const launch = new Date(`${CLUB.launchDate}T12:00:00Z`);
-  const fromPrice = Math.min(...Object.values(PLANS).map((p) => p.priceXof));
+  const db = getDeps().db;
+  const [settings, catalog] = await Promise.all([getSettings(db), getCatalog(db)]);
+  const prices = catalog.list.filter((p) => p.purchasable).map((p) => p.priceXof!);
+  const fromPrice = prices.length ? Math.min(...prices) : null;
+  const telegramUrl = telegramLinkFor(settings, { hasAccess: false });
+  const posters = listPosters();
+  const days = settings.schedule.days;
   return (
     <>
       <section className="hero" aria-labelledby="hero-title">
@@ -76,7 +87,7 @@ export default function HomePage() {
             </a>
           </div>
           <p className="muted" style={{ margin: 0, fontSize: "0.9rem" }}>
-            À partir de {formatXof(fromPrice)} · Mobile Money ou carte
+            {fromPrice !== null ? `À partir de ${formatXof(fromPrice)} · Mobile Money ou carte` : "Tarifs en FCFA bientôt disponibles · Mobile Money ou carte"}
           </p>
         </div>
       </section>
@@ -86,15 +97,19 @@ export default function HomePage() {
           <div className="section-head">
             <p className="label">Planning hebdomadaire</p>
             <h2 id="planning-title" className="display">
-              3 lives <span className="accent">par semaine</span>
+              {days.length} lives <span className="accent">par semaine</span>
             </h2>
-            <p className="lead">{CLUB.liveHours ? `Horaires : ${CLUB.liveHours}.` : "Horaires précis annoncés sur le Discord du club."}</p>
+            <p className="lead">{settings.schedule.note ?? (days.some((d) => d.time) ? "Heure de Dakar (GMT)." : "Horaires précis annoncés très bientôt.")}</p>
           </div>
-          <div className="days">
-            {CLUB.schedule.map((d) => (
+          <div className="days" style={{ gridTemplateColumns: `repeat(${Math.min(days.length, 4)}, 1fr)` }}>
+            {days.map((d) => (
               <div key={d.day} className="card day">
                 <p className="display">{d.day}</p>
-                <p className="label">Live · Q&amp;A · Débrief</p>
+                <p className="label">{settings.schedule.format}</p>
+                <p className="day-time">
+                  {d.time ?? "Horaire à venir"}
+                  <span className="sr-only"> le {WEEK_DAYS.find((w) => w.day === d.day)!.label.toLowerCase()}</span>
+                </p>
               </div>
             ))}
           </div>
@@ -164,9 +179,14 @@ export default function HomePage() {
             <article className="card">
               <span className="num">Telegram</span>
               <h3 className="display">Les reviews</h3>
-              <p>Groupe privé « ICT V_ICT_orious Trader » : cours, support, replays et débriefing complet après chaque live.</p>
+              <p>Groupe « ICT V_ICT_orious Trader » : enregistrements des sessions, cours, support et débriefing complet après chaque live.</p>
             </article>
           </div>
+          {telegramUrl ? (
+            <div className="actions" style={{ marginTop: 20 }}>
+              <TelegramButton url={telegramUrl} />
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -178,7 +198,7 @@ export default function HomePage() {
               Rejoins <span className="accent">le club</span>
             </h2>
           </div>
-          <PlanCards />
+          <PlanCards plans={catalog.list} days={days.map((d) => d.day)} />
           <p className="note">
             <strong>Carte bancaire :</strong> renouvellement automatique, uniquement avec ton accord explicite, annulable à tout moment.{" "}
             <strong>Mobile Money :</strong> renouvellement par rappel (J-3, J-1, J0) avec un lien de paiement en 1 clic. Les prix en dollars
@@ -186,6 +206,27 @@ export default function HomePage() {
           </p>
         </div>
       </section>
+
+      {posters.length ? (
+        <section className="section" aria-labelledby="affiches-title">
+          <div className="container">
+            <div className="section-head">
+              <p className="label">Le Live Club en images</p>
+              <h2 id="affiches-title" className="display">
+                Les <span className="accent">affiches</span>
+              </h2>
+            </div>
+            <div className="posters">
+              {posters.map((p) => (
+                <a key={p.src} href={p.src} target="_blank" rel="noopener noreferrer" className="poster">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={p.src} alt={p.alt} loading="lazy" decoding="async" />
+                </a>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section id="faq" className="section" aria-labelledby="faq-title">
         <div className="container">

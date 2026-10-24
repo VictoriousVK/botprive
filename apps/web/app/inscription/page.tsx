@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { formatXof, hasActiveAutoRenewal, isPlanId, PLANS } from "@vk/core";
+import { formatXof, getCatalog, hasActiveAutoRenewal, isPlanId } from "@vk/core";
 import { CheckoutForm } from "@/components/CheckoutForm";
 import { errorMessage } from "@/lib/messages";
 import { getCurrentMember, getDeps } from "@/lib/server";
@@ -14,6 +14,8 @@ export default async function InscriptionPage({ searchParams }: { searchParams: 
   const error = errorMessage(sp.erreur);
   const member = await getCurrentMember();
   const deps = getDeps();
+  const catalog = await getCatalog(deps.db);
+  const chosen = catalog.plans[planId];
 
   if (!member) {
     const next = `/inscription?plan=${planId}`;
@@ -28,7 +30,10 @@ export default async function InscriptionPage({ searchParams }: { searchParams: 
           Ton accès aux lives est lié à ton compte Discord. La connexion nous permet d'identifier ton vrai compte et de t'ajouter au
           serveur si tu n'y es pas encore. Nous ne lisons pas tes messages.
         </p>
-        <p className="muted">Formule choisie : {PLANS[planId].label} · {formatXof(PLANS[planId].priceXof)}</p>
+        <p className="muted">
+          Formule choisie : {chosen.label}
+          {chosen.priceXof !== null ? ` · ${formatXof(chosen.priceXof)}` : " · tarif bientôt disponible"}
+        </p>
         <a className="btn" href={`/api/auth/discord/login?next=${encodeURIComponent(next)}`}>
           Se connecter avec Discord
         </a>
@@ -42,16 +47,19 @@ export default async function InscriptionPage({ searchParams }: { searchParams: 
   const card = deps.providers.forMethod("card");
   const mobileMoney = deps.providers.forMethod("mobile_money");
   const autoActive = await hasActiveAutoRenewal(deps, member.id);
-  const plans = Object.values(PLANS).map((p) => ({
-    id: p.id,
-    label: p.label,
-    months: p.months,
-    priceUsd: p.priceUsd,
-    priceXofLabel: formatXof(p.priceXof),
-    badge: p.badge,
-  }));
-  const autoRenewPlans =
-    card?.capabilities.recurring && card.providerPlanIdFor ? plans.filter((p) => card.providerPlanIdFor!(p.id as never)).map((p) => p.id) : [];
+  const plans = catalog.list
+    .filter((p) => p.purchasable)
+    .map((p) => ({
+      id: p.id,
+      label: p.label,
+      months: p.months,
+      priceUsd: p.priceUsd,
+      priceXofLabel: formatXof(p.priceXof!),
+      badge: p.badge ?? undefined,
+    }));
+  // Renouvellement automatique proposé seulement si un plan récurrent est rattaché à la formule.
+  const autoRenewPlans = card?.id === "flutterwave" && card.capabilities.recurring ? catalog.list.filter((p) => p.purchasable && p.flutterwavePlanId).map((p) => p.id) : [];
+  const initialPlan = plans.some((p) => p.id === planId) ? planId : plans[0]?.id;
 
   return (
     <div className="container page page-narrow">
@@ -72,19 +80,19 @@ export default async function InscriptionPage({ searchParams }: { searchParams: 
             Gérer mon abonnement
           </Link>
         </div>
-      ) : !card && !mobileMoney ? (
+      ) : (!card && !mobileMoney) || !initialPlan ? (
         <div className="alert">
           Le paiement en ligne ouvre très bientôt. En attendant, contacte-nous sur WhatsApp pour t'inscrire.
         </div>
       ) : (
         <CheckoutForm
           plans={plans}
-          initialPlan={planId}
+          initialPlan={initialPlan}
           email={member.email ?? ""}
           phone={member.phone ?? ""}
           card={Boolean(card)}
           mobileMoney={Boolean(mobileMoney)}
-          mobileMoneyLabel={mobileMoney?.id === "wave" ? "Wave" : "Orange Money, Wave"}
+          mobileMoneyLabel={mobileMoney?.id === "wave" ? "Wave" : mobileMoney?.id === "paydunya" ? "Orange Money, Wave, Free Money" : "Orange Money, Wave"}
           autoRenewPlans={autoRenewPlans}
         />
       )}

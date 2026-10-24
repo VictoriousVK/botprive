@@ -210,6 +210,8 @@ export async function confirmPayment(deps: Deps, paymentId: string, verified: Ve
       changes.provider = payment.provider;
       changes.providerSubscriptionId = verified.providerSubscriptionId ?? sub.providerSubscriptionId;
       changes.providerPlanId = verified.providerPlanId ?? sub.providerPlanId;
+      // Montant figé du prélèvement : un changement de prix ultérieur ne concerne pas cet abonnement.
+      changes.recurringAmount = payment.amount;
     }
 
     let updated: Subscription;

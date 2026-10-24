@@ -3,13 +3,16 @@ import Link from "next/link";
 import {
   formatDate,
   formatXof,
+  getCatalog,
   getMemberDashboard,
-  getPlan,
+  getSettings,
   hasAccess,
   isPlanId,
+  telegramLinkFor,
   type SubscriptionStatus,
 } from "@vk/core";
 import { StatusBadge } from "@/components/StatusBadge";
+import { TelegramButton } from "@/components/TelegramButton";
 import { errorMessage } from "@/lib/messages";
 import { getCurrentMember, getDeps } from "@/lib/server";
 
@@ -48,7 +51,10 @@ export default async function EspacePage({ searchParams }: { searchParams: Promi
   const data = await getMemberDashboard(deps.db, member.id);
   const sub = data?.subscription ?? null;
   const status = (sub?.status ?? null) as SubscriptionStatus | null;
-  const plan = sub && isPlanId(sub.planId) ? getPlan(sub.planId) : null;
+  const [catalog, settings] = await Promise.all([getCatalog(deps.db), getSettings(deps.db)]);
+  const plan = sub && isPlanId(sub.planId) ? catalog.plans[sub.planId] : null;
+  const shownPrice = sub?.renewalMode === "auto_card" && sub.recurringAmount ? sub.recurringAmount : plan?.priceXof ?? null;
+  const telegramUrl = telegramLinkFor(settings, { hasAccess: hasAccess(status) });
   const autoActive = sub?.renewalMode === "auto_card" && status !== "canceled" && hasAccess(status);
   const cancelable = status === "active" || status === "renewal_due" || (status === "grace_period" && sub?.renewalMode === "auto_card");
   const error = errorMessage(sp.erreur);
@@ -75,7 +81,7 @@ export default async function EspacePage({ searchParams }: { searchParams: Promi
           <dl className="kv">
             <div>
               <dt>Formule</dt>
-              <dd>{plan ? `${plan.label} · ${formatXof(plan.priceXof)}` : "—"}</dd>
+              <dd>{plan ? `${plan.label}${shownPrice !== null ? ` · ${formatXof(shownPrice)}` : ""}` : "—"}</dd>
             </div>
             <div>
               <dt>{status === "expired" ? "Accès terminé le" : "Accès jusqu'au"}</dt>
@@ -124,12 +130,13 @@ export default async function EspacePage({ searchParams }: { searchParams: Promi
             <li>
               Rôle membre : {hasAccess(status) ? "attribué automatiquement" : "attribué dès la confirmation de ton paiement"}
             </li>
-            {hasAccess(status) && deps.env.TELEGRAM_INVITE_URL ? (
-              <li>
-                Telegram privé : <a href={deps.env.TELEGRAM_INVITE_URL} rel="noopener noreferrer">ICT V_ICT_orious Trader</a>
-              </li>
-            ) : null}
           </ul>
+          {telegramUrl ? (
+            <div style={{ marginTop: 18 }}>
+              <TelegramButton url={telegramUrl} />
+              <p className="muted" style={{ fontSize: "0.85rem", marginTop: 8 }}>Replays des sessions, cours et débriefs.</p>
+            </div>
+          ) : null}
           <form method="post" action="/api/auth/logout" style={{ marginTop: 22 }}>
             <button className="btn small ghost" type="submit">
               Se déconnecter
@@ -159,7 +166,7 @@ export default async function EspacePage({ searchParams }: { searchParams: Promi
                 {data.history.map((p) => (
                   <tr key={p.id}>
                     <td>{formatDate(p.confirmedAt ?? p.createdAt)}</td>
-                    <td>{isPlanId(p.planId) ? getPlan(p.planId).label : p.planId}</td>
+                    <td>{isPlanId(p.planId) ? catalog.plans[p.planId].label : p.planId}</td>
                     <td>{formatXof(p.amount)}</td>
                     <td>{METHOD[p.method] ?? p.method}</td>
                     <td>{PAYMENT_STATUS[p.status] ?? p.status}</td>

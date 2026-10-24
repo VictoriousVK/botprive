@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { formatXof, PLANS } from "@vk/core";
+import { formatXof, type CatalogPlan } from "@vk/core";
 
-const PERKS = ["3 lives par semaine (MAR · MER · VEN)", "Telegram privé, replays et débriefs", "Stratégies Gold exclusives", "1 invité spécial chaque semaine"];
-
-export function PlanCards() {
+export function PlanCards({ plans, days }: { plans: CatalogPlan[]; days: string[] }) {
+  const visible = plans.filter((p) => p.enabled);
+  const PERKS = [`${days.length} lives par semaine (${days.join(" · ")})`, "Telegram : replays, cours et débriefs", "Stratégies Gold exclusives", "1 invité spécial chaque semaine"];
   return (
     <div className="plans">
-      {Object.values(PLANS).map((plan) => {
+      {visible.map((plan) => {
         const highlight = Boolean(plan.badge);
         return (
           <article key={plan.id} className={`card plan${highlight ? " highlight" : ""}`} aria-labelledby={`plan-${plan.id}`}>
@@ -15,20 +15,28 @@ export function PlanCards() {
             <h3 id={`plan-${plan.id}`} className="display">
               {plan.label}
             </h3>
-            <div className="price">
-              <span className="display">{plan.priceUsd}</span>
-              <span className="display" style={{ fontSize: "2rem" }}>$</span>
-            </div>
-            <p className="price-xof">{formatXof(plan.priceXof)} · prix payé</p>
+            {plan.priceUsd !== null ? (
+              <div className="price">
+                <span className="display">{plan.priceUsd}</span>
+                <span className="display" style={{ fontSize: "2rem" }}>$</span>
+              </div>
+            ) : null}
+            <p className="price-xof">{plan.priceXof !== null ? `${formatXof(plan.priceXof)} · prix payé` : "Tarif en FCFA bientôt disponible"}</p>
             <p className="muted" style={{ margin: 0 }}>{plan.tagline}</p>
             <ul>
               {PERKS.map((perk) => (
                 <li key={perk}>{perk}</li>
               ))}
             </ul>
-            <Link className={`btn block${highlight ? "" : " ghost"}`} href={`/inscription?plan=${plan.id}`}>
-              Choisir {plan.label.toLowerCase()}
-            </Link>
+            {plan.purchasable ? (
+              <Link className={`btn block${highlight ? "" : " ghost"}`} href={`/inscription?plan=${plan.id}`}>
+                Choisir {plan.label.toLowerCase()}
+              </Link>
+            ) : (
+              <span className="btn block ghost" aria-disabled="true">
+                Bientôt disponible
+              </span>
+            )}
           </article>
         );
       })}

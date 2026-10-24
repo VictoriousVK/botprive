@@ -35,18 +35,30 @@ const envSchema = z.object({
   DISCORD_API_BASE_URL: z.string().url().default("https://discord.com/api/v10"),
   EXPIRY_ACTION: z.enum(["remove_role", "kick"]).default("remove_role"),
 
+  /** Lien Telegram initial (repris une seule fois ; ensuite modifiable dans /admin/telegram). */
   TELEGRAM_INVITE_URL: optional,
 
-  PAYMENT_PROVIDER_CARD: z.enum(["flutterwave", "none"]).default("flutterwave"),
-  PAYMENT_PROVIDER_MOBILE_MONEY: z.enum(["wave", "flutterwave", "none"]).default("flutterwave"),
+  /** Discord IDs autorisés à ouvrir le tableau de bord /admin, séparés par des virgules. */
+  ADMIN_DISCORD_IDS: csv,
+
+  /**
+   * test (défaut) : aucun encaissement réel possible (clés de test / faux serveur uniquement).
+   * live : encaissement réel, exige des tarifs validés dans le tableau de bord.
+   */
+  PAYMENT_MODE: z.enum(["test", "live"]).default("test"),
+  PAYMENT_PROVIDER_CARD: z.enum(["flutterwave", "paydunya", "none"]).default("flutterwave"),
+  PAYMENT_PROVIDER_MOBILE_MONEY: z.enum(["wave", "flutterwave", "paydunya", "none"]).default("flutterwave"),
 
   FLW_SECRET_KEY: optional,
   FLW_WEBHOOK_HASH: optional,
   FLW_API_BASE_URL: z.string().url().default("https://api.flutterwave.com"),
   FLW_MOBILE_MONEY_OPTION: z.string().default("mobilemoneyfranco"),
-  FLW_PLAN_ID_MONTHLY: optional,
-  FLW_PLAN_ID_QUARTERLY: optional,
-  FLW_PLAN_ID_ANNUAL: optional,
+
+  PAYDUNYA_MASTER_KEY: optional,
+  PAYDUNYA_PRIVATE_KEY: optional,
+  PAYDUNYA_TOKEN: optional,
+  /** Laisser vide : sandbox en mode test, API réelle en mode live. */
+  PAYDUNYA_API_BASE_URL: optional,
 
   WAVE_API_KEY: optional,
   WAVE_WEBHOOK_SECRET: optional,

@@ -1,12 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import { members, payments, type Payment } from "@vk/db";
 import { audit } from "../audit";
-import { CLUB, getPlan, type PlanId } from "../config/club";
+import { CLUB, type PlanId } from "../config/club";
 import { newPaymentReference } from "../crypto";
 import { addMinutes } from "../dates";
 import type { CoreDeps } from "../deps";
 import { DomainError } from "../errors";
 import { enqueue } from "../jobs/queue";
+import { getCatalog } from "../settings";
 import { hasAccess, type SubscriptionStatus } from "../state-machine";
 import { ensureSubscription, getSubscriptionForMember } from "../subscriptions/service";
 import type { PaymentMethod } from "./types";
@@ -40,7 +41,16 @@ export async function hasActiveAutoRenewal(deps: Pick<CoreDeps, "db">, memberId:
  */
 export async function startCheckout(deps: CoreDeps, input: StartCheckoutInput): Promise<StartCheckoutResult> {
   const now = deps.now();
-  const plan = getPlan(input.planId);
+  const catalog = await getCatalog(deps.db);
+  const plan = catalog.plans[input.planId];
+  if (!plan) throw new DomainError("unknown_plan", "Formule inconnue");
+  if (!plan.purchasable || plan.priceXof === null) {
+    throw new DomainError("plan_unavailable", `La formule ${plan.label} n'est pas encore disponible (tarif en cours de définition)`);
+  }
+  if (deps.env.PAYMENT_MODE === "live" && !catalog.pricesValidated) {
+    throw new DomainError("prices_not_validated", "Les tarifs n'ont pas encore été validés : paiement réel impossible");
+  }
+  const amount = plan.priceXof;
   if (input.autoRenew && input.method !== "card") {
     throw new DomainError("auto_renew_card_only", "Le renouvellement automatique n'est possible que par carte bancaire");
   }
@@ -53,6 +63,10 @@ export async function startCheckout(deps: CoreDeps, input: StartCheckoutInput): 
   }
   if (input.autoRenew && !provider.capabilities.recurring) {
     throw new DomainError("auto_renew_unavailable", "Le renouvellement automatique n'est pas disponible avec ce moyen de paiement");
+  }
+  const providerPlanId = provider.id === "flutterwave" ? plan.flutterwavePlanId : null;
+  if (input.autoRenew && !providerPlanId) {
+    throw new DomainError("auto_renew_unavailable", `Le renouvellement automatique n'est pas encore configuré pour la formule ${plan.label}`);
   }
   if (await hasActiveAutoRenewal(deps, input.memberId)) {
     throw new DomainError(
@@ -84,7 +98,7 @@ export async function startCheckout(deps: CoreDeps, input: StartCheckoutInput): 
       provider: provider.id,
       method: input.method,
       kind: hasAccess(sub.status as SubscriptionStatus) ? "renewal" : "initial",
-      amount: plan.priceXof,
+      amount,
       currency: CLUB.currency,
       status: "pending",
       autoRenew: input.autoRenew,
@@ -95,11 +109,12 @@ export async function startCheckout(deps: CoreDeps, input: StartCheckoutInput): 
   const appUrl = deps.env.APP_URL.replace(/\/$/, "");
   const session = await provider.createCheckout({
     reference,
-    amount: plan.priceXof,
+    amount,
     currency: CLUB.currency,
     plan,
     method: input.method,
     autoRenew: input.autoRenew,
+    providerPlanId,
     customer: { email, name: member.name ?? member.discordUsername, phone: input.phone ?? member.phone, discordUserId: member.discordUserId },
     returnUrl: `${appUrl}/paiement/retour?ref=${encodeURIComponent(reference)}`,
     cancelUrl: `${appUrl}/paiement/retour?ref=${encodeURIComponent(reference)}&annule=1`,

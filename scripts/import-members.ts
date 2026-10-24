@@ -1,15 +1,16 @@
 /**
- * Import des membres actuels sans leur faire repayer.
+ * Import des membres actuels sans leur faire repayer (même contrôle que /admin/import).
  *
- *   pnpm import:members chemin/membres.csv            → simulation (rien n'est écrit)
+ *   pnpm import:members chemin/membres.csv            → aperçu détaillé (rien n'est écrit)
  *   pnpm import:members chemin/membres.csv --apply    → import réel
  *
  * Colonnes : discord_user_id, nom, email, téléphone, formule, date_de_fin
  * (séparateur « , » ou « ; », dates AAAA-MM-JJ ou JJ/MM/AAAA, formules mensuel/trimestriel/annuel)
+ * Les rôles Discord suivent ensuite le mode choisi dans le tableau de bord (observation par défaut).
  */
 import { readFileSync } from "node:fs";
 import { parse } from "csv-parse/sync";
-import { consoleLogger, importMembers, loadEnv, required, type ImportRow } from "@vk/core";
+import { consoleLogger, formatDate, importMembers, loadEnv, normalizeHeader, previewImport, required, type ImportRow } from "@vk/core";
 import { createDb } from "@vk/db";
 
 const file = process.argv[2];
@@ -21,20 +22,27 @@ if (!file) {
 
 const raw = readFileSync(file, "utf8");
 const delimiter = (raw.split(/\r?\n/)[0] ?? "").includes(";") ? ";" : ",";
-const normalizeHeader = (h: string) =>
-  h.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, "_");
 const rows = parse(raw, { columns: (headers: string[]) => headers.map(normalizeHeader), delimiter, bom: true, skip_empty_lines: true, trim: true }) as ImportRow[];
 
 const env = loadEnv();
 const { db, close } = createDb(required(env, "DATABASE_URL"), { max: 2 });
+const deps = { db, now: () => new Date() };
 try {
-  const report = await importMembers({ db, now: () => new Date() }, rows, { dryRun: !apply, adminId: "import-csv" });
-  console.log(`${apply ? "Import" : "Simulation"} : ${rows.length} ligne(s) lue(s)`);
-  console.log(`  ${apply ? "importé(s)" : "à importer"} : ${report.created}`);
-  if (apply) console.log(`  déjà présent(s), ignoré(s) : ${report.skipped}`);
-  for (const e of report.errors) console.log(`  ✗ ligne ${e.line} : ${e.message}`);
-  if (!apply) console.log("\nRien n'a été écrit. Relance avec --apply pour importer.");
-  else console.log("\nLe worker attribuera les rôles Discord dans les minutes qui suivent.");
+  const preview = await previewImport(deps, rows);
+  const mark = { ok: "✓", warning: "!", error: "✗", skip: "·" } as const;
+  for (const r of preview.rows) {
+    console.log(
+      `${mark[r.level]} ligne ${r.line} · ${r.discordUserId || "?"} · ${r.planId ?? "?"} · ${r.endDate ? formatDate(r.endDate) : "?"} → ${r.resultingStatus ?? "—"}${r.messages.length ? ` · ${r.messages.join(" ; ")}` : ""}`,
+    );
+  }
+  const s = preview.summary;
+  console.log(`\n${s.total} ligne(s) : ${s.importable} importable(s) (dont ${s.warnings} à vérifier), ${s.errors} rejetée(s), ${s.skipped} déjà enregistrée(s).`);
+  if (!apply) {
+    console.log("Rien n'a été écrit. Relance avec --apply pour importer.");
+  } else {
+    const report = await importMembers(deps, rows, { adminId: "import-csv" });
+    console.log(`Import : ${report.created} membre(s) importé(s), ${report.skipped} ignoré(s).`);
+  }
 } catch (error) {
   consoleLogger.error(String(error));
   process.exitCode = 1;

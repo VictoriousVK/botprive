@@ -3,6 +3,7 @@
  *
  *   pnpm webhook:send --provider wave --checkout cos-xxx --ref VK-XXX
  *   pnpm webhook:send --provider flutterwave --tx 9000001 --ref VK-XXX
+ *   pnpm webhook:send --provider paydunya --token test_xxx --ref VK-XXX
  *   options : --status succeeded|failed  --forge (mauvaise signature)  --replay (horodatage de 10 min)
  *             --url http://localhost:3000
  *
@@ -10,7 +11,7 @@
  * un webhook seul n'accorde jamais d'accès.
  */
 import { parseArgs } from "node:util";
-import { signWavePayload } from "@vk/core";
+import { paydunyaHash, signWavePayload } from "@vk/core";
 
 const { values } = parseArgs({
   options: {
@@ -18,6 +19,7 @@ const { values } = parseArgs({
     ref: { type: "string" },
     checkout: { type: "string" },
     tx: { type: "string" },
+    token: { type: "string" },
     status: { type: "string", default: "succeeded" },
     forge: { type: "boolean", default: false },
     replay: { type: "boolean", default: false },
@@ -38,6 +40,15 @@ if (values.provider === "wave") {
   const secret = values.forge ? "secret-falsifie" : process.env.WAVE_WEBHOOK_SECRET ?? "wave_sn_WHS_dev";
   const when = values.replay ? new Date(Date.now() - 10 * 60_000) : new Date();
   headers = { "wave-signature": signWavePayload(body, secret, when) };
+} else if (values.provider === "paydunya") {
+  const master = values.forge ? "cle-falsifiee" : process.env.PAYDUNYA_MASTER_KEY ?? "pd-master-test";
+  body = new URLSearchParams({
+    "data[hash]": paydunyaHash(master),
+    "data[status]": ok ? "completed" : "cancelled",
+    "data[invoice][token]": values.token ?? "",
+    "data[custom_data][reference]": values.ref ?? "",
+  }).toString();
+  headers = { "content-type": "application/x-www-form-urlencoded" };
 } else {
   body = JSON.stringify({ event: "charge.completed", data: { id: Number(values.tx), tx_ref: values.ref, status: ok ? "successful" : "failed" } });
   headers = { "verif-hash": values.forge ? "hash-falsifie" : process.env.FLW_WEBHOOK_HASH ?? "flw-webhook-hash-dev" };

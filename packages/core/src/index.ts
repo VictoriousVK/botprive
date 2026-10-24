@@ -1,4 +1,5 @@
 export * from "./config/club";
+export * from "./settings";
 export * from "./config/env";
 export * from "./errors";
 export * from "./logger";
@@ -25,6 +26,7 @@ export * from "./payments/checkout";
 export * from "./payments/webhooks";
 export { FlutterwaveProvider, type FlutterwaveConfig } from "./payments/providers/flutterwave";
 export { WaveProvider, verifyWaveSignature, signWavePayload, type WaveConfig } from "./payments/providers/wave";
+export { PayDunyaProvider, paydunyaHash, PAYDUNYA_LIVE_URL, PAYDUNYA_SANDBOX_URL, type PayDunyaConfig } from "./payments/providers/paydunya";
 export * from "./discord/access";
 export * from "./notifications/templates";
 export * from "./notifications/email";

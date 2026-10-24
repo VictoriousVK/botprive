@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { formatDate, formatXof, getMember, getSubscriptionForMember, hasActiveAutoRenewal, PLANS, signingSecret, verifyRenewalToken } from "@vk/core";
+import { formatDate, formatXof, getCatalog, getMember, getSubscriptionForMember, hasActiveAutoRenewal, signingSecret, verifyRenewalToken } from "@vk/core";
 import { errorMessage } from "@/lib/messages";
 import { getDeps } from "@/lib/server";
 
@@ -25,7 +25,7 @@ export default async function RenewPage({ params, searchParams }: { params: Prom
     );
   }
 
-  const plan = PLANS[claims.planId];
+  const plan = (await getCatalog(deps.db)).plans[claims.planId];
   const sub = await getSubscriptionForMember(deps.db, member.id);
   const autoActive = await hasActiveAutoRenewal(deps, member.id);
   const mobileMoney = deps.providers.forMethod("mobile_money");
@@ -36,7 +36,8 @@ export default async function RenewPage({ params, searchParams }: { params: Prom
     <div className="container page page-narrow">
       <p className="label">Renouvellement en 1 clic</p>
       <h1 className="display" style={{ fontSize: "clamp(2.4rem, 10vw, 4rem)" }}>
-        {plan.label} · {formatXof(plan.priceXof)}
+        {plan.label}
+        {plan.priceXof !== null ? ` · ${formatXof(plan.priceXof)}` : ""}
       </h1>
       <p className="lead">
         Compte Discord : <strong>{member.discordUsername ?? member.discordUserId}</strong>
@@ -50,6 +51,8 @@ export default async function RenewPage({ params, searchParams }: { params: Prom
       {error ? <p className="alert error" role="alert">{error}</p> : null}
       {autoActive ? (
         <p className="alert">Ton renouvellement automatique par carte est actif : rien à faire, il sera prélevé à l'échéance.</p>
+      ) : !plan.purchasable ? (
+        <p className="alert">Cette formule n'est pas disponible pour le moment. Contacte-nous sur WhatsApp.</p>
       ) : (
         <div className="grid" style={{ gap: 12 }}>
           {mobileMoney ? (
@@ -57,7 +60,7 @@ export default async function RenewPage({ params, searchParams }: { params: Prom
               <input type="hidden" name="token" value={decodeURIComponent(token)} />
               <input type="hidden" name="method" value="mobile_money" />
               <button className="btn block" type="submit">
-                Payer {formatXof(plan.priceXof)} · Mobile Money
+                Payer {formatXof(plan.priceXof!)} · Mobile Money
               </button>
             </form>
           ) : null}

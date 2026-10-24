@@ -3,6 +3,7 @@ import { members, subscriptions, type Db, type Member } from "@vk/db";
 import { audit } from "../audit";
 import type { ExpiryAction } from "../config/club";
 import { postLog } from "../outbox";
+import { getSettings, isDiscordActionLive } from "../settings";
 import { hasAccess, type SubscriptionStatus } from "../state-machine";
 
 export interface GuildMemberInfo {
@@ -44,7 +45,17 @@ export function isExempt(policy: AccessPolicy, guildMember: GuildMemberInfo | nu
   return guildMember.roles.some((r) => policy.exemptRoleIds.includes(r));
 }
 
-export type SyncResult = "granted" | "revoked" | "kicked" | "unchanged" | "not_in_guild" | "exempt" | "unknown_member";
+export type SyncResult =
+  | "granted"
+  | "revoked"
+  | "kicked"
+  | "unchanged"
+  | "not_in_guild"
+  | "exempt"
+  | "unknown_member"
+  /** Mode observation : le changement aurait eu lieu, rien n'a été modifié sur Discord. */
+  | "simulated_grant"
+  | "simulated_revoke";
 
 interface SyncCtx {
   db: Db;
@@ -57,7 +68,7 @@ interface SyncCtx {
  * Aligne le rôle Discord sur l'état en base (« état désiré ») : idempotent,
  * insensible à l'ordre des événements, rejouable autant de fois que nécessaire.
  */
-export async function syncMemberAccess(ctx: SyncCtx, memberId: string): Promise<SyncResult> {
+export async function syncMemberAccess(ctx: SyncCtx, memberId: string, options: { quiet?: boolean } = {}): Promise<SyncResult> {
   const [row] = await ctx.db
     .select({ member: members, status: subscriptions.status })
     .from(members)
@@ -74,6 +85,16 @@ export async function syncMemberAccess(ctx: SyncCtx, memberId: string): Promise<
   const hasRole = guildMember.roles.includes(ctx.policy.memberRoleId);
   const shouldHaveRole = hasAccess(status);
   const now = ctx.now();
+
+  // Mode observation (réglage du tableau de bord) : aucune modification réelle, sauf comptes de test.
+  if (shouldHaveRole !== hasRole && !isDiscordActionLive(await getSettings(ctx.db), member.discordUserId)) {
+    const action = shouldHaveRole ? "attribué" : "retiré";
+    await audit(ctx.db, { actorType: "system", action: shouldHaveRole ? "discord.role_grant_simulated" : "discord.role_revoke_simulated", memberId, details: { status } }, now);
+    if (!options.quiet) {
+      await postLog(ctx.db, `🧪 Mode observation : le rôle abonné serait ${action} à <@${member.discordUserId}> (${status ?? "aucun abonnement"}). Aucun changement réel.`);
+    }
+    return shouldHaveRole ? "simulated_grant" : "simulated_revoke";
+  }
 
   if (shouldHaveRole && !hasRole) {
     await ctx.discord.addRole(member.discordUserId, ctx.policy.memberRoleId, "Abonnement actif");

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { members, subscriptions } from "@vk/db";
 import { audit } from "./audit";
-import { CLUB, getPlan } from "./config/club";
+import { CLUB, getPlan, WEEK_DAYS } from "./config/club";
 import { addMinutes } from "./dates";
 import { syncMemberAccess } from "./discord/access";
 import { enqueue, type JobType } from "./jobs/queue";
@@ -10,7 +10,8 @@ import { renderNotification, type TemplateContext } from "./notifications/templa
 import type { NotificationTemplate } from "./outbox";
 import { reverifyPendingPayment } from "./payments/webhooks";
 import { reconcile, type WorkerDeps } from "./reconciliation";
-import type { SubscriptionStatus } from "./state-machine";
+import { getCatalog, getSettings, isDiscordActionLive, scheduleSummary, telegramLinkFor } from "./settings";
+import { hasAccess, type SubscriptionStatus } from "./state-machine";
 import { findMemberByDiscordId } from "./subscriptions/service";
 import { createRenewalToken, signingSecret } from "./tokens";
 
@@ -41,22 +42,28 @@ async function buildContext(deps: WorkerDeps, payload: NotifyPayload) {
   if (payload.template === "expired" && status !== "expired") return null;
 
   const plan = getPlan(sub.planId);
+  const settings = await getSettings(deps.db);
+  const catalogPlan = (await getCatalog(deps.db)).plans[plan.id];
   const appUrl = deps.env.APP_URL.replace(/\/$/, "");
   const token = createRenewalToken(signingSecret(deps.env), member.id, plan.id, now, CLUB.renewalLinkValidityDays);
   const ctx: TemplateContext = {
     memberName: member.name ?? member.discordUsername ?? "membre",
     planLabel: plan.label,
-    priceXof: plan.priceXof,
+    priceXof: sub.renewalMode === "auto_card" && sub.recurringAmount ? sub.recurringAmount : catalogPlan.priceXof,
+    liveSchedule: scheduleSummary(settings),
+    scheduleDays: settings.schedule.days.map((d) => WEEK_DAYS.find((w) => w.day === d.day)!.label.toLowerCase()).join(", "),
     autoRenewActive: sub.renewalMode === "auto_card" && status !== "canceled",
     periodEnd: payload.data?.periodEnd ? new Date(payload.data.periodEnd) : sub.currentPeriodEnd,
     graceEndsAt: sub.graceEndsAt,
     renewalUrl: `${appUrl}/r/${token}`,
     accountUrl: `${appUrl}/espace`,
     inviteUrl: deps.env.DISCORD_INVITE_URL,
-    telegramUrl: deps.env.TELEGRAM_INVITE_URL,
+    telegramUrl: telegramLinkFor(settings, { hasAccess: hasAccess(status) }) ?? undefined,
     now,
   };
-  return { member, rendered: renderNotification(payload.template, ctx) };
+  // Mode observation : aucun message réel aux membres (sauf comptes de test).
+  const live = isDiscordActionLive(settings, member.discordUserId);
+  return { member, live, rendered: renderNotification(payload.template, ctx) };
 }
 
 /** Délais successifs de re-vérification d'un paiement en attente. */
@@ -75,6 +82,10 @@ export function createJobHandlers(deps: WorkerDeps): Record<JobType, JobHandler>
     async notify_dm(payload) {
       const built = await buildContext(deps, payload as unknown as NotifyPayload);
       if (!built?.rendered) return;
+      if (!built.live) {
+        await audit(deps.db, { actorType: "system", action: "notify.dm_simulated", memberId: built.member.id, details: { template: payload.template } }, deps.now());
+        return;
+      }
       const result = await deps.discord.sendDm(built.member.discordUserId, built.rendered.dm);
       if (result === "blocked") {
         await audit(deps.db, { actorType: "system", action: "notify.dm_blocked", memberId: built.member.id, details: { template: payload.template } }, deps.now());
@@ -83,6 +94,10 @@ export function createJobHandlers(deps: WorkerDeps): Record<JobType, JobHandler>
     async notify_email(payload) {
       const built = await buildContext(deps, payload as unknown as NotifyPayload);
       if (!built?.rendered || !built.member.email) return;
+      if (!built.live) {
+        await audit(deps.db, { actorType: "system", action: "notify.email_simulated", memberId: built.member.id, details: { template: payload.template } }, deps.now());
+        return;
+      }
       await deps.email.send({ to: built.member.email, ...built.rendered.email });
     },
     async discord_log(payload) {

@@ -5,7 +5,9 @@ import {
   createEmailSender,
   createJobHandlers,
   createProviderRegistry,
+  getSettings,
   JobRunner,
+  seedSettingsFromEnv,
   loadEnv,
   postLog,
   purgeExpiredSessions,
@@ -32,6 +34,7 @@ if (process.env.RUN_MIGRATIONS !== "false") {
 }
 
 const { db, close } = createDb(databaseUrl);
+await seedSettingsFromEnv(db, env);
 const token = required(env, "DISCORD_BOT_TOKEN");
 const guildId = required(env, "DISCORD_GUILD_ID");
 const rest = new REST({ version: "10" }).setToken(token);
@@ -41,7 +44,7 @@ const deps: WorkerDeps = {
   env,
   now: () => new Date(),
   logger,
-  providers: createProviderRegistry(env),
+  providers: createProviderRegistry(env, undefined, logger),
   discord: new RestDiscordGateway(rest, guildId, env.DISCORD_LOG_CHANNEL_ID),
   email: createEmailSender(env, logger),
   policy: {
@@ -91,7 +94,18 @@ try {
   await close();
   process.exit(1);
 }
-await postLog(db, `🟢 Worker démarré (${new Date().toISOString()})`);
+{
+  const settings = await getSettings(db);
+  const modes = [
+    `paiements : ${env.PAYMENT_MODE === "live" ? "RÉELS" : "mode test (aucun encaissement réel)"}`,
+    `Discord : ${settings.discordSync.mode === "live" ? "rôles appliqués" : `🧪 observation (aucun rôle modifié${settings.discordSync.testUserIds.length ? `, sauf ${settings.discordSync.testUserIds.length} compte(s) de test` : ""})`}`,
+    ...deps.providers.disabled.map((d) => `⚠️ ${d.id} écarté : ${d.reason}`),
+  ];
+  if (env.PAYMENT_MODE === "live" && settings.discordSync.mode === "observe") {
+    modes.push("⚠️ Paiements réels mais rôles en observation : les nouveaux abonnés ne recevront pas leur rôle.");
+  }
+  await postLog(db, `🟢 Worker démarré · ${modes.join(" · ")}`);
+}
 logger.info("Worker démarré");
 
 let stopping = false;

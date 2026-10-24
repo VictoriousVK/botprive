@@ -3,12 +3,12 @@
 À cocher ensemble avant d'ouvrir les paiements réels.
 
 ## Décisions de Victor
-- [ ] Prix FCFA définitifs des 3 formules dans `packages/core/src/config/club.ts`
+- [ ] Prix FCFA des 3 formules saisis dans `/admin/tarifs`, puis **validés**
 - [ ] Prix de l'annuel revu (900 $ > 4 × 200 $ du trimestriel)
-- [ ] Horaires des lives (`liveHours`) et numéro WhatsApp affiché (`whatsappNumber`)
+- [ ] Horaires des lives saisis dans `/admin/lives` ; numéro WhatsApp affiché confirmé
 - [ ] Délai de grâce (3 jours) et action à l'expiration (retrait du rôle) confirmés
 - [ ] Affiches et logo fournis : ajustements visuels du site
-- [ ] Lien Telegram privé (`TELEGRAM_INVITE_URL`)
+- [ ] Lien Telegram et visibilité (public ou membres actifs) dans `/admin/telegram`
 
 ## Juridique (à faire valider, rien n'est garanti conforme)
 - [ ] CGV complétées : raison sociale, RCCM, NINEA, adresse, TVA, médiation (`apps/web/content/legal/cgv.md`)
@@ -28,7 +28,8 @@
 - [ ] Toutes les variables Railway renseignées (`NODE_ENV=production`, `APP_URL` en https)
 - [ ] `SESSION_SECRET` de 48+ caractères aléatoires, identique sur web et worker
 - [ ] URLs déclarées : redirect OAuth Discord, webhook Flutterwave (+ secret hash), webhook Wave (signing secret)
-- [ ] Plans Flutterwave créés aux bons prix (`FLW_PLAN_ID_*`)
+- [ ] Plans Flutterwave créés aux bons prix (bouton dans `/admin/tarifs`)
+- [ ] `ADMIN_DISCORD_IDS` renseigné ; accès à `/admin` vérifié (et refusé pour un autre compte)
 - [ ] Commandes Discord enregistrées (`/stats` répond)
 - [ ] Exceptions de réconciliation renseignées (admins, modérateurs, invités)
 - [ ] Sauvegardes Postgres actives, une restauration testée
@@ -45,7 +46,9 @@
 - [ ] Site sur téléphone (Android + iPhone) : lisibilité, paiement, retour
 
 ## Ouverture
-- [ ] Bascule des clés test → production chez le prestataire, et des plans Flutterwave de production
-- [ ] Import CSV des membres actuels (`--apply`) et vérification des rôles
+- [ ] Import CSV des membres actuels (`/admin/import`), vérification des fiches
+- [ ] Réconciliation en mode observation relue : retraits et attributions qui auraient eu lieu, sans surprise
+- [ ] Discord passé en mode **Réel** dans `/admin/discord` (avec ton autorisation explicite)
+- [ ] `PAYMENT_MODE=live` + clés de production, et plans Flutterwave recréés en production
 - [ ] Premier vrai paiement suivi en direct dans `#logs-club`
 - [ ] Message aux membres : nouveau lien d'inscription, fin des paiements par WhatsApp

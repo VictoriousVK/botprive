@@ -6,6 +6,7 @@ import {
   loadEnv,
   silentLogger,
   startCheckout,
+  updateSetting,
   upsertMember,
   type AccessPolicy,
   type PlanId,
@@ -25,7 +26,17 @@ export function discordId(): string {
   return `3000000000000${String(seq).padStart(5, "0")}`;
 }
 
-export async function setup(start = "2026-11-12T10:00:00Z") {
+/** Prix fictifs utilisés uniquement par les tests (aucun montant réel n'est fixé dans le code). */
+export const TEST_PRICES = { monthly: 50_000, quarterly: 115_000, annual: 520_000 } as const;
+
+export interface SetupOptions {
+  card?: "flutterwave" | "paydunya" | "none";
+  mobileMoney?: "wave" | "flutterwave" | "paydunya" | "none";
+  /** Mode Discord : live (défaut des tests) ou observe. */
+  discordMode?: "live" | "observe";
+}
+
+export async function setup(start = "2026-11-12T10:00:00Z", options: SetupOptions = {}) {
   const testDb = await createTestDatabase();
   const clock = new TestClock(start);
   const mock = new MockProviders({
@@ -33,6 +44,9 @@ export async function setup(start = "2026-11-12T10:00:00Z") {
     flwWebhookHash: "flw-webhook-hash-test",
     waveApiKey: "wave_sn_test_mock",
     waveWebhookSecret: "wave_sn_WHS_test",
+    paydunyaMasterKey: "pd-master-test",
+    paydunyaPrivateKey: "test_private_mock",
+    paydunyaToken: "pd-token-test",
     now: clock.now,
   });
   await mock.start();
@@ -40,14 +54,15 @@ export async function setup(start = "2026-11-12T10:00:00Z") {
     NODE_ENV: "test",
     APP_URL: "https://club.test",
     SESSION_SECRET: "s".repeat(40),
-    PAYMENT_PROVIDER_CARD: "flutterwave",
-    PAYMENT_PROVIDER_MOBILE_MONEY: "wave",
+    PAYMENT_PROVIDER_CARD: options.card ?? "flutterwave",
+    PAYMENT_PROVIDER_MOBILE_MONEY: options.mobileMoney ?? "wave",
     FLW_SECRET_KEY: "FLWSECK_TEST-mock",
     FLW_WEBHOOK_HASH: "flw-webhook-hash-test",
     FLW_API_BASE_URL: mock.baseUrl,
-    FLW_PLAN_ID_MONTHLY: "111",
-    FLW_PLAN_ID_QUARTERLY: "222",
-    FLW_PLAN_ID_ANNUAL: "333",
+    PAYDUNYA_MASTER_KEY: "pd-master-test",
+    PAYDUNYA_PRIVATE_KEY: "test_private_mock",
+    PAYDUNYA_TOKEN: "pd-token-test",
+    PAYDUNYA_API_BASE_URL: `${mock.baseUrl}/sandbox-api/v1`,
     WAVE_API_KEY: "wave_sn_test_mock",
     WAVE_WEBHOOK_SECRET: "wave_sn_WHS_test",
     WAVE_API_BASE_URL: mock.baseUrl,
@@ -70,6 +85,14 @@ export async function setup(start = "2026-11-12T10:00:00Z") {
     email,
     policy,
   };
+  // Réglages saisis par l'admin : prix de test, plans Flutterwave, mode Discord.
+  await updateSetting(testDb.db, "plans", {
+    monthly: { priceUsd: 85, priceXof: TEST_PRICES.monthly, badge: null, tagline: "Test", enabled: true, flutterwavePlanId: "111" },
+    quarterly: { priceUsd: 200, priceXof: TEST_PRICES.quarterly, badge: "Le + avantageux", tagline: "Test", enabled: true, flutterwavePlanId: "222" },
+    annual: { priceUsd: 900, priceXof: TEST_PRICES.annual, badge: null, tagline: "Test", enabled: true, flutterwavePlanId: "333" },
+  }, "test-admin", clock.now());
+  await updateSetting(testDb.db, "discordSync", { mode: options.discordMode ?? "live", testUserIds: [] }, "test-admin", clock.now());
+
   const runner = new JobRunner(testDb.db, createJobHandlers(deps), { workerId: "test-worker", logger: silentLogger, now: clock.now, concurrency: 20 });
 
   const ctx = {

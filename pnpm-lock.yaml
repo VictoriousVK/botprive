@@ -50,6 +50,9 @@ importers:
       '@vk/db':
         specifier: workspace:*
         version: link:../../packages/db
+      csv-parse:
+        specifier: 7.0.3
+        version: 7.0.3
       drizzle-orm:
         specifier: 0.45.4
         version: 0.45.4(postgres@3.4.9)

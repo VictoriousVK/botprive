@@ -6,7 +6,7 @@ export interface PlanOption {
   id: string;
   label: string;
   months: number;
-  priceUsd: number;
+  priceUsd: number | null;
   priceXofLabel: string;
   badge?: string;
 }
@@ -44,7 +44,8 @@ export function CheckoutForm(props: Props) {
                 {p.badge ? ` · ${p.badge}` : ""}
               </strong>
               <small>
-                {p.months === 1 ? "1 mois" : `${p.months} mois`} · {p.priceUsd} $ indicatif
+                {p.months === 1 ? "1 mois" : `${p.months} mois`}
+                {p.priceUsd !== null ? ` · ${p.priceUsd} $ indicatif` : ""}
               </small>
             </span>
           </label>

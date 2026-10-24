@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { members, payments, subscriptions, webhookEvents, type Payment, type Subscription } from "@vk/db";
 import { CLUB, getPlan } from "../config/club";
+import { getCatalog } from "../settings";
 import type { CoreDeps } from "../deps";
 import { InvalidSignatureError } from "../errors";
 import { postLog } from "../outbox";
@@ -207,12 +208,7 @@ async function processRecurringCharge(
   const verified = await provider.verifyPayment({ reference: reference ?? "", providerTransactionId, expectSubscription: true });
   if (verified.status !== "succeeded") return { status: "processed", note: `prélèvement ${verified.status}` };
 
-  const planId = verified.providerPlanId ? provider.planIdForProviderPlan?.(verified.providerPlanId) : undefined;
-  if (!planId) {
-    await postLog(deps.db, `⚠️ Prélèvement ${provider.id} #${providerTransactionId} sans formule reconnue : à rattacher à la main.`);
-    return { status: "unmatched", note: "plan prestataire inconnu" };
-  }
-
+  // 1. L'abonnement : par identifiant chez le prestataire, sinon par email (prélèvement auto uniquement).
   let sub: Subscription | undefined;
   if (verified.providerSubscriptionId) {
     [sub] = await deps.db
@@ -233,18 +229,24 @@ async function processRecurringCharge(
     return { status: "unmatched", note: "abonné introuvable" };
   }
 
-  const plan = getPlan(planId);
+  // 2. Montant attendu : celui figé à l'activation du prélèvement (un changement de prix ne le modifie pas).
+  const expected = sub.recurringAmount ?? (await getCatalog(deps.db)).plans[getPlan(sub.planId).id].priceXof;
+  if (expected === null) {
+    await postLog(deps.db, `⚠️ Prélèvement ${provider.id} #${providerTransactionId} : montant attendu inconnu (abonnement ${sub.id}), à vérifier.`);
+    return { status: "unmatched", note: "montant attendu inconnu" };
+  }
+
   const [payment] = await deps.db
     .insert(payments)
     .values({
       reference: `${provider.id.toUpperCase()}-${providerTransactionId}`,
       memberId: sub.memberId,
       subscriptionId: sub.id,
-      planId: plan.id,
+      planId: sub.planId,
       provider: provider.id,
       method: "card",
       kind: "recurring",
-      amount: plan.priceXof,
+      amount: expected,
       currency: CLUB.currency,
       status: "pending",
       autoRenew: true,
@@ -266,7 +268,7 @@ export async function reverifyPendingPayment(deps: CoreDeps, paymentId: string):
   const [payment] = await deps.db.select().from(payments).where(eq(payments.id, paymentId));
   if (!payment || payment.status !== "pending") return "not_pending";
   const provider = deps.providers.get(payment.provider);
-  if (payment.provider === "wave" && !payment.providerCheckoutId) {
+  if ((payment.provider === "wave" || payment.provider === "paydunya") && !payment.providerCheckoutId) {
     await markPaymentFailed(deps.db, payment.id, "Session de paiement jamais créée");
     return "failed";
   }

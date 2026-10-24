@@ -24,6 +24,7 @@ import {
   startCheckout,
   STATUS_LABELS,
   upsertMember,
+  updateSetting,
   type SubscriptionStatus,
   type WorkerDeps,
 } from "@vk/core";
@@ -55,9 +56,6 @@ const env = loadEnv({
   FLW_SECRET_KEY: "FLWSECK_TEST-sim",
   FLW_WEBHOOK_HASH: "sim-hash",
   FLW_API_BASE_URL: mock.baseUrl,
-  FLW_PLAN_ID_MONTHLY: "111",
-  FLW_PLAN_ID_QUARTERLY: "222",
-  FLW_PLAN_ID_ANNUAL: "333",
   WAVE_API_KEY: "wave_sn_sim",
   WAVE_WEBHOOK_SECRET: "wave_sim_secret",
   WAVE_API_BASE_URL: mock.baseUrl,
@@ -73,6 +71,16 @@ const deps: WorkerDeps = {
   email: new MemoryEmailSender(),
   policy: { memberRoleId: ROLE, exemptUserIds: [], exemptRoleIds: [], expiryAction: "remove_role" },
 };
+// Réglages du tableau de bord pour la simulation : prix FICTIFS (aucun montant réel n'est décidé ici),
+// plans Flutterwave du faux serveur, rôles appliqués (faux Discord).
+await updateSetting(testDb.db, "plans", {
+  monthly: { priceUsd: 85, priceXof: 50_000, badge: null, tagline: "Simulation", enabled: true, flutterwavePlanId: "111" },
+  quarterly: { priceUsd: 200, priceXof: 115_000, badge: "Le + avantageux", tagline: "Simulation", enabled: true, flutterwavePlanId: "222" },
+  annual: { priceUsd: 900, priceXof: 520_000, badge: null, tagline: "Simulation", enabled: true, flutterwavePlanId: "333" },
+}, "simulation", clock.now());
+await updateSetting(testDb.db, "discordSync", { mode: "live", testUserIds: [] }, "simulation", clock.now());
+info("Prix utilisés : montants fictifs de simulation (50 000 / 115 000 / 520 000 FCFA), à remplacer par les tiens dans /admin/tarifs.");
+
 const runner = new JobRunner(testDb.db, createJobHandlers(deps), { workerId: "simulation", logger: silentLogger, now: clock.now, concurrency: 20 });
 const deliver = (d: WebhookDelivery) => handleWebhook(deps, d.provider, { headers: d.headers, rawBody: d.rawBody });
 const statusOf = async (memberId: string) => (await getSubscriptionForMember(testDb.db, memberId))?.status as SubscriptionStatus;

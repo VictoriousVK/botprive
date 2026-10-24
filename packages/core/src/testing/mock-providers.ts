@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { signWavePayload } from "../payments/providers/wave";
+import { paydunyaHash } from "../payments/providers/paydunya";
 
 /*
  * Faux serveur Flutterwave + Wave, pour développer et tester SANS vrai paiement.
@@ -14,6 +15,9 @@ export interface MockProvidersConfig {
   flwWebhookHash: string;
   waveApiKey: string;
   waveWebhookSecret: string;
+  paydunyaMasterKey?: string;
+  paydunyaPrivateKey?: string;
+  paydunyaToken?: string;
   /** URL de l'application qui reçoit les webhooks (…/api/webhooks/{provider}). Optionnel. */
   webhookBaseUrl?: string;
   now?: () => Date;
@@ -53,8 +57,19 @@ export interface WaveSessionMock {
   wave_launch_url: string;
 }
 
+export interface PayDunyaInvoiceMock {
+  token: string;
+  total_amount: number;
+  custom_data: Record<string, unknown>;
+  actions: { return_url?: string; cancel_url?: string; callback_url?: string };
+  status: "pending" | "completed" | "cancelled";
+  channels?: string[];
+}
+
+type MockProvider = "flutterwave" | "wave" | "paydunya";
+
 export interface WebhookDelivery {
-  provider: "flutterwave" | "wave";
+  provider: MockProvider;
   headers: Record<string, string>;
   rawBody: string;
 }
@@ -77,6 +92,7 @@ export class MockProviders {
   readonly flwTransactions = new Map<number, FlwTx>();
   readonly flwSubscriptions = new Map<number, FlwSub>();
   readonly waveSessions = new Map<string, WaveSessionMock>();
+  readonly paydunyaInvoices = new Map<string, PayDunyaInvoiceMock>();
   readonly deliveries: WebhookDelivery[] = [];
   private server: Server | null = null;
   private nextId = 9_000_001;
@@ -105,7 +121,8 @@ export class MockProviders {
   // ─── Actions pilotées (tests, simulation) ───────────────────────────────
 
   /** Le client valide le paiement. Retourne le webhook à livrer. */
-  pay(provider: "flutterwave" | "wave", reference: string): WebhookDelivery {
+  pay(provider: MockProvider, reference: string): WebhookDelivery {
+    if (provider === "paydunya") return this.paydunyaIpn(this.paydunyaByRef(reference), "completed");
     if (provider === "flutterwave") {
       const tx = [...this.flwTransactions.values()].find((t) => t.tx_ref === reference);
       if (!tx) throw new Error(`Transaction Flutterwave inconnue : ${reference}`);
@@ -125,7 +142,8 @@ export class MockProviders {
   }
 
   /** Le client refuse / échoue le paiement. */
-  fail(provider: "flutterwave" | "wave", reference: string): WebhookDelivery {
+  fail(provider: MockProvider, reference: string): WebhookDelivery {
+    if (provider === "paydunya") return this.paydunyaIpn(this.paydunyaByRef(reference), "cancelled");
     if (provider === "flutterwave") {
       const tx = [...this.flwTransactions.values()].find((t) => t.tx_ref === reference);
       if (!tx) throw new Error(`Transaction Flutterwave inconnue : ${reference}`);
@@ -176,6 +194,27 @@ export class MockProviders {
     return delivery;
   }
 
+  private paydunyaByRef(reference: string): PayDunyaInvoiceMock {
+    const invoice = [...this.paydunyaInvoices.values()].find((i) => i.custom_data.reference === reference);
+    if (!invoice) throw new Error(`Facture PayDunya inconnue : ${reference}`);
+    return invoice;
+  }
+
+  /** IPN PayDunya (formulaire data[...]) avec le hash SHA-512 de la clé principale. */
+  paydunyaIpn(invoice: PayDunyaInvoiceMock, status: "completed" | "cancelled", masterKey = this.config.paydunyaMasterKey ?? "pd-master-test"): WebhookDelivery {
+    invoice.status = status;
+    const form = new URLSearchParams({
+      "data[hash]": paydunyaHash(masterKey),
+      "data[status]": status,
+      "data[invoice][token]": invoice.token,
+      "data[invoice][total_amount]": String(invoice.total_amount),
+      "data[custom_data][reference]": String(invoice.custom_data.reference ?? ""),
+    });
+    const delivery = { provider: "paydunya" as const, headers: { "content-type": "application/x-www-form-urlencoded" }, rawBody: form.toString() };
+    this.deliveries.push(delivery);
+    return delivery;
+  }
+
   /** Envoie le webhook à l'application (si webhookBaseUrl est configurée). */
   async deliver(delivery: WebhookDelivery): Promise<number> {
     if (!this.config.webhookBaseUrl) return 0;
@@ -196,8 +235,18 @@ export class MockProviders {
     const auth = req.headers.authorization ?? "";
 
     // Pages de paiement factices
-    const page = /^\/mock\/checkout\/(flutterwave|wave)\/([^/]+)(?:\/(pay|fail))?$/.exec(path);
-    if (page) return this.checkoutPage(req, res, page[1] as "flutterwave" | "wave", decodeURIComponent(page[2]!), page[3] as "pay" | "fail" | undefined);
+    const page = /^\/mock\/checkout\/(flutterwave|wave|paydunya)\/([^/]+)(?:\/(pay|fail))?$/.exec(path);
+    if (page) return this.checkoutPage(req, res, page[1] as MockProvider, decodeURIComponent(page[2]!), page[3] as "pay" | "fail" | undefined);
+
+    const pd = /^\/(?:sandbox-api|api)\/v1\/(.*)$/.exec(path);
+    if (pd) {
+      const ok =
+        req.headers["paydunya-master-key"] === (this.config.paydunyaMasterKey ?? "pd-master-test") &&
+        req.headers["paydunya-private-key"] === (this.config.paydunyaPrivateKey ?? "test_private_mock") &&
+        req.headers["paydunya-token"] === (this.config.paydunyaToken ?? "pd-token-test");
+      if (!ok) return json(res, 200, { response_code: "1001", response_text: "Invalid Masterkey Specified" });
+      return this.paydunya(req, res, method, pd[1]!);
+    }
 
     if (path.startsWith("/v3/")) {
       if (auth !== `Bearer ${this.config.flwSecretKey}`) return json(res, 401, { status: "error", message: "Invalid authorization key" });
@@ -292,8 +341,45 @@ export class MockProviders {
     json(res, 404, { message: "not found" });
   }
 
-  private async checkoutPage(req: IncomingMessage, res: ServerResponse, provider: "flutterwave" | "wave", reference: string, action?: "pay" | "fail"): Promise<void> {
+  private async paydunya(req: IncomingMessage, res: ServerResponse, method: string, path: string): Promise<void> {
+    if (method === "POST" && path === "checkout-invoice/create") {
+      const body = JSON.parse(await readBody(req));
+      const token = `test_${(this.nextId++).toString(36)}`;
+      const invoice: PayDunyaInvoiceMock = {
+        token,
+        total_amount: Number(body.invoice?.total_amount),
+        custom_data: body.custom_data ?? {},
+        actions: body.actions ?? {},
+        status: "pending",
+        channels: body.channels,
+      };
+      this.paydunyaInvoices.set(token, invoice);
+      return json(res, 200, { response_code: "00", response_text: `${this.baseUrl}/mock/checkout/paydunya/${encodeURIComponent(String(invoice.custom_data.reference))}`, description: "Checkout Invoice Created", token });
+    }
+    const m = /^checkout-invoice\/confirm\/([^/]+)$/.exec(path);
+    if (method === "GET" && m) {
+      const invoice = this.paydunyaInvoices.get(m[1]!);
+      if (!invoice) return json(res, 200, { response_code: "1004", response_text: "Invoice Not Found" });
+      return json(res, 200, {
+        response_code: "00",
+        response_text: "Transaction Found",
+        hash: paydunyaHash(this.config.paydunyaMasterKey ?? "pd-master-test"),
+        invoice: { token: invoice.token, total_amount: String(invoice.total_amount) },
+        custom_data: invoice.custom_data,
+        actions: invoice.actions,
+        mode: "test",
+        status: invoice.status,
+      });
+    }
+    json(res, 404, { response_code: "404", response_text: "not found" });
+  }
+
+  private async checkoutPage(req: IncomingMessage, res: ServerResponse, provider: MockProvider, reference: string, action?: "pay" | "fail"): Promise<void> {
     const back = (() => {
+      if (provider === "paydunya") {
+        const invoice = [...this.paydunyaInvoices.values()].find((i) => i.custom_data.reference === reference);
+        return action === "fail" ? invoice?.actions.cancel_url : invoice?.actions.return_url;
+      }
       if (provider === "flutterwave") return [...this.flwTransactions.values()].find((t) => t.tx_ref === reference)?.redirect_url;
       const s = [...this.waveSessions.values()].find((x) => x.client_reference === reference);
       return action === "fail" ? s?.error_url : s?.success_url;

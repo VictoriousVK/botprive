@@ -5,7 +5,11 @@ import type { NotificationTemplate } from "../outbox";
 export interface TemplateContext {
   memberName: string;
   planLabel: string;
-  priceXof: number;
+  /** null = tarif pas encore défini. */
+  priceXof: number | null;
+  /** Résumé des horaires des lives, ou null s'ils ne sont pas encore fixés. */
+  liveSchedule: string | null;
+  scheduleDays: string;
   /** Prélèvement carte actif : on n'envoie JAMAIS de lien de paiement manuel (double paiement). */
   autoRenewActive: boolean;
   periodEnd: Date | null;
@@ -36,7 +40,7 @@ function remaining(ctx: TemplateContext): string {
 function body(template: NotificationTemplate, ctx: TemplateContext): { subject: string; lines: string[] } | null {
   const end = ctx.periodEnd ? formatDate(ctx.periodEnd) : "—";
   const grace = ctx.graceEndsAt ? formatDate(ctx.graceEndsAt) : end;
-  const price = `${ctx.planLabel} · ${formatXof(ctx.priceXof)}`;
+  const price = ctx.priceXof === null ? ctx.planLabel : `${ctx.planLabel} · ${formatXof(ctx.priceXof)}`;
   switch (template) {
     case "welcome":
       return {
@@ -44,8 +48,8 @@ function body(template: NotificationTemplate, ctx: TemplateContext): { subject: 
         lines: [
           `Bienvenue ${ctx.memberName} ! 🎉`,
           `Ton accès au **${CLUB.name}** est actif jusqu'au **${end}**.`,
-          `Lives chaque ${CLUB.schedule.map((s) => s.label.toLowerCase()).join(", ")} : Live · Q&A · Débrief.${CLUB.liveHours ? ` (${CLUB.liveHours})` : ""}`,
-          ...(ctx.telegramUrl ? [`Telegram privé « ICT V_ICT_orious Trader » (cours, replays, débriefs) : ${ctx.telegramUrl}`] : []),
+          `Lives chaque ${ctx.scheduleDays} : Live · Q&A · Débrief.${ctx.liveSchedule ? ` (${ctx.liveSchedule})` : " Horaires annoncés sur le Discord."}`,
+          ...(ctx.telegramUrl ? [`Rejoins notre groupe Telegram (replays des sessions, cours, débriefs) : ${ctx.telegramUrl}`] : []),
           `Serveur Discord : ${ctx.inviteUrl}`,
           `Ton espace membre : ${ctx.accountUrl}`,
           `« ${CLUB.quote} »`,

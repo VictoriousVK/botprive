@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node ../../scripts/sync-posters.mjs",
     "dev": "next dev",
+    "prebuild": "node ../../scripts/sync-posters.mjs",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -15,6 +17,7 @@
     "@fontsource/jetbrains-mono": "5.3.0",
     "@vk/core": "workspace:*",
     "@vk/db": "workspace:*",
+    "csv-parse": "7.0.3",
     "drizzle-orm": "0.45.4",
     "next": "16.4.2",
     "postgres": "3.4.9",

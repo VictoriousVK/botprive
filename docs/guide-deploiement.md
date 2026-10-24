@@ -31,12 +31,16 @@ Dans le projet : **Variables → Shared Variables**. Ajoute les valeurs communes
 | `APP_URL` | `https://club.ton-domaine.com` (sans / final) |
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (référence Railway, réseau privé) |
 | `SESSION_SECRET` | `openssl rand -base64 48` (même valeur pour les deux services) |
-| `DISCORD_*`, `TELEGRAM_INVITE_URL` | voir [guide Discord](guide-discord.md) |
-| `PAYMENT_PROVIDER_*`, `FLW_*`, `WAVE_*` | voir [guide paiements](guide-paiements.md) |
+| `ADMIN_DISCORD_IDS` | ton identifiant Discord (accès à `/admin`) |
+| `TELEGRAM_INVITE_URL` | ton lien d'invitation Telegram (valeur initiale, ensuite modifiable dans `/admin/telegram`) |
+| `PAYMENT_MODE` | `test` tant que le prestataire n'est pas validé et testé, puis `live` |
+| `DISCORD_*` | voir [guide Discord](guide-discord.md) |
+| `PAYMENT_PROVIDER_*`, `FLW_*`, `PAYDUNYA_*`, `WAVE_*` | voir [guide paiements](guide-paiements.md) |
 | `EMAIL_PROVIDER` | `resend` |
 | `RESEND_API_KEY`, `EMAIL_FROM` | voir l'étape 4 |
 
-Ne remplis pas `FLW_API_BASE_URL` / `WAVE_API_BASE_URL` : les valeurs par défaut sont les vraies API.
+Ne remplis pas `FLW_API_BASE_URL`, `WAVE_API_BASE_URL` ni `PAYDUNYA_API_BASE_URL` : les valeurs par défaut sont les vraies API (sandbox PayDunya en mode test).
+Tarifs, horaires, lien Telegram et mode Discord ne sont pas des variables : ils se règlent dans `/admin` ([guide](tableau-de-bord.md)).
 Le worker a besoin de toutes les variables. Le site n'a pas besoin de `DISCORD_LOG_CHANNEL_ID` ni de `RESEND_*`, mais il a besoin de `DISCORD_BOT_TOKEN` (ajout au serveur à l'inscription).
 
 ## 3. Domaine
@@ -65,16 +69,17 @@ Le plan gratuit permet 3 000 emails par mois et **100 par jour**. Si beaucoup de
 | Discord → OAuth2 → Redirects | `https://club.ton-domaine.com/api/auth/discord/callback` |
 | Flutterwave → Settings → Webhooks | `https://club.ton-domaine.com/api/webhooks/flutterwave` |
 | Wave Business → Webhooks | `https://club.ton-domaine.com/api/webhooks/wave` |
+| PayDunya | rien à déclarer : l'URL `https://club.ton-domaine.com/api/webhooks/paydunya` est envoyée avec chaque facture |
 
 Les URLs de retour après paiement sont générées automatiquement : `https://club.ton-domaine.com/paiement/retour?ref=…`.
 
 ## 7. Import des membres actuels
-Depuis ton ordinateur, avec l'URL **publique** de la base (Railway → Postgres → Connect → *Public Network*) :
+Depuis le tableau de bord : `/admin/import` ([guide](guide-import-membres.md)). Ou depuis ton ordinateur, avec l'URL **publique** de la base (Railway → Postgres → Connect → *Public Network*) :
 ```bash
 DATABASE_URL="postgres://…public…" pnpm import:members membres.csv           # simulation
 DATABASE_URL="postgres://…public…" pnpm import:members membres.csv --apply   # import réel
 ```
-Format : voir `scripts/fixtures/membres-exemple.csv`. Le worker attribue ensuite les rôles et poste un résumé dans les logs.
+Format : voir `scripts/fixtures/membres-exemple.csv`. Les rôles suivent ensuite le mode Discord du tableau de bord (observation par défaut : aucun rôle modifié).
 
 ## 8. Sauvegardes
 - Railway : vérifie l'onglet **Backups** du service Postgres et active les sauvegardes automatiques si ton plan le permet.

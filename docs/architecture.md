@@ -40,7 +40,22 @@
 | File de tâches maison en base | Persistante, testable avec une horloge simulée, aucune infrastructure supplémentaire |
 | Railway pour tout (au lieu de Vercel + Railway) | Le plan gratuit de Vercel interdit l'usage commercial (Pro à 20 $/mois). Tout sur Railway coûte environ 10 à 15 $/mois, sur un réseau privé |
 | Flutterwave API v3 | Les *payment plans* (prélèvement carte) ne sont documentés qu'en v3 |
+| PayDunya (facture avec redirection) | Carte et Mobile Money ; pas d'abonnement : renouvellement assisté |
 | Zod, rate limiting, contrôle d'origine | Validation des entrées et protection des endpoints publics |
+
+## Réglages modifiables et garde-fous
+
+| Réglage (table `settings`, écran `/admin`) | Défaut |
+|---|---|
+| Prix des formules (FCFA encaissé, $ affiché, badge, accroche, active), plan Flutterwave | **Aucun prix FCFA** : formules non achetables tant qu'ils ne sont pas saisis |
+| Validation des tarifs | Non validés (obligatoire en `PAYMENT_MODE=live`) |
+| Horaires des lives | MAR / MER / VEN, horaire « à venir » |
+| Telegram | lien repris de `TELEGRAM_INVITE_URL` au premier démarrage, public |
+| Mode Discord | **Observation** : aucun rôle modifié, aucun message aux membres réels (sauf comptes de test) |
+
+- Changer un prix annule la validation et détache le plan Flutterwave (un plan garde son montant). Le montant du prélèvement est figé sur l'abonnement (`recurring_amount`).
+- `PAYMENT_MODE=test` : un prestataire configuré en production (clé réelle, API réelle) est écarté au démarrage.
+- Les réglages sont lus avec un cache de 10 s : le worker voit une modification du tableau de bord en moins de 10 s.
 
 ## Modèle de données
 
@@ -55,6 +70,7 @@
 | `reminders` | Rappels envoyés, unicité `(abonnement, fin de période, J-x)` |
 | `audit_logs` | Journal d'audit (système, admin, membre, prestataire) |
 | `sessions` | Empreinte SHA-256 des jetons de session |
+| `settings` | Réglages du tableau de bord (JSON validé par schéma), avec auteur et date |
 
 Toutes les dates sont en `timestamptz` (UTC). Affichage en `Africa/Dakar` (UTC+0 toute l'année).
 
@@ -111,6 +127,7 @@ L'ordre d'arrivée des événements n'a pas d'importance : l'état final dépend
 - Arrivée d'un membre sur le serveur : son rôle lui est rendu s'il est abonné.
 - **Exceptions**, jamais touchées : IDs de `DISCORD_EXEMPT_USER_IDS`, rôles de `DISCORD_EXEMPT_ROLE_IDS` et le rôle admin, les bots, le drapeau `reconcile_exempt`.
 - Expiration : retrait du rôle par défaut ; expulsion si `EXPIRY_ACTION=kick`.
+- **Mode observation** : le changement est calculé, journalisé (`discord.role_*_simulated`) et annoncé dans le salon de logs, mais rien n'est modifié. La réconciliation liste les retraits et attributions qui auraient eu lieu.
 
 ## Tâches planifiées (worker)
 
@@ -131,7 +148,7 @@ Réconciliation quotidienne : re-vérification des paiements restés en attente,
 
 ## Tests
 
-`pnpm test` : 60 tests sur une vraie base Postgres jetable, avec un faux serveur Flutterwave/Wave (HTTP réel) et un faux Discord.
+`pnpm test` : tests sur une vraie base Postgres jetable, avec un faux serveur Flutterwave / Wave / PayDunya (HTTP réel) et un faux Discord.
 
 | Exigence du cahier des charges | Fichier |
 |---|---|
@@ -144,3 +161,5 @@ Réconciliation quotidienne : re-vérification des paiements restés en attente,
 | 7. Espace d'un autre membre refusé | `packages/core/test/access-and-reconciliation.test.ts` |
 | 8. Réconciliation et exceptions | `packages/core/test/access-and-reconciliation.test.ts` |
 | Commandes admin | `apps/worker/test/admin-commands.test.ts` |
+| Réglages, tarifs, mode test, mode observation, aperçu d'import | `packages/core/test/settings-and-guards.test.ts` |
+| PayDunya | `packages/core/test/paydunya.test.ts` |

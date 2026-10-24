@@ -8,6 +8,7 @@ import { isExempt, syncMemberAccess } from "./discord/access";
 import type { CoreDeps } from "./deps";
 import type { EmailSender } from "./notifications/email";
 import { postLog } from "./outbox";
+import { getSettings, isDiscordActionLive } from "./settings";
 import { reverifyPendingPayment } from "./payments/webhooks";
 import { hasAccess, type SubscriptionStatus } from "./state-machine";
 import { applyTimeTransitions } from "./subscriptions/service";
@@ -19,8 +20,13 @@ export interface WorkerDeps extends CoreDeps {
 }
 
 export interface ReconciliationReport {
+  /** Mode du jour : observe = rien n'a été modifié sur Discord. */
+  mode: "observe" | "live";
   roleRemoved: string[];
   roleGranted: string[];
+  /** Changements qui auraient eu lieu (mode observation). */
+  simulatedRemovals: string[];
+  simulatedGrants: string[];
   notInGuild: string[];
   exemptSkipped: number;
   paymentsRecovered: string[];
@@ -35,9 +41,13 @@ export interface ReconciliationReport {
  */
 export async function reconcile(deps: WorkerDeps): Promise<ReconciliationReport> {
   const now = deps.now();
+  const settings = await getSettings(deps.db);
   const report: ReconciliationReport = {
+    mode: settings.discordSync.mode,
     roleRemoved: [],
     roleGranted: [],
+    simulatedRemovals: [],
+    simulatedGrants: [],
     notInGuild: [],
     exemptSkipped: 0,
     paymentsRecovered: [],
@@ -91,8 +101,12 @@ export async function reconcile(deps: WorkerDeps): Promise<ReconciliationReport>
     if (hasAccess(row?.status as SubscriptionStatus | null)) continue;
     try {
       if (row) {
-        const result = await syncMemberAccess(ctx, row.member.id);
+        const result = await syncMemberAccess(ctx, row.member.id, { quiet: true });
         if (result === "revoked" || result === "kicked") report.roleRemoved.push(gm.userId);
+        if (result === "simulated_revoke") report.simulatedRemovals.push(gm.userId);
+      } else if (!isDiscordActionLive(settings, gm.userId)) {
+        await audit(deps.db, { actorType: "system", action: "reconcile.role_removal_simulated", details: { discordUserId: gm.userId } }, now);
+        report.simulatedRemovals.push(gm.userId);
       } else {
         await deps.discord.removeRole(gm.userId, deps.policy.memberRoleId, "Réconciliation : aucun abonnement");
         await audit(deps.db, { actorType: "system", action: "reconcile.role_removed_unknown", details: { discordUserId: gm.userId } }, now);
@@ -113,8 +127,9 @@ export async function reconcile(deps: WorkerDeps): Promise<ReconciliationReport>
     }
     if (gm.roles.includes(deps.policy.memberRoleId) || isExempt(deps.policy, gm, row.member)) continue;
     try {
-      const result = await syncMemberAccess(ctx, row.member.id);
+      const result = await syncMemberAccess(ctx, row.member.id, { quiet: true });
       if (result === "granted") report.roleGranted.push(row.member.discordUserId);
+      if (result === "simulated_grant") report.simulatedGrants.push(row.member.discordUserId);
     } catch (error) {
       report.errors.push(`attribution <@${row.member.discordUserId}> : ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -125,9 +140,15 @@ export async function reconcile(deps: WorkerDeps): Promise<ReconciliationReport>
   await postLog(
     deps.db,
     [
-      `🧮 **Réconciliation quotidienne**`,
+      `🧮 **Réconciliation quotidienne**${report.mode === "observe" ? " · 🧪 mode observation (aucun changement réel)" : ""}`,
       `Rôles retirés : ${report.roleRemoved.length} (${list(report.roleRemoved)})`,
       `Rôles réparés : ${report.roleGranted.length} (${list(report.roleGranted)})`,
+      ...(report.mode === "observe"
+        ? [
+            `Retraits qui auraient eu lieu : ${report.simulatedRemovals.length} (${list(report.simulatedRemovals)})`,
+            `Attributions qui auraient eu lieu : ${report.simulatedGrants.length} (${list(report.simulatedGrants)})`,
+          ]
+        : []),
       `Abonnés absents du serveur : ${report.notInGuild.length} (${list(report.notInGuild)})`,
       `Paiements récupérés : ${report.paymentsRecovered.length} · abandonnés : ${report.paymentsFailed.length}`,
       `Exceptions ignorées : ${report.exemptSkipped}`,

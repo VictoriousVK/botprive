@@ -1,6 +1,6 @@
-import type { Plan, PlanId } from "../config/club";
+import type { PlanDefinition } from "../config/club";
 
-export type ProviderId = "flutterwave" | "wave";
+export type ProviderId = "flutterwave" | "wave" | "paydunya";
 export type PaymentMethod = "card" | "mobile_money";
 
 export interface ProviderCapabilities {
@@ -16,9 +16,11 @@ export interface CheckoutRequest {
   reference: string;
   amount: number;
   currency: "XOF";
-  plan: Plan;
+  plan: PlanDefinition;
   method: PaymentMethod;
   autoRenew: boolean;
+  /** Plan récurrent chez le prestataire (obligatoire si autoRenew). */
+  providerPlanId?: string | null;
   customer: { email?: string | null; name?: string | null; phone?: string | null; discordUserId: string };
   /** URL de retour navigateur. Elle n'accorde JAMAIS l'accès à elle seule. */
   returnUrl: string;
@@ -99,14 +101,14 @@ export interface RefundRequest {
 export interface PaymentProvider {
   readonly id: ProviderId;
   readonly capabilities: ProviderCapabilities;
+  /** true = sandbox / faux serveur : aucun argent réel. */
+  readonly testMode: boolean;
   createCheckout(request: CheckoutRequest): Promise<CheckoutSession>;
   verifyPayment(request: VerifyRequest): Promise<VerifiedPayment>;
   handleWebhook(request: WebhookRequest): Promise<NormalizedWebhookEvent>;
   cancelSubscription(providerSubscriptionId: string): Promise<void>;
   getSubscriptionStatus(providerSubscriptionId: string, hint?: { customerEmail?: string | null }): Promise<ProviderSubscriptionStatus>;
   refund(request: RefundRequest): Promise<{ status: "succeeded" | "pending" }>;
-  /** Identifiant du plan récurrent chez le prestataire pour une formule. */
-  providerPlanIdFor?(planId: PlanId): string | undefined;
-  /** Formule correspondant à un plan récurrent du prestataire. */
-  planIdForProviderPlan?(providerPlanId: string): PlanId | undefined;
+  /** Crée un plan récurrent (prélèvement automatique) et retourne son identifiant. */
+  createRecurringPlan?(input: { name: string; amount: number; months: number; currency: "XOF" }): Promise<string>;
 }

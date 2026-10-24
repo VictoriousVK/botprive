@@ -4,6 +4,7 @@ import {
   createProviderRegistry,
   getSessionMember,
   loadEnv,
+  seedSettingsFromEnv,
   required,
   type AppEnv,
   type CoreDeps,
@@ -23,7 +24,9 @@ export function getDeps(): CoreDeps {
   if (!globalThis.__vkDeps) {
     const env = loadEnv();
     const { db } = createDb(required(env, "DATABASE_URL"), { max: 5 });
-    globalThis.__vkDeps = { db, env, now: () => new Date(), logger: consoleLogger, providers: createProviderRegistry(env) };
+    globalThis.__vkDeps = { db, env, now: () => new Date(), logger: consoleLogger, providers: createProviderRegistry(env, undefined, consoleLogger) };
+    // Lien Telegram initial (une seule fois, sans écraser un réglage du tableau de bord).
+    seedSettingsFromEnv(db, env).catch((e) => consoleLogger.warn(`Réglages initiaux : ${String(e)}`));
   }
   return globalThis.__vkDeps;
 }

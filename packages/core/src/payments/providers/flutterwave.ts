@@ -1,4 +1,3 @@
-import type { PlanId } from "../../config/club";
 import { safeEqual, sha256Hex } from "../../crypto";
 import { InvalidSignatureError } from "../../errors";
 import { requestJson, type FetchLike } from "../../http";
@@ -29,7 +28,6 @@ export interface FlutterwaveConfig {
   webhookHash: string;
   baseUrl: string;
   mobileMoneyOption: string;
-  planIds: Partial<Record<PlanId, string>>;
   fetch?: FetchLike;
 }
 
@@ -69,10 +67,13 @@ function mapMethod(paymentType: string | undefined): PaymentMethod | undefined {
 export class FlutterwaveProvider implements PaymentProvider {
   readonly id = "flutterwave" as const;
   readonly capabilities = { card: true, mobileMoney: true, recurring: true, refund: true };
+  readonly testMode: boolean;
   private readonly fetchImpl: FetchLike;
 
   constructor(private readonly config: FlutterwaveConfig) {
     this.fetchImpl = config.fetch ?? fetch;
+    // Les clés de test Flutterwave contiennent « _TEST ».
+    this.testMode = config.secretKey.includes("_TEST") || !config.baseUrl.startsWith("https://api.flutterwave.com");
   }
 
   private call<T>(path: string, init: { method?: "GET" | "POST" | "PUT"; body?: unknown } = {}) {
@@ -84,13 +85,16 @@ export class FlutterwaveProvider implements PaymentProvider {
     );
   }
 
-  providerPlanIdFor(planId: PlanId): string | undefined {
-    return this.config.planIds[planId];
-  }
-
-  planIdForProviderPlan(providerPlanId: string): PlanId | undefined {
-    const entry = Object.entries(this.config.planIds).find(([, id]) => id === providerPlanId);
-    return entry?.[0] as PlanId | undefined;
+  /** Plan de prélèvement (payment plan) : montant fixe, intervalle mensuel, trimestriel ou annuel. */
+  async createRecurringPlan(input: { name: string; amount: number; months: number; currency: "XOF" }): Promise<string> {
+    const interval = { 1: "monthly", 3: "quarterly", 12: "yearly" }[input.months];
+    if (!interval) throw new Error(`Durée non gérée pour un plan Flutterwave : ${input.months} mois`);
+    const { data } = await this.call<{ id?: number | string }>("/v3/payment-plans", {
+      method: "POST",
+      body: { name: input.name, amount: input.amount, currency: input.currency, interval },
+    });
+    if (data.data?.id == null) throw new Error(`Flutterwave n'a pas créé le plan (${data.message ?? "réponse vide"})`);
+    return String(data.data.id);
   }
 
   async createCheckout(request: CheckoutRequest): Promise<CheckoutSession> {
@@ -99,10 +103,8 @@ export class FlutterwaveProvider implements PaymentProvider {
     let paymentPlan: string | undefined;
     if (request.autoRenew) {
       if (request.method !== "card") throw new Error("Le renouvellement automatique n'existe que par carte");
-      paymentPlan = this.providerPlanIdFor(request.plan.id);
-      if (!paymentPlan) {
-        throw new Error(`Plan récurrent Flutterwave non configuré pour « ${request.plan.id} » (FLW_PLAN_ID_${request.plan.id.toUpperCase()})`);
-      }
+      paymentPlan = request.providerPlanId ?? undefined;
+      if (!paymentPlan) throw new Error(`Plan récurrent Flutterwave non configuré pour « ${request.plan.label} »`);
       paymentOptions = "card";
     }
     const { data } = await this.call<{ link?: string }>("/v3/payments", {
