@@ -95,7 +95,13 @@ export const DEFAULT_SETTINGS: Settings = {
 // ─── Lecture (avec cache court) ─────────────────────────────────────────────
 
 const CACHE_MS = Number(process.env.SETTINGS_CACHE_MS ?? 10_000);
-const cache = new WeakMap<object, { at: number; value: Settings }>();
+
+declare global {
+  // Partagé par tout le processus : Next.js peut charger ce module plusieurs fois (une copie par route),
+  // et une modification enregistrée depuis /admin doit vider le cache lu par toutes les pages.
+  var __vkSettingsCache: WeakMap<object, { at: number; value: Settings }> | undefined;
+}
+const cache = (globalThis.__vkSettingsCache ??= new WeakMap());
 
 export function clearSettingsCache(db: Db): void {
   cache.delete(db);
