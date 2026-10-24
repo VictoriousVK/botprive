@@ -1,0 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Sécurité chaîne d'approvisionnement : n'installer que des versions publiées depuis au moins 14 jours.
+minimumReleaseAge: 20160
+
+# Seuls ces paquets ont le droit d'exécuter un script d'installation.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

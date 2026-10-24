@@ -1,0 +1,22 @@
+node_modules/
+.pnpm-store/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets : ne jamais committer
+.env
+.env.*
+!.env.example
+
+# Bases locales et exports
+*.db
+*.sqlite
+data/
+*.csv
+!scripts/fixtures/*.csv
+
+.DS_Store

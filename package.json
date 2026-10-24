@@ -1,0 +1,36 @@
+{
+  "name": "victorious-membership",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "V_ICT_ORIOUS Live Club : site, paiements et accès Discord automatisés",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @vk/web dev",
+    "dev:worker": "pnpm --filter @vk/worker dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck && tsc -p tsconfig.scripts.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "pnpm --filter @vk/db generate",
+    "db:migrate": "pnpm --filter @vk/db migrate",
+    "discord:register": "pnpm --filter @vk/worker register-commands",
+    "import:members": "tsx scripts/import-members.ts",
+    "simulate": "tsx scripts/simulate.ts",
+    "mock:providers": "tsx scripts/mock-providers/server.ts",
+    "webhook:send": "tsx scripts/send-webhook.ts",
+    "flw:create-plans": "tsx scripts/flw-create-plans.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@vk/core": "workspace:*",
+    "@vk/db": "workspace:*",
+    "csv-parse": "7.0.3",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3"
+  }
+}
