@@ -228,6 +228,10 @@ export class MockProviders {
       this.flwTransactions.set(id, tx);
       return json(res, 200, { status: "success", message: "Hosted Link", data: { link: `${this.baseUrl}/mock/checkout/flutterwave/${encodeURIComponent(tx.tx_ref)}` } });
     }
+    if (method === "POST" && path === "/v3/payment-plans") {
+      const body = JSON.parse(await readBody(req));
+      return json(res, 200, { status: "success", message: "Payment plan created", data: { id: this.nextId++, ...body, status: "active" } });
+    }
     let m = /^\/v3\/transactions\/(\d+)\/verify$/.exec(path);
     if (method === "GET" && m) {
       const tx = this.flwTransactions.get(Number(m[1]));

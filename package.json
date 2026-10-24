@@ -16,13 +16,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "pnpm --filter @vk/db generate",
-    "db:migrate": "pnpm --filter @vk/db migrate",
+    "db:migrate": "tsx --env-file-if-exists=.env packages/db/src/migrate-cli.ts",
     "discord:register": "pnpm --filter @vk/worker register-commands",
-    "import:members": "tsx scripts/import-members.ts",
+    "import:members": "tsx --env-file-if-exists=.env scripts/import-members.ts",
     "simulate": "tsx scripts/simulate.ts",
-    "mock:providers": "tsx scripts/mock-providers/server.ts",
-    "webhook:send": "tsx scripts/send-webhook.ts",
-    "flw:create-plans": "tsx scripts/flw-create-plans.ts"
+    "mock:providers": "tsx --env-file-if-exists=.env scripts/mock-providers/server.ts",
+    "webhook:send": "tsx --env-file-if-exists=.env scripts/send-webhook.ts",
+    "flw:create-plans": "tsx --env-file-if-exists=.env scripts/flw-create-plans.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

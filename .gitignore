@@ -20,3 +20,4 @@ data/
 !scripts/fixtures/*.csv
 
 .DS_Store
+backups/

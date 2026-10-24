@@ -4,6 +4,18 @@ packages:
 
 # Sécurité chaîne d'approvisionnement : n'installer que des versions publiées depuis au moins 14 jours.
 minimumReleaseAge: 20160
+# Exceptions : correctifs de sécurité publiés il y a moins de 14 jours (audit du 24/10/2026).
+#  - next ≤ 16.4.0 : failles critiques (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr), corrigées en 16.4.1
+#  - zod < 4.6.6 : épuisement mémoire (haute), corrigée en 4.6.6
+#  - undici < 6.29.1 (via discord.js) : déni de service (haute), corrigée en 6.29.1
+minimumReleaseAgeExclude:
+  - next
+  - "@next/*"
+  - zod
+  - undici
+
+overrides:
+  "undici@^6": 6.29.1
 
 # Seuls ces paquets ont le droit d'exécuter un script d'installation.
 onlyBuiltDependencies:
