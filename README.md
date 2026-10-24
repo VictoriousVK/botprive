@@ -51,12 +51,12 @@ Détails : [docs/architecture.md](docs/architecture.md).
 
 Pas à pas (Windows compris), avec les tâches VS Code prêtes à l'emploi : **[docs/guide-vscode.md](docs/guide-vscode.md)**.
 
-Prérequis : Node 22, pnpm 10 (`corepack enable`), Docker.
+Prérequis : Node 22, pnpm 10 (`corepack enable` ; sous Windows `npm install -g pnpm@10.28.0`), PostgreSQL 16 (installé directement ou via Docker).
 
 ```bash
 pnpm install
 pnpm setup:demo                 # .env de démonstration (faux paiements) ; pour la production, partir de .env.example
-docker compose up -d db         # Postgres local
+docker compose up -d db         # Postgres local (inutile si PostgreSQL est installé directement)
 pnpm db:migrate                 # crée les tables
 pnpm test                       # 81 tests (bases jetables)
 pnpm simulate                   # rejoue tout le cycle sans vrai paiement

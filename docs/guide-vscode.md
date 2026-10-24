@@ -11,9 +11,13 @@ Durée : environ 30 minutes la première fois (installations comprises), puis 1 
 | **VS Code** | code.visualstudio.com | — |
 | **Git** | git-scm.com (sous Windows, garde les options par défaut) | `git --version` |
 | **Node.js 22 LTS** | nodejs.org, version « LTS » 22.x | `node -v` → `v22.12` ou plus |
-| **Docker Desktop** | docker.com/products/docker-desktop (sous Windows, il installe WSL 2 si besoin, puis redémarre) | `docker --version` |
+| **La base de données**, au choix : | | |
+| → **PostgreSQL 16** (le plus simple sous Windows) | postgresql.org → Download → Windows (installateur EDB), voir « Sans Docker » plus bas | — |
+| → ou **Docker Desktop** | docker.com/products/docker-desktop (sous Windows, il installe WSL 2 et demande un redémarrage) | `docker --version` |
 
-Docker sert uniquement à faire tourner la base de données PostgreSQL. Si Docker ne s'installe pas sur ton PC, voir « Sans Docker » plus bas.
+Docker ne sert ici qu'à faire tourner PostgreSQL : si tu installes PostgreSQL directement, tu n'en as pas besoin (ni maintenant, ni pour la mise en ligne).
+
+**Sous Windows, tape les commandes une par une** : si tu colles un bloc entier, PowerShell continue après une erreur et les messages s'empilent.
 
 ## 2. Récupérer le projet
 
@@ -31,22 +35,39 @@ Ouvre un terminal dans VS Code : **Terminal → Nouveau terminal** (raccourci `C
 
 ## 3. Installer les dépendances
 
+**Sous Windows** (pas besoin de droits administrateur) :
+
+```powershell
+npm install -g pnpm@10.28.0
+```
+
+Puis **ferme le terminal et ouvre-en un nouveau** (icône poubelle, puis Terminal → Nouveau terminal), et vérifie avec `pnpm -v` (doit afficher `10.28.0`).
+
+**Sous macOS ou Linux** : `corepack enable`.
+
+Ensuite, dans le dossier du projet :
+
 ```bash
-corepack enable
 pnpm install
 ```
 
-- Sous Windows, `corepack enable` peut demander un terminal **administrateur**. Sinon, remplace-le par `npm install -g pnpm@10.28.0`.
+- N'utilise pas `corepack enable` sous Windows : il écrit dans `C:\Program Files` et échoue avec `EPERM` sans terminal administrateur.
 - Un avertissement « Ignored build scripts » de pnpm est normal.
 
 ## 4. Préparer la démo (une seule fois)
 
-Lance Docker Desktop et attends qu'il indique « Engine running », puis :
-
 ```bash
 pnpm setup:demo            # crée le fichier .env de démonstration (secret de session aléatoire)
-docker compose up -d db    # démarre PostgreSQL
-pnpm db:migrate            # crée les tables
+```
+
+Démarre la base :
+- **PostgreSQL installé directement** : rien à faire, le service démarre avec Windows ;
+- **Docker** : lance Docker Desktop, attends « Engine running », puis `docker compose up -d db`.
+
+Puis :
+
+```bash
+pnpm db:migrate            # crée la base « victorious » si besoin, puis les tables
 ```
 
 Le fichier `.env` reste sur ton ordinateur : il est exclu de Git et ne doit jamais être partagé. Tes vraies clés (Discord, Flutterwave, PayDunya…) iront plus tard dans ce fichier, **jamais dans un chat**.
@@ -64,7 +85,7 @@ pnpm dev:web          # le site
 
 Ouvre **http://localhost:3000**. Au tout premier chargement, la compilation prend quelques secondes et la page peut se recharger plusieurs fois : attends qu'elle se stabilise.
 
-Les fois suivantes : démarre Docker Desktop, puis lance seulement l'étape 5 (`docker compose up -d db` si la base ne redémarre pas toute seule).
+Les fois suivantes : lance seulement l'étape 5 (avec Docker : démarre d'abord Docker Desktop, et `docker compose up -d db` si la base ne redémarre pas toute seule).
 
 ## 6. Se connecter sans application Discord
 
@@ -90,7 +111,7 @@ Le rôle Discord n'est pas attribué en démo : le bot (worker) n'est pas lancé
 
 ## 8. Tests automatisés et simulation
 
-La base Docker doit être démarrée.
+La base PostgreSQL doit être démarrée.
 
 ```bash
 pnpm test        # 81 tests (bases temporaires créées puis supprimées)
@@ -116,17 +137,20 @@ Discord reste en **observation** : aucun rôle n'est modifié et aucun message n
 
 ## 11. Arrêter
 
-`Ctrl` + `C` dans chaque terminal, puis `docker compose stop` pour arrêter la base. Tes données locales sont conservées.
+`Ctrl` + `C` dans chaque terminal. Avec Docker, `docker compose stop` arrête la base. Tes données locales sont conservées.
 
 ## Dépannage
 
 | Problème | Solution |
 |---|---|
-| `pnpm` n'est pas reconnu | Ferme et rouvre le terminal. Sinon : `npm install -g pnpm@10.28.0` |
+| `corepack enable` : `EPERM: operation not permitted, open 'C:\Program Files\nodejs\pnpm.CMD'` | Normal sans droits administrateur : utilise `npm install -g pnpm@10.28.0` à la place |
+| `pnpm` n'est pas reconnu | `npm install -g pnpm@10.28.0`, puis ferme et rouvre le terminal |
+| `docker` n'est pas reconnu | Docker n'est pas installé : installe plutôt PostgreSQL (voir « Sans Docker »), ou Docker Desktop |
+| `Échec des migrations : PostgreSQL ne répond pas` | La base n'est pas démarrée : service PostgreSQL (Windows : touche Windows → « Services » → `postgresql-x64-16` → Démarrer) ou `docker compose up -d db` |
+| `Échec des migrations : Mot de passe PostgreSQL refusé` | Le mot de passe choisi à l'installation n'est pas `postgres` : corrige `DATABASE_URL` dans le fichier `.env` |
 | PowerShell : « l'exécution de scripts est désactivée sur ce système » | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, ou choisis **Command Prompt** dans la liste des terminaux de VS Code (flèche à côté du `+`) |
 | `docker` : « error during connect » ou « Cannot connect to the Docker daemon » | Lance Docker Desktop et attends « Engine running » |
-| `port is already allocated` sur 5432 | Un PostgreSQL est déjà installé sur ton PC : arrête-le, ou utilise-le directement (voir « Sans Docker ») |
-| `pnpm db:migrate` : `ECONNREFUSED` | La base n'est pas démarrée : `docker compose up -d db` |
+| Docker : `port is already allocated` sur 5432 | Un PostgreSQL est déjà installé sur ton PC : utilise-le directement (voir « Sans Docker ») |
 | Le port 3000 est déjà utilisé | Ferme l'autre application qui l'utilise (ou un ancien `pnpm dev:web` resté ouvert) |
 | « Session inconnue ou expirée » | Relance `pnpm dev:login` (les sessions sont effacées si tu recrées la base) |
 | La page se recharge en boucle au premier lancement | Attends la fin de la compilation ; si cela continue plus d'une minute, arrête le site (`Ctrl` + `C`) et relance `pnpm dev:web` |
@@ -134,7 +158,14 @@ Discord reste en **observation** : aucun rôle n'est modifié et aucun message n
 
 ### Sans Docker
 
-Installe **PostgreSQL 16** (postgresql.org → Download, installateur EDB sous Windows). Pendant l'installation, choisis le mot de passe `postgres` pour l'utilisateur `postgres` et garde le port 5432. Crée ensuite la base `victorious` (avec pgAdmin, installé en même temps, ou `createdb -U postgres victorious`), puis lance `pnpm db:migrate`. Si tu choisis un autre mot de passe, modifie `DATABASE_URL` dans le fichier `.env`. Les tests, eux, ne lisent pas le `.env` : avant `pnpm test` ou `pnpm simulate`, indique l'adresse dans le terminal, par exemple sous PowerShell `$env:TEST_DATABASE_URL="postgres://postgres:TON_MOT_DE_PASSE@localhost:5432/postgres"`.
+1. postgresql.org → **Download** → **Windows** → « Download the installer » → version **16.x** pour Windows x86-64.
+2. Lance l'installateur et garde les choix par défaut, sauf :
+   - **mot de passe** du super-utilisateur : `postgres` (c'est celui du fichier `.env` de démonstration ; base locale uniquement) ;
+   - **port** : `5432` ;
+   - à la fin, **décoche** « Stack Builder » (inutile).
+3. Dans VS Code : `pnpm db:migrate`. La base `victorious` est créée automatiquement, puis ses tables.
+
+Si tu choisis un autre mot de passe, modifie `DATABASE_URL` dans le fichier `.env`. Les tests, eux, ne lisent pas le `.env` : avant `pnpm test` ou `pnpm simulate`, indique l'adresse dans le terminal, par exemple sous PowerShell `$env:TEST_DATABASE_URL="postgres://postgres:TON_MOT_DE_PASSE@localhost:5432/postgres"`.
 
 ## Et ensuite ?
 
