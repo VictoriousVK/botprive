@@ -1,0 +1,84 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "1 · Installer les dépendances",
+      "type": "shell",
+      "command": "pnpm install",
+      "problemMatcher": []
+    },
+    {
+      "label": "2 · Créer le .env de démonstration",
+      "type": "shell",
+      "command": "pnpm setup:demo",
+      "problemMatcher": []
+    },
+    {
+      "label": "3 · Démarrer la base de données (Docker)",
+      "type": "shell",
+      "command": "docker compose up -d db",
+      "problemMatcher": []
+    },
+    {
+      "label": "4 · Créer les tables (migrations)",
+      "type": "shell",
+      "command": "pnpm db:migrate",
+      "problemMatcher": []
+    },
+    {
+      "label": "Faux prestataires de paiement",
+      "type": "shell",
+      "command": "pnpm mock:providers",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "group": "demo", "panel": "dedicated" }
+    },
+    {
+      "label": "Site (http://localhost:3000)",
+      "type": "shell",
+      "command": "pnpm dev:web",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "group": "demo", "panel": "dedicated" }
+    },
+    {
+      "label": "▶ Lancer la démo (faux paiements + site)",
+      "dependsOn": ["Faux prestataires de paiement", "Site (http://localhost:3000)"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      "label": "Lien de connexion au tableau de bord",
+      "type": "shell",
+      "command": "pnpm dev:login",
+      "problemMatcher": []
+    },
+    {
+      "label": "Lien de connexion d'un membre de test",
+      "type": "shell",
+      "command": "pnpm dev:login --membre",
+      "problemMatcher": []
+    },
+    {
+      "label": "Bot Discord + tâches (worker)",
+      "type": "shell",
+      "command": "pnpm dev:worker",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated" }
+    },
+    {
+      "label": "Tests automatisés",
+      "type": "shell",
+      "command": "pnpm test",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Simulation du cycle complet",
+      "type": "shell",
+      "command": "pnpm simulate",
+      "problemMatcher": []
+    }
+  ]
+}

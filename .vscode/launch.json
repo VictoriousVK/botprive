@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Site (Next.js, débogage)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm dev:web"
+    },
+    {
+      "name": "Worker (bot Discord, débogage)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm dev:worker"
+    },
+    {
+      "name": "Simulation (débogage)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm simulate"
+    }
+  ]
+}

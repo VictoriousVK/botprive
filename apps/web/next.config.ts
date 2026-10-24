@@ -1,5 +1,11 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { NextConfig } from "next";
+
+// En local, le fichier .env est à la racine du monorepo (partagé avec le worker et les scripts).
+// Les variables déjà définies (hébergeur) ne sont jamais écrasées.
+const rootEnv = path.resolve(process.cwd(), "../../.env");
+if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 const isDev = process.env.NODE_ENV !== "production";
 

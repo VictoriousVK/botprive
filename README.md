@@ -49,17 +49,20 @@ Détails : [docs/architecture.md](docs/architecture.md).
 
 ## Démarrer en local
 
+Pas à pas (Windows compris), avec les tâches VS Code prêtes à l'emploi : **[docs/guide-vscode.md](docs/guide-vscode.md)**.
+
 Prérequis : Node 22, pnpm 10 (`corepack enable`), Docker.
 
 ```bash
 pnpm install
-cp .env.example .env            # puis compléter (voir commentaires), dont ADMIN_DISCORD_IDS
+pnpm setup:demo                 # .env de démonstration (faux paiements) ; pour la production, partir de .env.example
 docker compose up -d db         # Postgres local
 pnpm db:migrate                 # crée les tables
 pnpm test                       # 81 tests (bases jetables)
 pnpm simulate                   # rejoue tout le cycle sans vrai paiement
 pnpm mock:providers             # faux Flutterwave / Wave / PayDunya sur http://127.0.0.1:4010
 pnpm dev:web                    # http://localhost:3000 (tableau de bord : /admin)
+pnpm dev:login [--membre]       # lien de connexion locale sans Discord (admin, ou membre de test)
 pnpm dev:worker                 # bot + tâches (nécessite une application Discord)
 ```
 
@@ -79,6 +82,7 @@ pnpm dev:worker                 # bot + tâches (nécessite une application Disc
 
 | Sujet | Guide |
 |---|---|
+| Lancer le projet sur VS Code | [guide-vscode.md](docs/guide-vscode.md) |
 | RCCM et NINEA | [guide-administratif.md](docs/guide-administratif.md) |
 | Flutterwave ou PayDunya | [comparatif-prestataires.md](docs/comparatif-prestataires.md) |
 | Configuration des paiements | [guide-paiements.md](docs/guide-paiements.md) |

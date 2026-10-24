@@ -47,6 +47,21 @@ export function sessionIdFromToken(token: string): string {
   return sha256Hex(token);
 }
 
+/**
+ * Chemin interne sûr pour une redirection : refuse toute URL externe, y compris « //site » et « /\site »
+ * (le navigateur lit la barre oblique inverse comme « / »). Renvoie `fallback` sinon.
+ */
+export function safeInternalPath(value: unknown, fallback: string): string {
+  if (typeof value !== "string" || !value.startsWith("/")) return fallback;
+  const base = "http://interne.invalid";
+  try {
+    const url = new URL(value, base);
+    return url.origin === base ? `${url.pathname}${url.search}${url.hash}` : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** Valeur « state » OAuth signée (anti-CSRF), avec la page de retour. */
 export function signState(secret: string, nonce: string, next: string): string {
   const encoded = Buffer.from(JSON.stringify({ n: nonce, r: next })).toString("base64url");
@@ -60,8 +75,7 @@ export function verifyState(secret: string, state: string, expectedNonce: string
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as { n: string; r: string };
     if (!safeEqual(payload.n, expectedNonce)) return null;
     // Redirection interne uniquement (pas d'URL externe : évite les redirections ouvertes).
-    const next = typeof payload.r === "string" && payload.r.startsWith("/") && !payload.r.startsWith("//") ? payload.r : "/espace";
-    return { next };
+    return { next: safeInternalPath(payload.r, "/espace") };
   } catch {
     return null;
   }

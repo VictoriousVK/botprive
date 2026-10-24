@@ -11,6 +11,8 @@
   "scripts": {
     "dev:web": "pnpm --filter @vk/web dev",
     "dev:worker": "pnpm --filter @vk/worker dev",
+    "setup:demo": "node scripts/setup-demo.mjs",
+    "dev:login": "tsx --env-file-if-exists=.env scripts/dev-login.ts",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck && tsc -p tsconfig.scripts.json",
     "test": "vitest run",

@@ -12,6 +12,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   provider_subscription_unknown: "Annulation automatique impossible pour le moment : contacte-nous sur WhatsApp, nous l'annulons manuellement.",
   oauth_failed: "La connexion Discord a échoué. Réessaie.",
   oauth_denied: "Connexion Discord annulée.",
+  oauth_unconfigured: "La connexion Discord n'est pas encore configurée (DISCORD_CLIENT_ID). En local, utilise pnpm dev:login.",
   link_invalid: "Ce lien de renouvellement a expiré. Connecte-toi pour renouveler.",
   csrf: "Requête refusée. Recharge la page et réessaie.",
   plan_unavailable: "Cette formule n'est pas encore disponible : son tarif est en cours de définition.",

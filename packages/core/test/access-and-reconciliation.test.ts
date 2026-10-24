@@ -66,6 +66,8 @@ describe("Accès à l'espace d'un autre membre refusé (test 7)", () => {
     expect(verifyState(secret, signState(secret, "n1", "/espace"), "n2")).toBeNull();
     expect(verifyState(secret, signState(secret, "n1", "//evil.example"), "n1")).toEqual({ next: "/espace" });
     expect(verifyState(secret, signState(secret, "n1", "https://evil.example"), "n1")).toEqual({ next: "/espace" });
+    expect(verifyState(secret, signState(secret, "n1", "/\\evil.example"), "n1")).toEqual({ next: "/espace" });
+    expect(verifyState(secret, signState(secret, "n1", "/\t/evil.example"), "n1")).toEqual({ next: "/espace" });
   });
 });
 
