@@ -13,7 +13,7 @@ from hedgefund.members.service import Members, migrate
 from hedgefund.members.site import MemberSettings
 from hedgefund.web.app import WebSettings, create_app
 from hedgefund.web.security import AuthService
-from tests.test_members import PW, _engine, _site, last_link, operator, register, site_app  # noqa: F401 - fixture
+from test_members import PW, _engine, _site, last_link, operator, register, site_app  # noqa: F401 - fixture
 
 BODY = {"email": "fatou@example.com", "password": PW, "name": "Fatou Sow", "accept_terms": True}
 
