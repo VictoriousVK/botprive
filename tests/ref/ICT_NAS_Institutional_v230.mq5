@@ -9,7 +9,8 @@
 //|  Modèles : Shadow, Silver Bullet (03-04 / 10-11 / 14-15 + TGIF), |
 //|    CRT (45 min + True Opens, OPR sweep/réintégration, macros     |
 //|    08:30, 02:50, PM 14:50), Killzone, SB Momentum,               |
-//|    London OPR (MOR), OPR 01:30 / 07:00 / 09:30 / 13:30, ERL->IRL |
+//|    London OPR (MOR, PDF), OPR 01:30 / 07:00 / 09:30 / 13:30,     |
+//|    ERL->IRL                                                      |
 //|  Contexte : heure NY (DST), MOR/OPR/STDV, carte de liquidité,    |
 //|    NDOG/NWOG/RTH gap, Quarterly Theory, PD, SMT NQ/ES, FPFVG     |
 //|  Décision : filtres -> RR -> score ICT -> ML ONNX -> risque      |
@@ -26,10 +27,40 @@
 //|   - SL toujours au-delà du sweep (alternative : bougie 1 du FVG) |
 //|   - ordres : remplissage / expiration adaptés au broker          |
 //|   - position au marché : délai de grâce avant abandon du suivi   |
+//|                                                                  |
+//|  v2.22 :                                                         |
+//|   - contrôle d'autorisation de trading au démarrage (AutoTrading,|
+//|     "Allow Algo Trading", compte, mode de trading du symbole)    |
+//|   - ordre de test au démarrage dans le testeur (min lot)         |
+//|   - lot réduit automatiquement si la marge libre est insuffisante|
+//|   - DD total max : message explicite (0 = désactivé)             |
+//|   - diagnostic écrit dans Common\Files\ICTNAS\diagnostic.txt     |
+//|                                                                  |
+//|  v2.30 : fusion avec le moteur « OPR + FVG » (cahier des charges |
+//|  et PDF « London OPR Strategy » / « Macro + breaker »)           |
+//|   - modèle LONDON_OPR_PDF fidèle au PDF : biais à 2:50 (clôture  |
+//|     de la bougie 02:49), prise de liquidité dans la fenêtre,     |
+//|     1er FVG M1 formé dans une macro après le sweep, entrée au    |
+//|     bord du FVG, SL au-delà du swing, cible ±2 STD du MOR,       |
+//|     1 macro = 1 trade, pas de trade si la cible est atteinte     |
+//|     avant l'entrée, ordre annulé en fin de fenêtre               |
+//|   - OPR figés à la clôture de leur plage et sauvegardés, 1er FVG |
+//|     M15 asiatique et FPFVG M1 de minuit, journal CSV de chaque   |
+//|     décision (Common\Files\ICTNAS)                               |
+//|   - RR minimal par famille : ICT 2 (règle validée « RR min 2 »), |
+//|     CRT 3 (inchangé), London PDF = cible du PDF ; le score ICT   |
+//|     ne bloque pas le modèle PDF (il est enregistré)              |
+//|   - trades max / jour : seuls les trades exécutés et les ordres  |
+//|     en attente comptent (un ordre expiré ne consomme plus rien)  |
+//|   - risque 1 % / trade, stop jour -2 %, objectif +3 % (règles    |
+//|     validées de l'en-tête RiskManager), 2 positions simultanées  |
+//|     maximum, toujours dans le même sens                          |
+//|   - entrée au marché bornée (x R au-delà du niveau) et annulation|
+//|     « cible atteinte avant l'entrée » contrôlée à chaque tick    |
 //+------------------------------------------------------------------+
 #property copyright "Victor — ICT NAS Institutional"
-#property version   "2.21"
-#property description "EA ICT complet NAS100 : modeles ICT, score, filtre ML ONNX, gestion des partiels, collecte de donnees."
+#property version   "2.30"
+#property description "EA ICT complet NAS100 : modeles ICT, London OPR (PDF), score, filtre ML ONNX, gestion des partiels, collecte de donnees."
 
 #include <Trade\Trade.mqh>
 
@@ -45,7 +76,7 @@
 #define ICTNAS_DEFINES_MQH
 
 #define ICTNAS_PREFIX   "ICTNAS_"
-#define ICTNAS_VERSION  "2.21"
+#define ICTNAS_VERSION  "2.30"
 #define SEC_MIN         60
 #define SEC_HOUR        3600
 #define SEC_DAY         86400
@@ -80,8 +111,8 @@ enum ENUM_SB_MODE
 enum ENUM_ENTRY_PROFILE
   {
    PROFILE_STRICT     = 0,  // Strict : règles d'origine (score 60, RR 2, SL au sweep, pas de cible de secours)
-   PROFILE_STANDARD   = 1,  // Standard : ICT + gestion v6 (SL borné ATR, cible de secours, TP1 à 1R, momentum SB)
-   PROFILE_AGGRESSIVE = 2,  // Agressif : entrées au marché, RR 1, displacement non obligatoire
+   PROFILE_STANDARD   = 1,  // Standard : score 25, RR 2, SL borné ATR, cible de secours 3R, 50 % à 2R, momentum SB
+   PROFILE_AGGRESSIVE = 2,  // Agressif : entrées au marché, score 0, RR 2, displacement non obligatoire
    PROFILE_CUSTOM     = 3   // Personnalisé : utilise les inputs du groupe "Profil personnalisé"
   };
 
@@ -92,6 +123,23 @@ enum ENUM_WEEKLY_BIAS
    WB_BULL =  1,   // Haussier
    WB_BEAR = -1    // Baissier
   };
+
+//--- v2.30 : implémentation du modèle London OPR
+enum ENUM_LONDON_MODE
+  {
+   LONDON_PDF    = 0,  // PDF London OPR (moteur OPR + FVG) - conseillé
+   LONDON_LEGACY = 1,  // v2.22 : séquence ICT complète (sweep, MSS/CISD, displacement, FVG)
+   LONDON_BOTH   = 2   // Les deux
+  };
+
+//--- v2.30 : gestion des trades du modèle London OPR (PDF)
+enum ENUM_LONDON_MANAGE
+  {
+   LM_PDF    = 0,      // PDF : cible unique (±STD du MOR), ni BE ni partiel
+   LM_ICTNAS = 1       // ICT NAS : BE à x R, 50 % au TP1, reste à la cible
+  };
+
+#define LO_MODEL "LONDON_OPR_PDF"   // nom du modèle London OPR du PDF (moteur OPR + FVG)
 
 //--- Types de liquidité (le poids est défini dans LiquidityEngine)
 enum ENUM_LIQ_TYPE
@@ -1498,6 +1546,7 @@ public:
 //|  et conversion de devise gérées par MT5), garde-fous journaliers |
 //|  et prop firm. Règles validées : risque plafonné à 2 %, stop     |
 //|  journalier -2 %, objectif +3 %, DD total 8 %, RR min 2.         |
+//|  v2.30 : stop / objectif journalier à 0 = désactivé.             |
 //|  Le jour de risque démarre à 18:00 NY (= minuit Prague, FTMO).   |
 //+------------------------------------------------------------------+
 #ifndef ICTNAS_RISKMANAGER_MQH
@@ -1568,12 +1617,18 @@ public:
    void              Update(void)
      {
       if(m_hardBlocked) return;
-      if(TotalDDPct()>=m_maxTotalDDPct)
-        { m_hardBlocked=true; m_reason="DD total "+DoubleToString(m_maxTotalDDPct,1)+"% atteint"; return; }
+      if(m_maxTotalDDPct>0 && TotalDDPct()>=m_maxTotalDDPct)
+        {
+         //--- règle prop firm : DD total atteint = compte en échec -> plus aucun trade (0 = désactivé)
+         m_hardBlocked=true;
+         m_reason="DD total "+DoubleToString(m_maxTotalDDPct,1)+"% atteint : ARRET DEFINITIF (InpMaxTotalDDPct=0 pour desactiver)";
+         Print("!!! ",m_reason);
+         return;
+        }
       if(m_dayBlocked) return;
       double d=DayPnLPct();
-      if(d<=-m_dailyLossPct)  { m_dayBlocked=true; m_reason="Stop journalier -"+DoubleToString(m_dailyLossPct,1)+"%"; }
-      else if(d>=m_dailyTargetPct) { m_dayBlocked=true; m_reason="Objectif journalier +"+DoubleToString(m_dailyTargetPct,1)+"%"; }
+      if(m_dailyLossPct>0 && d<=-m_dailyLossPct)  { m_dayBlocked=true; m_reason="Stop journalier -"+DoubleToString(m_dailyLossPct,1)+"%"; }
+      else if(m_dailyTargetPct>0 && d>=m_dailyTargetPct) { m_dayBlocked=true; m_reason="Objectif journalier +"+DoubleToString(m_dailyTargetPct,1)+"%"; }
      }
    bool              CanTrade(string &why)
      {
@@ -2644,6 +2699,12 @@ struct SSignal
    double            rReal,remaining,curSL,mfe,mae,bePts;
    bool              tp1Hit,tp2Hit,tp3Hit;
    string            outcome;
+   //--- v2.30
+   double            cancelPx;        // cible atteinte avant l'entrée -> ordre annulé (0 = TP1)
+   double            chaseR;          // entrée au marché tolérée au-delà du niveau (x R, 0 = règle v2.22)
+   bool              fixedUid;        // identifiant déterministe (London OPR PDF : pas de doublon après redémarrage)
+   long              extId;           // setup du moteur London OPR (0 = aucun)
+   int               slot;            // OPR du moteur London (-1 = aucun)
   };
 
 //--- Répartition des sorties selon que les TP sont distincts ou non
@@ -2699,7 +2760,8 @@ private:
             if(d*(adv-s.sl)<=0) { s.rReal=-1.0; s.remaining=0; s.mae=1.0; Close(s,b.time); }
             return;
            }
-         if(d*(fav-s.tp1)>=0) { Close(s,b.time); return; }   // cible atteinte sans retracement
+         double cx=(s.cancelPx>0)?s.cancelPx:s.tp1;
+         if(d*(fav-cx)>=0) { Close(s,b.time); return; }      // cible atteinte sans retracement
          return;
         }
       double r=s.riskPts;
@@ -2802,6 +2864,13 @@ public:
          Write(m_open[i]);
         }
       ArrayResize(m_open,0);
+     }
+
+   //--- v2.30 : signal annulé avant exécution (ex. setup London OPR abandonné par le moteur)
+   void              CancelPending(const string uid,datetime t)
+     {
+      for(int i=0;i<ArraySize(m_open);i++)
+         if(m_open[i].uid==uid && !m_open[i].filled && !m_open[i].done) Close(m_open[i],t);
      }
 
    //--- Signaux récents (pour les tracés / panneau)
@@ -3295,6 +3364,9 @@ public:
 //|   - enregistrement de chaque trade clôturé (table trades).      |
 //|  v2.21 : remplissage / expiration adaptés au broker, délai de    |
 //|  grâce avant d'abandonner le suivi d'un ordre exécuté.           |
+//|  v2.30 : trades exécutés du jour comptés à l'exécution, niveau   |
+//|  d'annulation propre au signal, entrée au marché bornée,         |
+//|  annulation par identifiant de signal, contrôle des doublons.    |
 //+------------------------------------------------------------------+
 #ifndef ICTNAS_TRADEMANAGER_MQH
 #define ICTNAS_TRADEMANAGER_MQH
@@ -3311,6 +3383,7 @@ struct STradeCtx
    double            entry,sl,tp1,tp2,tp3,riskPts,riskMoney,balBefore;
    double            w1,w2,w3,initVol;
    double            beTrigger,inval;
+   double            cancelPx;          // v2.30 : prix qui annule l'ordre en attente (0 = TP1)
    bool              tp1Done,tp2Done,beDone;
    datetime          lastBarChecked;
    datetime          tPlaced,tExpiry,tOpen;
@@ -3330,6 +3403,7 @@ private:
    bool              m_trail;
    double            m_trailBuf;
    string            m_last;
+   int               m_filledToday;     // v2.30 : trades exécutés depuis le début du jour de trading
 
    double            Tick(void)
      {
@@ -3451,6 +3525,7 @@ public:
       m_trade.SetTypeFillingBySymbol(sym);
       ArrayResize(m_t,0);
       m_last="";
+      m_filledToday=0;
      }
    string            LastMessage(void) { return(m_last); }
 
@@ -3464,6 +3539,48 @@ public:
      {
       for(int i=0;i<ArraySize(m_t);i++) if(m_t[i].active) return(m_t[i].dir);
       return(0);
+     }
+
+   //--- v2.30 : compteurs du jour (trades exécutés, ordres en attente)
+   void              NewDay(void)       { m_filledToday=0; }
+   int               FilledToday(void)  { return(m_filledToday); }
+   int               PendingCount(void)
+     {
+      int c=0;
+      for(int i=0;i<ArraySize(m_t);i++) if(m_t[i].active && !m_t[i].filled) c++;
+      return(c);
+     }
+
+   //--- v2.30 : supprime l'ordre en attente d'un signal (false si absent ou déjà exécuté)
+   bool              CancelUid(const string uid)
+     {
+      for(int i=0;i<ArraySize(m_t);i++)
+        {
+         if(!m_t[i].active || m_t[i].filled || m_t[i].uid!=uid) continue;
+         if(OrderSelect(m_t[i].order)) m_trade.OrderDelete(m_t[i].order);
+         m_t[i].active=false;
+         return(true);
+        }
+      return(false);
+     }
+
+   //--- v2.30 : un ordre ou une position de ce signal existe déjà (ex. après un redémarrage)
+   bool              ExistsOnServer(const string uid)
+     {
+      for(int i=0;i<ArraySize(m_t);i++) if(m_t[i].active && m_t[i].uid==uid) return(true);
+      for(int i=OrdersTotal()-1;i>=0;i--)
+        {
+         ulong t=OrderGetTicket(i);
+         if(t==0 || OrderGetString(ORDER_SYMBOL)!=m_sym || OrderGetInteger(ORDER_MAGIC)!=m_magic) continue;
+         if(StringFind(OrderGetString(ORDER_COMMENT),uid)>=0) return(true);
+        }
+      for(int i=PositionsTotal()-1;i>=0;i--)
+        {
+         ulong t=PositionGetTicket(i);
+         if(t==0 || PositionGetString(POSITION_SYMBOL)!=m_sym || PositionGetInteger(POSITION_MAGIC)!=m_magic) continue;
+         if(StringFind(PositionGetString(POSITION_COMMENT),uid)>=0) return(true);
+        }
+      return(false);
      }
 
    //--- Place l'ordre du signal ; renvoie false (et err) si impossible
@@ -3490,6 +3607,9 @@ public:
          else if(bid<sl && bid>=s.fvgBot) kind=0;
         }
       if(kind<0) { err="prix hors zone d'entree"; return(false); }
+      //--- v2.30 : le prix a déjà traversé le niveau d'entrée : entrée au marché seulement s'il n'est pas allé trop loin
+      if(kind==0 && !s.market && s.chaseR>0 && s.dir*(entry-pxNow)>s.chaseR*MathAbs(entry-sl))
+        { err="setup manque : prix trop loin au-dela de l'entree"; return(false); }
       if(kind==0 && MathAbs(pxNow-sl)<=stops) { err="SL trop proche (stops level)"; return(false); }
       bool market=(kind==0);
       ENUM_ORDER_TYPE_TIME tt=PendingTimeType();
@@ -3537,6 +3657,7 @@ public:
       m_t[n].initVol=lots;
       m_t[n].tp1Done=false; m_t[n].tp2Done=false; m_t[n].beDone=false;
       m_t[n].beTrigger=s.beTrigger; m_t[n].inval=s.inval; m_t[n].lastBarChecked=0;
+      m_t[n].cancelPx=(s.cancelPx>0)?NP(s.cancelPx):0;
       m_t[n].tPlaced=TimeCurrent();
       m_t[n].tExpiry=s.expirySrv;
       m_t[n].tOpen=0;
@@ -3564,11 +3685,13 @@ public:
                m_t[i].posTicket=pt;
                m_t[i].tOpen=(datetime)PositionGetInteger(POSITION_TIME);
                m_t[i].entry=PositionGetDouble(POSITION_PRICE_OPEN);
+               m_filledToday++;
                continue;
               }
             if(OrderSelect(m_t[i].order))
               {
-               if(now>=m_t[i].tExpiry || d*(px-m_t[i].tp1)>=0)
+               double cx=(m_t[i].cancelPx>0)?m_t[i].cancelPx:m_t[i].tp1;
+               if(now>=m_t[i].tExpiry || d*(px-cx)>=0)
                  {
                   m_trade.OrderDelete(m_t[i].order);
                   m_t[i].active=false;
@@ -3658,6 +3781,2376 @@ public:
 //=== fin TradeManager.mqh ===
 
 //+------------------------------------------------------------------+
+//| v2.30 : moteur London OPR (stratégie OPR + FVG, PDF de Mélanie). |
+//| Modules repris tels quels de mql5/Experts/OPR_FVG (testés) ;     |
+//| seule la classe COprEngine est renommée CLondonOprEngine.        |
+//+------------------------------------------------------------------+
+//=== début OPR_Config.mqh ===
+//+------------------------------------------------------------------+
+//|                                                   OPR_Config.mqh |
+//|  Configuration centralisée de la stratégie OPR + FVG.            |
+//|  Toutes les plages horaires sont exprimées dans le fuseau de la  |
+//|  stratégie (New York par défaut, cf. PDF « London OPR Strategy » :|
+//|  « entre 2:50 et 4:10 (heure de New York) »).                    |
+//+------------------------------------------------------------------+
+#ifndef OPR_CONFIG_MQH
+#define OPR_CONFIG_MQH
+
+#define OPR_MAX_SLOTS   4          // nombre d'OPR configurables
+#define OPR_MAX_MACROS  6          // macros par fenêtre de trading
+#define OPR_BASE_SEC    60         // bougies de base : M1
+
+//--- fuseau des horaires de la stratégie
+enum ENUM_OPR_STRAT_TZ
+  {
+   OPR_STZ_NEW_YORK = 0,   // New York (EST/EDT)
+   OPR_STZ_LONDON   = 1,   // Londres (GMT/BST)
+   OPR_STZ_PARIS    = 2,   // Paris (CET/CEST)
+   OPR_STZ_UTC      = 3,   // UTC
+   OPR_STZ_SERVER   = 4    // Heure du serveur MT5
+  };
+
+//--- fuseau du serveur du broker
+enum ENUM_OPR_SERVER_TZ
+  {
+   OPR_SRV_AUTO       = 0, // Auto (mesuré en live ; à préciser dans le testeur)
+   OPR_SRV_GMT_US_DST = 1, // GMT+x en hiver, +1 h pendant le DST US (ex. GMT+2/+3)
+   OPR_SRV_GMT_EU_DST = 2, // GMT+x en hiver, +1 h pendant le DST européen
+   OPR_SRV_GMT_FIXED  = 3  // GMT+x fixe toute l'année
+  };
+
+//--- niveau d'entrée dans le FVG
+enum ENUM_OPR_ENTRY_LEVEL
+  {
+   OPR_ENTRY_EDGE = 0,     // Bord du FVG (« le prix revient dans le FVG »)
+   OPR_ENTRY_CE   = 1      // CE (milieu du FVG)
+  };
+
+//--- règle « FVG présenté pendant la plage asiatique »
+enum ENUM_OPR_ASIA_RULE
+  {
+   OPR_ASIA_C2_IN_RANGE  = 0, // Bougie du gap (2e) dans la plage
+   OPR_ASIA_ALL_IN_RANGE = 1, // Les 3 bougies dans la plage
+   OPR_ASIA_C3_IN_RANGE  = 2  // Bougie de confirmation (3e) clôturée dans la plage
+  };
+
+//--- timeframe du FVG d'entrée
+enum ENUM_OPR_ENTRY_TF
+  {
+   OPR_TF_M1  = 1,         // M1
+   OPR_TF_M5  = 5,         // M5
+   OPR_TF_M15 = 15         // M15
+  };
+
+//+------------------------------------------------------------------+
+//| Plage horaire [début, fin) en minutes du jour, peut traverser    |
+//| minuit. valid = false : plage non configurée.                    |
+//+------------------------------------------------------------------+
+struct OPRTimeRange
+  {
+   bool              valid;
+   int               startMin;
+   int               endMin;
+
+   void              Clear() { valid = false; startMin = 0; endMin = 0; }
+   void              Set(const int s, const int e) { valid = (s != e); startMin = s; endMin = e; }
+   int               Length() const { return valid ? (endMin - startMin + 1440) % 1440 : 0; }
+   bool              Contains(const int m) const
+     {
+      if(!valid)
+         return false;
+      if(startMin < endMin)
+         return (m >= startMin && m < endMin);
+      return (m >= startMin || m < endMin);
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Un OPR : sa plage de calcul et, s'il est tradé, sa fenêtre de    |
+//| trading et ses macros.                                           |
+//+------------------------------------------------------------------+
+struct OPRSlotCfg
+  {
+   OPRTimeRange      calc;          // plage de calcul High/Low (calc.valid = false : OPR désactivé)
+   bool              tradeEnabled;  // modèle d'entrée actif pour cet OPR
+   OPRTimeRange      window;        // fenêtre de trading (le biais est lu à son ouverture)
+   int               macroCount;
+   OPRTimeRange      macros[OPR_MAX_MACROS];
+
+   void              Clear()
+     {
+      calc.Clear();
+      tradeEnabled = false;
+      window.Clear();
+      macroCount = 0;
+      for(int i = 0; i < OPR_MAX_MACROS; i++)
+         macros[i].Clear();
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Configuration complète du moteur                                 |
+//+------------------------------------------------------------------+
+struct OPRConfig
+  {
+   //--- fuseaux
+   int               stratTz;
+   int               serverMode;
+   int               serverGmtSec;      // décalage GMT du serveur (hiver) ou mesuré (auto)
+   int               dayStartMin;       // début de la journée de session (heure stratégie)
+
+   //--- plages
+   OPRSlotCfg        slots[OPR_MAX_SLOTS];
+   OPRTimeRange      asia;              // plage asiatique
+   OPRTimeRange      london;            // session de Londres (information + recherche du FPFVG de minuit)
+   OPRTimeRange      observe;           // fenêtre d'observation (information uniquement)
+
+   //--- FVG de référence
+   int               asiaRule;
+   double            asiaMinGapTicks;
+   double            midnightMinGapTicks;
+
+   //--- FVG d'entrée
+   int               entryTfMin;
+   int               entryLevel;
+   double            minFvgTicks;
+
+   //--- liquidité
+   bool              liqM1;
+   int               liqPivotM1;
+   bool              liqM15;
+   int               liqPivotM15;
+   bool              liqAsia;
+
+   //--- modèle d'entrée
+   bool              requireMacro;
+   bool              oneTradePerMacro;
+   bool              consolRequireSweep;
+   double            stopBufferTicks;
+   double            tpStd;
+   int               graceMin;
+   double            minStop;
+   double            maxStop;
+   int               maxOpenTrades;
+   int               maxTradesDay;
+
+   //--- symbole
+   double            tickSize;
+
+   void              Defaults()
+     {
+      stratTz      = OPR_STZ_NEW_YORK;
+      serverMode   = OPR_SRV_GMT_US_DST;
+      serverGmtSec = 2 * 3600;
+      dayStartMin  = 18 * 60;
+
+      for(int i = 0; i < OPR_MAX_SLOTS; i++)
+         slots[i].Clear();
+      //--- OPR principal de Londres (Midnight Opening Range) : 00:00-00:30, fenêtre 02:50-04:10
+      slots[0].calc.Set(0, 30);
+      slots[0].tradeEnabled = true;
+      slots[0].window.Set(2 * 60 + 50, 4 * 60 + 10);
+      slots[0].macroCount = 3;
+      slots[0].macros[0].Set(2 * 60 + 50, 3 * 60 + 10);
+      slots[0].macros[1].Set(3 * 60 + 20, 3 * 60 + 40);
+      slots[0].macros[2].Set(3 * 60 + 50, 4 * 60 + 10);
+      //--- autres OPR : niveaux calculés, aucune règle d'entrée documentée
+      slots[1].calc.Set(7 * 60, 7 * 60 + 30);
+      slots[2].calc.Set(9 * 60 + 30, 10 * 60);
+      slots[3].calc.Set(13 * 60 + 30, 14 * 60);
+
+      asia.Set(20 * 60, 0);
+      london.Set(0, 6 * 60);
+      observe.Set(2 * 60 + 50, 3 * 60 + 10);
+
+      asiaRule            = OPR_ASIA_C2_IN_RANGE;
+      asiaMinGapTicks     = 1.0;
+      midnightMinGapTicks = 1.0;
+
+      entryTfMin  = OPR_TF_M1;
+      entryLevel  = OPR_ENTRY_EDGE;
+      minFvgTicks = 1.0;
+
+      liqM1       = true;
+      liqPivotM1  = 1;
+      liqM15      = true;
+      liqPivotM15 = 1;
+      liqAsia     = true;
+
+      requireMacro       = true;
+      oneTradePerMacro   = true;
+      consolRequireSweep = true;
+      stopBufferTicks    = 1.0;
+      tpStd              = 2.0;
+      graceMin           = 0;
+      minStop            = 0.0;
+      maxStop            = 0.0;
+      maxOpenTrades      = 1;
+      maxTradesDay       = 0;
+
+      tickSize = 0.25;
+     }
+  };
+
+#endif // OPR_CONFIG_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_Config.mqh ===
+
+//=== début OPR_Time.mqh ===
+//+------------------------------------------------------------------+
+//|                                                     OPR_Time.mqh |
+//|  Module 1 : horaires et calendrier.                              |
+//|  Conversion heure serveur -> UTC -> heure de la stratégie, avec  |
+//|  les changements d'heure US et européens, et découpage en        |
+//|  journées de session (les plages qui traversent minuit restent   |
+//|  dans la même journée de session).                               |
+//|                                                                  |
+//|  Trois heures distinctes ne sont jamais mélangées :              |
+//|    serveur (datetime MT5)  ->  UTC (long)  ->  stratégie (long). |
+//+------------------------------------------------------------------+
+#ifndef OPR_TIME_MQH
+#define OPR_TIME_MQH
+
+class COprTime
+  {
+public:
+   int               m_stratTz;
+   int               m_srvMode;
+   int               m_srvGmtSec;
+   int               m_dayStartMin;
+   int               m_usYear;
+   long              m_usStart;
+   long              m_usEnd;
+   int               m_euYear;
+   long              m_euStart;
+   long              m_euEnd;
+
+                     COprTime() { m_usYear = 0; m_euYear = 0; m_stratTz = OPR_STZ_NEW_YORK; m_srvMode = OPR_SRV_GMT_FIXED; m_srvGmtSec = 0; m_dayStartMin = 18 * 60; }
+
+   void              Configure(const int stratTz, const int srvMode, const int srvGmtSec, const int dayStartMin)
+     {
+      m_stratTz     = stratTz;
+      m_srvMode     = srvMode;
+      m_srvGmtSec   = srvGmtSec;
+      m_dayStartMin = dayStartMin;
+      m_usYear      = 0;
+      m_euYear      = 0;
+     }
+
+   //+---------------------------------------------------------------+
+   //| Règles de changement d'heure                                  |
+   //+---------------------------------------------------------------+
+   long              NthSundayUtc(const int year, const int mon, const int nth, const int hourUtc)
+     {
+      MqlDateTime s;
+      ZeroMemory(s);
+      s.year = year;
+      s.mon  = mon;
+      s.day  = 1;
+      datetime first = StructToTime(s);
+      MqlDateTime f;
+      TimeToStruct(first, f);
+      int firstSunday = 1 + (7 - f.day_of_week) % 7;
+      int day = firstSunday + 7 * (nth - 1);
+      return (long)first + (long)(day - 1) * 86400 + (long)hourUtc * 3600;
+     }
+
+   long              LastSundayUtc(const int year, const int mon, const int hourUtc)
+     {
+      //--- mars et octobre ont 31 jours
+      MqlDateTime s;
+      ZeroMemory(s);
+      s.year = year;
+      s.mon  = mon;
+      s.day  = 31;
+      datetime last = StructToTime(s);
+      MqlDateTime f;
+      TimeToStruct(last, f);
+      return (long)last - (long)f.day_of_week * 86400 + (long)hourUtc * 3600;
+     }
+
+   //--- DST US : 2e dimanche de mars 07:00 UTC -> 1er dimanche de novembre 06:00 UTC
+   bool              IsUsDst(const long utc)
+     {
+      MqlDateTime s;
+      TimeToStruct((datetime)utc, s);
+      if(s.year != m_usYear)
+        {
+         m_usYear  = s.year;
+         m_usStart = NthSundayUtc(s.year, 3, 2, 7);
+         m_usEnd   = NthSundayUtc(s.year, 11, 1, 6);
+        }
+      return (utc >= m_usStart && utc < m_usEnd);
+     }
+
+   //--- DST européen : dernier dimanche de mars 01:00 UTC -> dernier dimanche d'octobre 01:00 UTC
+   bool              IsEuDst(const long utc)
+     {
+      MqlDateTime s;
+      TimeToStruct((datetime)utc, s);
+      if(s.year != m_euYear)
+        {
+         m_euYear  = s.year;
+         m_euStart = LastSundayUtc(s.year, 3, 1);
+         m_euEnd   = LastSundayUtc(s.year, 10, 1);
+        }
+      return (utc >= m_euStart && utc < m_euEnd);
+     }
+
+   //+---------------------------------------------------------------+
+   //| Conversions                                                   |
+   //+---------------------------------------------------------------+
+   long              ServerToUtc(const datetime srv)
+     {
+      long guess = (long)srv - m_srvGmtSec;
+      if(m_srvMode == OPR_SRV_GMT_US_DST)
+         return IsUsDst(guess - 3600) ? guess - 3600 : guess;
+      if(m_srvMode == OPR_SRV_GMT_EU_DST)
+         return IsEuDst(guess - 3600) ? guess - 3600 : guess;
+      return guess;
+     }
+
+   long              UtcToStrat(const long utc)
+     {
+      if(m_stratTz == OPR_STZ_NEW_YORK)
+         return utc - 5 * 3600 + (IsUsDst(utc) ? 3600 : 0);
+      if(m_stratTz == OPR_STZ_LONDON)
+         return utc + (IsEuDst(utc) ? 3600 : 0);
+      if(m_stratTz == OPR_STZ_PARIS)
+         return utc + 3600 + (IsEuDst(utc) ? 3600 : 0);
+      return utc;
+     }
+
+   long              StratTime(const datetime srv)
+     {
+      if(m_stratTz == OPR_STZ_SERVER)
+         return (long)srv;
+      return UtcToStrat(ServerToUtc(srv));
+     }
+
+   //--- minute du jour (0..1439) d'une heure stratégie
+   int               MinuteOfDay(const long st) const
+     {
+      long sod = st % 86400;
+      if(sod < 0)
+         sod += 86400;
+      return (int)(sod / 60);
+     }
+
+   //--- journée de session : commence à dayStartMin (ex. 18:00 la veille pour un début >= 12:00)
+   int               SessionDay(const long st) const
+     {
+      long d = (st - (long)m_dayStartMin * 60);
+      long day = (d >= 0) ? d / 86400 : (d - 86399) / 86400;
+      return (int)(day + (m_dayStartMin >= 720 ? 1 : 0));
+     }
+
+   //--- heure stratégie absolue d'une minute du jour dans une journée de session
+   long              SessionAbs(const int day, const int minute) const
+     {
+      long base = (long)day * 86400;
+      if(m_dayStartMin >= 720 && minute >= m_dayStartMin)
+         return base - 86400 + (long)minute * 60;
+      if(m_dayStartMin < 720 && minute < m_dayStartMin)
+         return base + 86400 + (long)minute * 60;
+      return base + (long)minute * 60;
+     }
+
+   //--- bornes absolues [s, e) d'une plage dans une journée de session
+   bool              RangeAbs(const int day, const OPRTimeRange &r, long &s, long &e) const
+     {
+      if(!r.valid)
+         return false;
+      s = SessionAbs(day, r.startMin);
+      e = s + (long)r.Length() * 60;
+      return true;
+     }
+
+   //--- position d'une minute dans la journée de session (0 = début de journée)
+   int               SessionMinute(const int minute) const { return (minute - m_dayStartMin + 1440) % 1440; }
+
+   //--- la plage tient-elle entièrement dans une journée de session ?
+   bool              FitsInSession(const OPRTimeRange &r) const
+     {
+      if(!r.valid)
+         return true;
+      return (SessionMinute(r.startMin) + r.Length() <= 1440);
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Lecture "HH:MM" -> minutes (-1 si invalide)                      |
+//+------------------------------------------------------------------+
+int OprParseHHMM(const string txt)
+  {
+   string s = txt;
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   string parts[];
+   if(StringSplit(s, ':', parts) != 2)
+      return -1;
+   if(StringLen(parts[0]) < 1 || StringLen(parts[1]) != 2)
+      return -1;
+   int h = (int)StringToInteger(parts[0]);
+   int m = (int)StringToInteger(parts[1]);
+   if(h < 0 || h > 24 || m < 0 || m > 59 || (h == 24 && m != 0))
+      return -1;
+   return (h * 60 + m) % 1440;
+  }
+
+//+------------------------------------------------------------------+
+//| Lecture "HH:MM-HH:MM" ; chaîne vide = plage non configurée.      |
+//| Retourne false si le texte est invalide.                         |
+//+------------------------------------------------------------------+
+bool OprParseRange(const string txt, OPRTimeRange &r)
+  {
+   r.Clear();
+   string s = txt;
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   if(StringLen(s) == 0)
+      return true;
+   string parts[];
+   if(StringSplit(s, '-', parts) != 2)
+      return false;
+   int a = OprParseHHMM(parts[0]);
+   int b = OprParseHHMM(parts[1]);
+   if(a < 0 || b < 0 || a == b)
+      return false;
+   r.Set(a, b);
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Lecture d'une liste "HH:MM-HH:MM,HH:MM-HH:MM"                    |
+//+------------------------------------------------------------------+
+bool OprParseRanges(const string txt, OPRTimeRange &out[])
+  {
+   ArrayResize(out, 0);
+   string s = txt;
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   if(StringLen(s) == 0)
+      return true;
+   string parts[];
+   int n = StringSplit(s, ',', parts);
+   for(int i = 0; i < n; i++)
+     {
+      OPRTimeRange r;
+      if(!OprParseRange(parts[i], r) || !r.valid)
+         return false;
+      ArrayResize(out, i + 1);
+      out[i] = r;
+     }
+   return true;
+  }
+
+string OprHHMM(const int m) { return StringFormat("%02d:%02d", m / 60, m % 60); }
+string OprRangeText(const OPRTimeRange &r) { return r.valid ? OprHHMM(r.startMin) + "-" + OprHHMM(r.endMin) : "-"; }
+
+#endif // OPR_TIME_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_Time.mqh ===
+
+//=== début OPR_Candles.mqh ===
+//+------------------------------------------------------------------+
+//|                                                  OPR_Candles.mqh |
+//|  Bougies M1 / M5 / M15 reconstruites à partir des bougies M1     |
+//|  clôturées, alignées sur l'heure de la stratégie.                |
+//|  Une bougie n'existe pour le reste du moteur qu'une fois         |
+//|  CLÔTURÉE : jamais de bougie en formation, jamais de futur.      |
+//+------------------------------------------------------------------+
+#ifndef OPR_CANDLES_MQH
+#define OPR_CANDLES_MQH
+
+#define OPR_CANDLE_RING 512
+
+struct OCandle
+  {
+   long              t;      // ouverture, heure stratégie
+   datetime          srv;    // ouverture, heure serveur
+   double            o;
+   double            h;
+   double            l;
+   double            c;
+  };
+
+class CCandleAgg
+  {
+public:
+   int               m_period;     // secondes
+   bool              m_hasCur;
+   bool              m_started;
+   long              m_curStart;
+   datetime          m_curSrv;
+   double            m_o;
+   double            m_h;
+   double            m_l;
+   double            m_c;
+   OCandle           m_ring[];
+   int               m_head;
+   int               m_count;
+   OCandle           m_closed[2];  // bougies clôturées lors du dernier Add()
+   int               m_nClosed;
+
+                     CCandleAgg() { m_period = 60; m_head = 0; m_count = 0; m_nClosed = 0; m_hasCur = false; m_started = false; }
+
+   void              Init(const int periodSec)
+     {
+      m_period  = periodSec;
+      m_hasCur  = false;
+      m_started = false;
+      m_head    = 0;
+      m_count   = 0;
+      m_nClosed = 0;
+      ArrayResize(m_ring, OPR_CANDLE_RING);
+     }
+
+   int               PeriodMin() const { return m_period / 60; }
+
+   void              CloseCurrent()
+     {
+      OCandle cd;
+      cd.t   = m_curStart;
+      cd.srv = m_curSrv;
+      cd.o   = m_o;
+      cd.h   = m_h;
+      cd.l   = m_l;
+      cd.c   = m_c;
+      m_ring[m_head] = cd;
+      m_head = (m_head + 1) % OPR_CANDLE_RING;
+      if(m_count < OPR_CANDLE_RING)
+         m_count++;
+      if(m_nClosed < 2)
+        {
+         m_closed[m_nClosed] = cd;
+         m_nClosed++;
+        }
+      m_hasCur = false;
+     }
+
+   //--- ajoute une bougie de base clôturée (st = ouverture, heure stratégie)
+   void              Add(const long st, const datetime srv, const double o, const double h, const double l,
+                         const double c, const int baseSec)
+     {
+      m_nClosed = 0;
+      long tt = st;
+      long rem = tt % m_period;
+      if(rem < 0)
+         rem += m_period;
+      long bucket = tt - rem;
+      //--- clôture tardive si la dernière bougie de base de la période manquait
+      if(m_hasCur && bucket != m_curStart)
+         CloseCurrent();
+      if(!m_hasCur)
+        {
+         //--- la toute première bougie doit être complète
+         if(!m_started && tt != bucket)
+            return;
+         m_started  = true;
+         m_hasCur   = true;
+         m_curStart = bucket;
+         m_curSrv   = (datetime)((long)srv - (tt - bucket));
+         m_o = o;
+         m_h = h;
+         m_l = l;
+         m_c = c;
+        }
+      else
+        {
+         if(h > m_h)
+            m_h = h;
+         if(l < m_l)
+            m_l = l;
+         m_c = c;
+        }
+      //--- clôture sur la bougie de base dont la clôture coïncide avec celle de la période
+      if(tt + baseSec >= m_curStart + m_period)
+         CloseCurrent();
+     }
+
+   //--- back = 0 : dernière bougie clôturée
+   bool              Get(const int back, OCandle &out) const
+     {
+      if(back < 0 || back >= m_count)
+         return false;
+      int idx = (m_head - 1 - back + 2 * OPR_CANDLE_RING) % OPR_CANDLE_RING;
+      out = m_ring[idx];
+      return true;
+     }
+
+   int               Count() const { return m_count; }
+  };
+
+#endif // OPR_CANDLES_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_Candles.mqh ===
+
+//=== début OPR_FVG.mqh ===
+//+------------------------------------------------------------------+
+//|                                                      OPR_FVG.mqh |
+//|  Module 3 : détection des FVG, indépendante et testable.         |
+//|                                                                  |
+//|  Définition (identique en historique et en temps réel), sur      |
+//|  trois bougies CLÔTURÉES consécutives c1 (la plus ancienne),     |
+//|  c2, c3 :                                                        |
+//|    FVG haussier : Low(c3) > High(c1)  -> zone [High(c1), Low(c3)] |
+//|    FVG baissier : High(c3) < Low(c1)  -> zone [High(c3), Low(c1)] |
+//|  avec une taille minimale (en prix). Le FVG est confirmé à la    |
+//|  clôture de c3, jamais avant.                                    |
+//|                                                                  |
+//|  Statuts (règles documentées, à valider) :                       |
+//|    VALIDE     : formé, pas encore revisité ;                     |
+//|    MITIGÉ     : une bougie du même timeframe est revenue dans la |
+//|                 zone (mèche) ;                                   |
+//|    INVALIDÉ   : une bougie du même timeframe a CLÔTURÉ au-delà   |
+//|                 du bord opposé ;                                 |
+//|    EXPIRÉ     : fin de la journée de session.                    |
+//+------------------------------------------------------------------+
+#ifndef OPR_FVG_MQH
+#define OPR_FVG_MQH
+
+#define FVG_VALID        0
+#define FVG_MITIGATED    1
+#define FVG_INVALIDATED  2
+#define FVG_EXPIRED      3
+
+#define FVG_ROLE_NONE     0
+#define FVG_ROLE_ASIA     1   // premier FVG M15 de la plage asiatique (référence)
+#define FVG_ROLE_MIDNIGHT 2   // FPFVG M1 après minuit (référence)
+#define FVG_ROLE_ENTRY    3   // FVG utilisé comme zone d'entrée
+
+#define OPR_MAX_FVG 3000
+
+struct OFvg
+  {
+   long              id;
+   int               dir;        // +1 haussier, -1 baissier
+   int               tfMin;
+   double            lo;
+   double            hi;
+   long              c1T;        // ouvertures (heure stratégie)
+   long              c2T;
+   long              c3T;
+   long              formedT;    // clôture de c3 = confirmation
+   datetime          c1Srv;
+   datetime          formedSrv;
+   int               status;
+   long              statusT;
+   int               role;
+   int               slot;       // OPR associé (-1 : aucun)
+   int               day;        // journée de session de formation
+  };
+
+//+------------------------------------------------------------------+
+//| Détection pure sur trois bougies clôturées                       |
+//+------------------------------------------------------------------+
+bool OprFvgDetect(const OCandle &c1, const OCandle &c2, const OCandle &c3, const double minSize,
+                  int &dir, double &lo, double &hi)
+  {
+   dir = 0;
+   if(c3.l > c1.h && (c3.l - c1.h) >= minSize)
+     {
+      dir = 1;
+      lo  = c1.h;
+      hi  = c3.l;
+      return true;
+     }
+   if(c3.h < c1.l && (c1.l - c3.h) >= minSize)
+     {
+      dir = -1;
+      lo  = c3.h;
+      hi  = c1.l;
+      return true;
+     }
+   return false;
+  }
+
+string OprFvgStatusText(const int st)
+  {
+   switch(st)
+     {
+      case FVG_VALID:       return "valide";
+      case FVG_MITIGATED:   return "mitigé";
+      case FVG_INVALIDATED: return "invalidé";
+      case FVG_EXPIRED:     return "expiré";
+      default:              return "?";
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Registre des FVG de la journée                                   |
+//+------------------------------------------------------------------+
+class CFvgBook
+  {
+public:
+   OFvg              m_list[];
+   //--- changements de statut survenus lors du dernier OnCandle()
+   int               m_chgIdx[];
+   int               m_chgCount;
+
+                     CFvgBook() { m_chgCount = 0; }
+
+   void              Reset()
+     {
+      ArrayResize(m_list, 0, 256);
+      ArrayResize(m_chgIdx, 0, 16);
+      m_chgCount = 0;
+     }
+
+   int               Count() const { return ArraySize(m_list); }
+
+   int               Find(const long id) const
+     {
+      for(int i = ArraySize(m_list) - 1; i >= 0; i--)
+         if(m_list[i].id == id)
+            return i;
+      return -1;
+     }
+
+   //--- détecte un FVG sur les 3 dernières bougies clôturées de l'agrégateur ; renvoie l'index ou -1
+   int               DetectOnClose(const CCandleAgg &agg, const double minSize, const int day)
+     {
+      OCandle c1, c2, c3;
+      if(!agg.Get(2, c1) || !agg.Get(1, c2) || !agg.Get(0, c3))
+         return -1;
+      int dir = 0;
+      double lo = 0.0, hi = 0.0;
+      if(!OprFvgDetect(c1, c2, c3, minSize, dir, lo, hi))
+         return -1;
+      int n = ArraySize(m_list);
+      if(n >= OPR_MAX_FVG)
+        {
+         //--- on retire le plus ancien FVG sans rôle
+         int drop = -1;
+         for(int i = 0; i < n; i++)
+            if(m_list[i].role == FVG_ROLE_NONE)
+              {
+               drop = i;
+               break;
+              }
+         if(drop < 0)
+            return -1;
+         for(int j = drop; j < n - 1; j++)
+            m_list[j] = m_list[j + 1];
+         n--;
+        }
+      ArrayResize(m_list, n + 1, 256);
+      int tf = agg.PeriodMin();
+      m_list[n].id        = (c3.t + agg.m_period) * 64 + tf * 2 + (dir > 0 ? 1 : 0);
+      m_list[n].dir       = dir;
+      m_list[n].tfMin     = tf;
+      m_list[n].lo        = lo;
+      m_list[n].hi        = hi;
+      m_list[n].c1T       = c1.t;
+      m_list[n].c2T       = c2.t;
+      m_list[n].c3T       = c3.t;
+      m_list[n].formedT   = c3.t + agg.m_period;
+      m_list[n].c1Srv     = c1.srv;
+      m_list[n].formedSrv = (datetime)((long)c3.srv + agg.m_period);
+      m_list[n].status    = FVG_VALID;
+      m_list[n].statusT   = m_list[n].formedT;
+      m_list[n].role      = FVG_ROLE_NONE;
+      m_list[n].slot      = -1;
+      m_list[n].day       = day;
+      return n;
+     }
+
+   //--- met à jour les statuts des FVG du timeframe avec une bougie clôturée de ce timeframe
+   void              OnCandle(const int tfMin, const OCandle &cd, const long closeT)
+     {
+      m_chgCount = 0;
+      int n = ArraySize(m_list);
+      for(int i = 0; i < n; i++)
+        {
+         if(m_list[i].tfMin != tfMin || m_list[i].formedT > cd.t)
+            continue;
+         int st = m_list[i].status;
+         if(st == FVG_INVALIDATED || st == FVG_EXPIRED)
+            continue;
+         int ns = st;
+         if(m_list[i].dir > 0)
+           {
+            if(cd.c < m_list[i].lo)
+               ns = FVG_INVALIDATED;
+            else
+               if(st == FVG_VALID && cd.l <= m_list[i].hi)
+                  ns = FVG_MITIGATED;
+           }
+         else
+           {
+            if(cd.c > m_list[i].hi)
+               ns = FVG_INVALIDATED;
+            else
+               if(st == FVG_VALID && cd.h >= m_list[i].lo)
+                  ns = FVG_MITIGATED;
+           }
+         if(ns != st)
+           {
+            m_list[i].status  = ns;
+            m_list[i].statusT = closeT;
+            AddChange(i);
+           }
+        }
+     }
+
+   void              AddChange(const int idx)
+     {
+      if(m_chgCount >= ArraySize(m_chgIdx))
+         ArrayResize(m_chgIdx, m_chgCount + 16);
+      m_chgIdx[m_chgCount] = idx;
+      m_chgCount++;
+     }
+
+   //--- fin de journée : tout ce qui est encore actif expire ; on ne garde que les FVG à rôle
+   void              ExpireAll(const long t)
+     {
+      m_chgCount = 0;
+      int n = ArraySize(m_list);
+      int w = 0;
+      for(int i = 0; i < n; i++)
+        {
+         if(m_list[i].status == FVG_VALID || m_list[i].status == FVG_MITIGATED)
+           {
+            m_list[i].status  = FVG_EXPIRED;
+            m_list[i].statusT = t;
+           }
+         if(m_list[i].role == FVG_ROLE_NONE)
+            continue;
+         if(w != i)
+            m_list[w] = m_list[i];
+         w++;
+        }
+      ArrayResize(m_list, w, 256);
+      //--- on ne garde que les références des 5 dernières journées
+      while(ArraySize(m_list) > 40)
+        {
+         int m = ArraySize(m_list);
+         for(int j = 0; j < m - 1; j++)
+            m_list[j] = m_list[j + 1];
+         ArrayResize(m_list, m - 1, 256);
+        }
+     }
+  };
+
+#endif // OPR_FVG_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_FVG.mqh ===
+
+//=== début OPR_Ranges.mqh ===
+//+------------------------------------------------------------------+
+//|                                                   OPR_Ranges.mqh |
+//|  Module 2 : calcul des OPR (et de la plage asiatique).           |
+//|                                                                  |
+//|  Pour chaque plage [début, fin) d'une journée de session :       |
+//|    - EN ATTENTE  avant le début ;                                |
+//|    - EN CALCUL   pendant la plage (niveaux provisoires, jamais   |
+//|                  utilisés par le modèle) ;                       |
+//|    - FINALISÉ    à la clôture de la dernière bougie de la plage :|
+//|                  High = max des High, Low = min des Low des      |
+//|                  bougies dont l'ouverture est dans la plage.     |
+//|                  Les niveaux ne changent PLUS jamais ;           |
+//|    - INCOMPLET   si le moteur n'a pas observé la plage depuis    |
+//|                  son début (historique insuffisant) ;            |
+//|    - SANS DONNÉES si aucune bougie dans la plage.                |
+//|  Chaque plage a son propre état : aucun mélange entre OPR.       |
+//+------------------------------------------------------------------+
+#ifndef OPR_RANGES_MQH
+#define OPR_RANGES_MQH
+
+#define OPR_ST_NONE        0   // plage désactivée
+#define OPR_ST_PENDING     1
+#define OPR_ST_BUILDING    2
+#define OPR_ST_FINAL       3
+#define OPR_ST_INCOMPLETE  4
+#define OPR_ST_NODATA      5
+
+//--- événements renvoyés par Update()
+#define OPR_RG_EV_NONE      0
+#define OPR_RG_EV_BUILDING  1
+#define OPR_RG_EV_FINAL     2
+
+struct ORangeState
+  {
+   int               day;
+   int               status;
+   double            high;
+   double            low;
+   long              startT;     // heure stratégie
+   long              endT;
+   datetime          startSrv;   // heure serveur (approx. pour le dessin)
+   datetime          endSrv;
+   int               candles;
+   long              highT;
+   long              lowT;
+   long              finalT;
+   bool              fromStart;
+   bool              restored;   // niveaux restaurés depuis la persistance
+  };
+
+string OprRangeStatusText(const int st)
+  {
+   switch(st)
+     {
+      case OPR_ST_NONE:       return "désactivé";
+      case OPR_ST_PENDING:    return "en attente";
+      case OPR_ST_BUILDING:   return "en calcul";
+      case OPR_ST_FINAL:      return "finalisé";
+      case OPR_ST_INCOMPLETE: return "incomplet";
+      case OPR_ST_NODATA:     return "sans données";
+      default:                return "?";
+     }
+  }
+
+//--- niveau de déviation standard de la plage (Annexe 1 du PDF London OPR) :
+//--- achat : High + k x amplitude ; vente : Low - k x amplitude
+double OprStdLevel(const ORangeState &s, const int dir, const double k)
+  {
+   double r = s.high - s.low;
+   if(dir > 0)
+      return s.high + k * r;
+   return s.low - k * r;
+  }
+
+class CRangeCalc
+  {
+public:
+   OPRTimeRange      m_range;
+   ORangeState       m_st;
+   ORangeState       m_prev;      // journée précédente (pour l'affichage)
+
+                     CRangeCalc() { m_range.Clear(); ResetState(m_st, 0); ResetState(m_prev, 0); }
+
+   void              ResetState(ORangeState &s, const int day)
+     {
+      s.day       = day;
+      s.status    = m_range.valid ? OPR_ST_PENDING : OPR_ST_NONE;
+      s.high      = 0.0;
+      s.low       = 0.0;
+      s.startT    = 0;
+      s.endT      = 0;
+      s.startSrv  = 0;
+      s.endSrv    = 0;
+      s.candles   = 0;
+      s.highT     = 0;
+      s.lowT      = 0;
+      s.finalT    = 0;
+      s.fromStart = false;
+      s.restored  = false;
+     }
+
+   void              Init(const OPRTimeRange &r)
+     {
+      m_range = r;
+      ResetState(m_st, 0);
+      ResetState(m_prev, 0);
+     }
+
+   bool              IsFinal() const { return m_st.status == OPR_ST_FINAL; }
+
+   //--- nouvelle journée de session
+   void              NewDay(const COprTime &tm, const int day, const long srvOffset)
+     {
+      if(m_st.day != 0)
+         m_prev = m_st;
+      ResetState(m_st, day);
+      long s = 0, e = 0;
+      if(tm.RangeAbs(day, m_range, s, e))
+        {
+         m_st.startT   = s;
+         m_st.endT     = e;
+         m_st.startSrv = (datetime)(s - srvOffset);
+         m_st.endSrv   = (datetime)(e - srvOffset);
+        }
+     }
+
+   //--- traite une bougie de base clôturée ; firstT = première bougie vue par le moteur
+   int               Update(const long st, const double h, const double l, const int baseSec, const long firstT)
+     {
+      int ev = OPR_RG_EV_NONE;
+      if(m_st.status == OPR_ST_NONE)
+         return ev;
+      //--- clôture tardive (dernière bougie de la plage manquante)
+      if(m_st.status == OPR_ST_BUILDING && st >= m_st.endT)
+        {
+         Finalize(m_st.endT);
+         return OPR_RG_EV_FINAL;
+        }
+      if(m_st.status == OPR_ST_PENDING && st >= m_st.endT)
+        {
+         m_st.status = OPR_ST_NODATA;
+         m_st.finalT = m_st.endT;
+         return OPR_RG_EV_FINAL;
+        }
+      if(st >= m_st.startT && st < m_st.endT && (m_st.status == OPR_ST_PENDING || m_st.status == OPR_ST_BUILDING))
+        {
+         if(m_st.status == OPR_ST_PENDING)
+           {
+            m_st.status    = OPR_ST_BUILDING;
+            m_st.fromStart = (firstT <= m_st.startT);
+            m_st.high      = h;
+            m_st.low       = l;
+            m_st.highT     = st;
+            m_st.lowT      = st;
+            ev = OPR_RG_EV_BUILDING;
+           }
+         else
+           {
+            if(h > m_st.high)
+              {
+               m_st.high  = h;
+               m_st.highT = st;
+              }
+            if(l < m_st.low)
+              {
+               m_st.low  = l;
+               m_st.lowT = st;
+              }
+           }
+         m_st.candles++;
+         if(st + baseSec >= m_st.endT)
+           {
+            Finalize(st + baseSec);
+            ev = OPR_RG_EV_FINAL;
+           }
+        }
+      return ev;
+     }
+
+   void              Finalize(const long t)
+     {
+      m_st.status = m_st.fromStart ? OPR_ST_FINAL : OPR_ST_INCOMPLETE;
+      m_st.finalT = t;
+     }
+
+   //--- restauration depuis la persistance (même journée, plage déjà terminée)
+   bool              Restore(const int day, const double high, const double low)
+     {
+      if(m_st.day != day || m_st.status == OPR_ST_FINAL || m_st.status == OPR_ST_BUILDING || m_st.status == OPR_ST_PENDING)
+         return false;
+      if(!(high >= low) || high <= 0.0)
+         return false;
+      m_st.high     = high;
+      m_st.low      = low;
+      m_st.status   = OPR_ST_FINAL;
+      m_st.restored = true;
+      return true;
+     }
+  };
+
+#endif // OPR_RANGES_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_Ranges.mqh ===
+
+//=== début OPR_Liquidity.mqh ===
+//+------------------------------------------------------------------+
+//|                                                OPR_Liquidity.mqh |
+//|  Pools de liquidité et prises de liquidité (sweeps).             |
+//|                                                                  |
+//|  PDF London OPR, étape 3 : « repérer les liquidités au-dessus et |
+//|  en dessous du cours : hauts/bas équivalents, haut/bas de la     |
+//|  session asiatique, hauts/bas simples, en priorité en M15 ».     |
+//|  Étape 4 : « la Macro doit commencer par prendre une liquidité ».|
+//|                                                                  |
+//|  Formalisation (à valider) :                                     |
+//|   - pool haut  = swing high confirmé (pivot gauche/droite) en M1 |
+//|                  ou en M15, ou High de la plage asiatique ;      |
+//|   - pool bas   = idem pour les lows ;                            |
+//|   - prise      = une bougie M1 clôturée trade AU-DELÀ du niveau  |
+//|                  (mèche) alors que le pool était confirmé avant  |
+//|                  l'ouverture de cette bougie et pas encore pris. |
+//+------------------------------------------------------------------+
+#ifndef OPR_LIQUIDITY_MQH
+#define OPR_LIQUIDITY_MQH
+
+#define LIQ_SRC_M1    1
+#define LIQ_SRC_M15   15
+#define LIQ_SRC_ASIA  100
+
+#define OPR_MAX_POOLS 1500
+
+struct OPool
+  {
+   int               side;       // +1 = liquidité au-dessus (high), -1 = en dessous (low)
+   int               src;
+   double            level;
+   long              formT;      // ouverture de la bougie du swing (heure stratégie)
+   long              confirmT;   // disponible à partir de cette heure
+   bool              swept;
+   long              sweptT;
+  };
+
+string OprLiqSrcText(const int src)
+  {
+   if(src == LIQ_SRC_M1)
+      return "swing M1";
+   if(src == LIQ_SRC_M15)
+      return "swing M15";
+   if(src == LIQ_SRC_ASIA)
+      return "range asiatique";
+   return "?";
+  }
+
+class CLiquidity
+  {
+public:
+   OPool             m_pools[];
+   //--- prises survenues sur la dernière bougie traitée
+   int               m_sweepIdx[];
+   int               m_sweepCount;
+
+                     CLiquidity() { m_sweepCount = 0; }
+
+   void              Reset()
+     {
+      ArrayResize(m_pools, 0, 128);
+      ArrayResize(m_sweepIdx, 0, 8);
+      m_sweepCount = 0;
+     }
+
+   void              AddLevel(const int side, const int src, const double level, const long formT, const long confirmT)
+     {
+      int n = ArraySize(m_pools);
+      if(n >= OPR_MAX_POOLS)
+        {
+         for(int i = 0; i < n - 1; i++)
+            m_pools[i] = m_pools[i + 1];
+         n--;
+        }
+      ArrayResize(m_pools, n + 1, 128);
+      m_pools[n].side     = side;
+      m_pools[n].src      = src;
+      m_pools[n].level    = level;
+      m_pools[n].formT    = formT;
+      m_pools[n].confirmT = confirmT;
+      m_pools[n].swept    = false;
+      m_pools[n].sweptT   = 0;
+     }
+
+   //--- swings confirmés sur la dernière bougie clôturée de l'agrégateur (pivot L/R)
+   void              OnCandle(const CCandleAgg &agg, const int pivot, const int src)
+     {
+      if(pivot < 1 || agg.Count() < 2 * pivot + 1)
+         return;
+      OCandle p;
+      if(!agg.Get(pivot, p))
+         return;
+      bool isHigh = true;
+      bool isLow  = true;
+      for(int k = 1; k <= pivot; k++)
+        {
+         OCandle left, right;
+         if(!agg.Get(pivot + k, left) || !agg.Get(pivot - k, right))
+            return;
+         if(!(p.h > left.h) || !(p.h >= right.h))
+            isHigh = false;
+         if(!(p.l < left.l) || !(p.l <= right.l))
+            isLow = false;
+        }
+      OCandle last;
+      if(!agg.Get(0, last))
+         return;
+      long confirmT = last.t + agg.m_period;
+      if(isHigh)
+         AddLevel(1, src, p.h, p.t, confirmT);
+      if(isLow)
+         AddLevel(-1, src, p.l, p.t, confirmT);
+     }
+
+   //--- prises de liquidité par une bougie de base clôturée
+   void              OnBar(const long st, const double h, const double l)
+     {
+      m_sweepCount = 0;
+      int n = ArraySize(m_pools);
+      for(int i = 0; i < n; i++)
+        {
+         if(m_pools[i].swept || m_pools[i].confirmT > st)
+            continue;
+         bool taken = (m_pools[i].side > 0) ? (h > m_pools[i].level) : (l < m_pools[i].level);
+         if(!taken)
+            continue;
+         m_pools[i].swept  = true;
+         m_pools[i].sweptT = st;
+         if(m_sweepCount >= ArraySize(m_sweepIdx))
+            ArrayResize(m_sweepIdx, m_sweepCount + 8);
+         m_sweepIdx[m_sweepCount] = i;
+         m_sweepCount++;
+        }
+     }
+
+   int               ActiveCount(const int side) const
+     {
+      int c = 0;
+      for(int i = ArraySize(m_pools) - 1; i >= 0; i--)
+         if(!m_pools[i].swept && m_pools[i].side == side)
+            c++;
+      return c;
+     }
+  };
+
+#endif // OPR_LIQUIDITY_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_Liquidity.mqh ===
+
+//=== début OPR_Journal.mqh ===
+//+------------------------------------------------------------------+
+//|                                                  OPR_Journal.mqh |
+//|  Module 8 : journalisation et diagnostic.                        |
+//|  Chaque décision du moteur est un événement codé, horodaté       |
+//|  (heure stratégie + heure serveur), avec les prix concernés et,  |
+//|  pour un rejet, sa raison. Le texte est produit ici pour que     |
+//|  l'EA, les tests et le fichier CSV utilisent le même libellé.    |
+//+------------------------------------------------------------------+
+#ifndef OPR_JOURNAL_MQH
+#define OPR_JOURNAL_MQH
+
+//--- codes d'événements
+#define J_OPR_BUILDING      1
+#define J_OPR_FINAL         2
+#define J_OPR_INCOMPLETE    3
+#define J_OPR_NODATA        4
+#define J_ASIA_FINAL        5
+#define J_ASIA_FVG          6
+#define J_ASIA_FVG_NONE     7
+#define J_MIDNIGHT_FVG      8
+#define J_CTX_ABOVE         9
+#define J_CTX_BELOW         10
+#define J_CTX_INSIDE        11
+#define J_FVG_DETECTED      12
+#define J_FVG_STATUS        13
+#define J_WINDOW_OPEN       14
+#define J_WINDOW_CLOSE      15
+#define J_MACRO_OPEN        16
+#define J_MACRO_CLOSE       17
+#define J_OBS_OPEN          18
+#define J_OBS_CLOSE         19
+#define J_BIAS              20
+#define J_BIAS_CONSOL       21
+#define J_BIAS_BREAKOUT     22
+#define J_SWEEP             23
+#define J_FVG_CANDIDATE     24
+#define J_FVG_IGNORED       25
+#define J_ENTRY_REJECTED    26
+#define J_ENTRY_AUTHORIZED  27
+#define J_SETUP_CANCELLED   28
+#define J_TRADE_FILLED      29
+#define J_TRADE_CLOSED      30
+#define J_DAY_START         31
+#define J_SESSION_INFO      32
+
+//--- raisons de rejet / d'annulation
+#define R_NONE              0
+#define R_NO_OPR            1   // OPR non finalisé / incomplet / sans données
+#define R_TRADE_DISABLED    2   // pas de règle d'entrée configurée pour cet OPR
+#define R_WRONG_DIR         3   // FVG dans le sens opposé au biais
+#define R_OUTSIDE_MACRO     4
+#define R_MACRO_USED        5   // 1 macro = 1 trade
+#define R_IN_POSITION       6
+#define R_TARGET_REACHED    7   // cible atteinte avant l'entrée
+#define R_INVALID_LEVELS    8
+#define R_MIN_STOP          9
+#define R_MAX_STOP          10
+#define R_DAY_LIMIT         11
+#define R_FVG_INVALID       12
+#define R_WINDOW_END        13
+#define R_SL_BEFORE_ENTRY   14
+#define R_NO_SWEEP          15  // FVG sans prise de liquidité préalable
+#define R_AMBIGUOUS         16  // entrée et cible sur la même bougie (book conservateur)
+
+struct OJEvent
+  {
+   int               code;
+   int               slot;     // -1 : aucun
+   int               dir;
+   int               reason;
+   int               aux;      // détail (statut FVG, source de liquidité, n° de macro...)
+   long              id;
+   long              st;       // heure stratégie
+   datetime          srv;      // heure serveur de la bougie traitée
+   double            p1;
+   double            p2;
+   double            p3;
+   double            p4;
+  };
+
+string OprReasonText(const int r)
+  {
+   switch(r)
+     {
+      case R_NO_OPR:          return "OPR non finalisé (incomplet ou sans données)";
+      case R_TRADE_DISABLED:  return "aucune règle d'entrée configurée pour cet OPR";
+      case R_WRONG_DIR:       return "FVG dans le sens opposé au biais";
+      case R_OUTSIDE_MACRO:   return "FVG formé hors d'une macro";
+      case R_MACRO_USED:      return "macro déjà tradée (1 macro = 1 trade)";
+      case R_IN_POSITION:     return "position déjà ouverte";
+      case R_TARGET_REACHED:  return "cible atteinte avant l'entrée : pas de trade";
+      case R_INVALID_LEVELS:  return "niveaux incohérents (entrée/stop/cible)";
+      case R_MIN_STOP:        return "stop inférieur au minimum";
+      case R_MAX_STOP:        return "stop supérieur au maximum";
+      case R_DAY_LIMIT:       return "limite de trades journalière atteinte";
+      case R_FVG_INVALID:     return "FVG d'entrée invalidé avant l'exécution";
+      case R_WINDOW_END:      return "fin de la fenêtre de trading";
+      case R_SL_BEFORE_ENTRY: return "niveau du stop dépassé avant l'entrée";
+      case R_NO_SWEEP:        return "confirmation manquante : aucune prise de liquidité";
+      case R_AMBIGUOUS:       return "entrée et cible touchées sur la même bougie (book conservateur)";
+      default:                return "";
+     }
+  }
+
+string OprDirText(const int dir) { return dir > 0 ? "ACHAT" : (dir < 0 ? "VENTE" : "-"); }
+string OprFvgKind(const int dir) { return dir > 0 ? "haussier " : "baissier "; }
+
+//+------------------------------------------------------------------+
+//| Libellé complet d'un événement                                   |
+//+------------------------------------------------------------------+
+string OprEventText(const OJEvent &e, const string slotName, const int digits)
+  {
+   string px1 = DoubleToString(e.p1, digits);
+   string px2 = DoubleToString(e.p2, digits);
+   string px3 = DoubleToString(e.p3, digits);
+   switch(e.code)
+     {
+      case J_DAY_START:        return "nouvelle journée de session";
+      case J_OPR_BUILDING:     return slotName + " : OPR en cours de calcul";
+      case J_OPR_FINAL:        return slotName + " : OPR finalisé, High " + px1 + " / Low " + px2;
+      case J_OPR_INCOMPLETE:   return slotName + " : OPR incomplet (historique insuffisant), non utilisé";
+      case J_OPR_NODATA:       return slotName + " : OPR sans données (aucune bougie dans la plage)";
+      case J_ASIA_FINAL:       return "range asiatique finalisé, High " + px1 + " / Low " + px2;
+      case J_ASIA_FVG:         return "premier FVG M15 asiatique identifié : " + OprFvgKind(e.dir) + px2 + " - " + px1;
+      case J_ASIA_FVG_NONE:    return "aucun FVG M15 dans la plage asiatique";
+      case J_MIDNIGHT_FVG:     return "FPFVG M1 de minuit identifié : " + OprFvgKind(e.dir) + px2 + " - " + px1;
+      case J_CTX_ABOVE:        return slotName + " : prix au-dessus de l'OPR High (" + px1 + ")";
+      case J_CTX_BELOW:        return slotName + " : prix sous l'OPR Low (" + px2 + ")";
+      case J_CTX_INSIDE:       return slotName + " : prix à l'intérieur de l'OPR";
+      case J_FVG_DETECTED:     return StringFormat("FVG M%d %s détecté : ", e.aux, e.dir > 0 ? "haussier" : "baissier") + px2 + " - " + px1;
+      case J_FVG_STATUS:       return StringFormat("FVG M%d %s ", e.aux / 10, e.dir > 0 ? "haussier" : "baissier") + px2 + " - " + px1 +
+                                         " : " + OprFvgStatusText(e.aux % 10);
+      case J_WINDOW_OPEN:      return slotName + " : ouverture de la fenêtre de trading";
+      case J_WINDOW_CLOSE:     return slotName + " : fermeture de la fenêtre de trading";
+      case J_MACRO_OPEN:       return slotName + StringFormat(" : début de la macro n°%d", e.aux + 1);
+      case J_MACRO_CLOSE:      return slotName + StringFormat(" : fin de la macro n°%d", e.aux + 1);
+      case J_OBS_OPEN:         return "début de la fenêtre d'observation (information uniquement)";
+      case J_OBS_CLOSE:        return "fin de la fenêtre d'observation";
+      case J_BIAS:             return slotName + " : biais " + OprDirText(e.dir) + " (prix " + px1 + (e.dir > 0 ? " au-dessus de l'OPR High " + px2 : " sous l'OPR Low " + px3) + ")";
+      case J_BIAS_CONSOL:      return slotName + " : prix dans l'OPR à l'ouverture de la fenêtre (consolidation), attente d'une clôture hors de l'OPR";
+      case J_BIAS_BREAKOUT:    return slotName + " : clôture hors de l'OPR à " + px1 + ", biais " + OprDirText(e.dir);
+      case J_SWEEP:            return slotName + " : liquidité prise (" + OprLiqSrcText(e.aux) + " " + px1 + ")";
+      case J_FVG_CANDIDATE:    return slotName + " : FVG candidat " + OprDirText(e.dir) + " " + px2 + " - " + px1;
+      case J_FVG_IGNORED:      return slotName + " : FVG ignoré, " + OprReasonText(e.reason);
+      case J_ENTRY_REJECTED:   return slotName + " : entrée rejetée, " + OprReasonText(e.reason);
+      case J_ENTRY_AUTHORIZED: return slotName + " : entrée autorisée " + OprDirText(e.dir) + ", toutes les conditions sont remplies : entrée " + px1 + " stop " + px2 + " cible " + px3;
+      case J_SETUP_CANCELLED:  return slotName + " : setup annulé, " + OprReasonText(e.reason);
+      case J_TRADE_FILLED:     return slotName + " : trade " + OprDirText(e.dir) + " exécuté (book) à " + px1;
+      case J_TRADE_CLOSED:     return slotName + StringFormat(" : trade clôturé (book) %+.2fR", e.p4);
+      case J_SESSION_INFO:
+        {
+         string what = (e.aux == 1) ? "ouverture" : "fermeture";
+         return what + " de la session de Londres (information)";
+        }
+      default:                 return "";
+     }
+  }
+
+class CJournal
+  {
+public:
+   OJEvent           m_ev[];
+   int               m_count;
+
+                     CJournal() { m_count = 0; }
+
+   void              Clear() { m_count = 0; }
+
+   void              Add(const int code, const int slot, const int dir, const int reason, const int aux, const long id,
+                         const long st, const datetime srv, const double p1, const double p2, const double p3, const double p4)
+     {
+      if(m_count >= ArraySize(m_ev))
+         ArrayResize(m_ev, m_count + 32);
+      m_ev[m_count].code   = code;
+      m_ev[m_count].slot   = slot;
+      m_ev[m_count].dir    = dir;
+      m_ev[m_count].reason = reason;
+      m_ev[m_count].aux    = aux;
+      m_ev[m_count].id     = id;
+      m_ev[m_count].st     = st;
+      m_ev[m_count].srv    = srv;
+      m_ev[m_count].p1     = p1;
+      m_ev[m_count].p2     = p2;
+      m_ev[m_count].p3     = p3;
+      m_ev[m_count].p4     = p4;
+      m_count++;
+     }
+  };
+
+#endif // OPR_JOURNAL_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_Journal.mqh ===
+
+//=== début OPR_Engine.mqh ===
+//+------------------------------------------------------------------+
+//|                                                   OPR_Engine.mqh |
+//|  Moteur de la stratégie OPR + FVG (modèle « London OPR »).       |
+//|                                                                  |
+//|  Reçoit les bougies M1 CLÔTURÉES une par une (ProcessBar) et     |
+//|  orchestre les modules :                                         |
+//|    1. horaires (OPR_Time)        5. contexte directionnel        |
+//|    2. OPR (OPR_Ranges)           6. validation des entrées       |
+//|    3. FVG (OPR_FVG)              7. modèle book (statistiques)   |
+//|    4. FVG de référence (Asie M15, minuit M1)                     |
+//|    + liquidité (OPR_Liquidity), journal (OPR_Journal).           |
+//|                                                                  |
+//|  Règles du modèle d'entrée (sources : PDF « London OPR Strategy »|
+//|  et « Macro + breaker ») :                                       |
+//|   a) biais lu à l'ouverture de la fenêtre (2:50 NY) : prix sous  |
+//|      l'OPR Low -> vente, au-dessus de l'OPR High -> achat ; dans |
+//|      l'OPR -> attente d'une clôture hors de l'OPR ;              |
+//|   b) dans la fenêtre, une liquidité doit d'abord être prise      |
+//|      (au-dessus pour une vente, en dessous pour un achat) ;      |
+//|   c) puis un FVG dans le sens du biais (déplacement) formé dans  |
+//|      une macro -> ordre limite au bord du FVG ;                  |
+//|   d) stop au-delà du swing (extrême depuis la prise de           |
+//|      liquidité) ; cible = déviation standard k de l'OPR ;        |
+//|   e) 1 macro = 1 trade ; cible atteinte avant l'entrée -> pas de |
+//|      trade ; fin de fenêtre -> ordre annulé.                     |
+//|  Aucune décision ne s'appuie sur une bougie non clôturée.        |
+//+------------------------------------------------------------------+
+#ifndef OPR_ENGINE_MQH
+#define OPR_ENGINE_MQH
+
+//--- contexte du prix par rapport à un OPR
+#define CTX_NA      0
+#define CTX_ABOVE   1
+#define CTX_INSIDE  2
+#define CTX_BELOW   3
+
+//--- états du modèle d'entrée
+#define SU_OFF        0   // pas de modèle pour cet OPR
+#define SU_IDLE       1   // avant la fenêtre
+#define SU_WAIT_BIAS  2   // prix dans l'OPR : attente d'une clôture hors de l'OPR
+#define SU_WAIT_SWEEP 3   // attente d'une prise de liquidité
+#define SU_WAIT_FVG   4   // attente du FVG d'entrée
+#define SU_ARMED      5   // ordre limite en attente
+#define SU_IN_TRADE   6
+#define SU_DONE       7   // plus rien aujourd'hui
+
+#define BK_EXIT_TP  1
+#define BK_EXIT_SL  2
+
+#define OPR_MAX_REASON 20
+
+struct OSetup
+  {
+   int               day;
+   int               state;
+   int               dir;
+   bool              consol;
+   bool              biasDone;
+   bool              windowOpen;
+   bool              windowClosed;
+   int               macroOpen;
+   bool              macroUsed[OPR_MAX_MACROS];
+   long              winS;
+   long              winE;
+   long              macroS[OPR_MAX_MACROS];
+   long              macroE[OPR_MAX_MACROS];
+   long              sweepT;
+   double            sweepLevel;
+   int               sweepSrc;
+   double            extreme;
+   long              setupId;
+   long              fvgId;
+   double            fvgLo;
+   double            fvgHi;
+   double            entry;
+   double            sl;
+   double            tp;
+   double            risk;
+   long              armedT;
+   int               armedMacro;
+   int               trades;
+   double            winHigh;
+   double            winLow;
+   int               doneReason;
+  };
+
+struct OBookTrade
+  {
+   long              setupId;
+   int               slot;
+   int               dir;
+   int               macro;
+   double            entry;
+   double            sl;
+   double            tp;
+   double            risk;
+   long              entryT;
+   datetime          entrySrv;
+   bool              open;
+   long              exitT;
+   datetime          exitSrv;
+   double            exitPx;
+   int               exitReason;
+   double            r;
+  };
+
+struct OStats
+  {
+   int               days;
+   int               trades;
+   int               wins;
+   int               losses;
+   double            netR;
+   int               armed;
+   int               sweeps;
+   int               candidates;
+   int               biasBuy;
+   int               biasSell;
+   int               biasConsol;
+   int               asiaFvgDays;
+   int               rejected[OPR_MAX_REASON];
+
+   void              Reset()
+     {
+      days = 0; trades = 0; wins = 0; losses = 0; netR = 0.0; armed = 0; sweeps = 0; candidates = 0;
+      biasBuy = 0; biasSell = 0; biasConsol = 0; asiaFvgDays = 0;
+      for(int i = 0; i < OPR_MAX_REASON; i++)
+         rejected[i] = 0;
+     }
+  };
+
+class CLondonOprEngine
+  {
+public:
+   OPRConfig         cfg;
+   COprTime          tm;
+   CJournal          jr;
+   CCandleAgg        m_m1;
+   CCandleAgg        m_m5;
+   CCandleAgg        m_m15;
+   CFvgBook          fvgs;
+   CLiquidity        liq;
+   CRangeCalc        opr[OPR_MAX_SLOTS];
+   CRangeCalc        asia;
+   OSetup            su[OPR_MAX_SLOTS];
+   int               ctx[OPR_MAX_SLOTS];
+   OBookTrade        m_open[];
+   OBookTrade        m_closed[];
+   OStats            stats;
+   string            slotName[OPR_MAX_SLOTS];
+   bool              logContext;
+   bool              logAllFvg;
+
+   int               m_day;
+   long              m_firstT;
+   long              m_lastT;
+   datetime          m_lastSrv;
+   long              m_srvOffset;   // heure stratégie - heure serveur
+   double            m_prevClose;
+   long              m_asiaFvgId;
+   bool              m_asiaDone;
+   long              m_midFvgId;
+   bool              m_midDone;
+   bool              m_inObs;
+   bool              m_inLondon;
+   int               m_tradesToday;
+   int               m_newEntryFvg[];
+   int               m_newEntryCount;
+   int               m_bars;
+
+                     CLondonOprEngine() { m_day = 0; m_firstT = 0; m_bars = 0; logContext = true; logAllFvg = false; }
+
+   //+---------------------------------------------------------------+
+   bool              Init(const OPRConfig &c)
+     {
+      cfg = c;
+      if(cfg.tickSize <= 0.0)
+         cfg.tickSize = 0.00001;
+      tm.Configure(cfg.stratTz, cfg.serverMode, cfg.serverGmtSec, cfg.dayStartMin);
+      m_m1.Init(60);
+      m_m5.Init(300);
+      m_m15.Init(900);
+      fvgs.Reset();
+      liq.Reset();
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+        {
+         opr[s].Init(cfg.slots[s].calc);
+         ctx[s] = CTX_NA;
+         ResetSetup(s, 0);
+         if(StringLen(slotName[s]) == 0)
+            slotName[s] = "OPR " + IntegerToString(s + 1);
+        }
+      asia.Init(cfg.asia);
+      ArrayResize(m_open, 0, 8);
+      ArrayResize(m_closed, 0, 256);
+      ArrayResize(m_newEntryFvg, 0, 8);
+      stats.Reset();
+      jr.Clear();
+      m_day = 0;
+      m_firstT = 0;
+      m_lastT = 0;
+      m_lastSrv = 0;
+      m_srvOffset = 0;
+      m_prevClose = 0.0;
+      m_asiaFvgId = 0;
+      m_asiaDone = false;
+      m_midFvgId = 0;
+      m_midDone = false;
+      m_inObs = false;
+      m_inLondon = false;
+      m_tradesToday = 0;
+      m_newEntryCount = 0;
+      m_bars = 0;
+      return true;
+     }
+
+   void              ResetSetup(const int s, const int day)
+     {
+      su[s].day          = day;
+      su[s].state        = cfg.slots[s].tradeEnabled ? SU_IDLE : SU_OFF;
+      su[s].dir          = 0;
+      su[s].consol       = false;
+      su[s].biasDone     = false;
+      su[s].windowOpen   = false;
+      su[s].windowClosed = false;
+      su[s].macroOpen    = -1;
+      for(int i = 0; i < OPR_MAX_MACROS; i++)
+        {
+         su[s].macroUsed[i] = false;
+         su[s].macroS[i]    = 0;
+         su[s].macroE[i]    = 0;
+        }
+      su[s].winS       = 0;
+      su[s].winE       = 0;
+      su[s].sweepT     = 0;
+      su[s].sweepLevel = 0.0;
+      su[s].sweepSrc   = 0;
+      su[s].extreme    = 0.0;
+      su[s].setupId    = 0;
+      su[s].fvgId      = 0;
+      su[s].fvgLo      = 0.0;
+      su[s].fvgHi      = 0.0;
+      su[s].entry      = 0.0;
+      su[s].sl         = 0.0;
+      su[s].tp         = 0.0;
+      su[s].risk       = 0.0;
+      su[s].armedT     = 0;
+      su[s].armedMacro = -1;
+      su[s].trades     = 0;
+      su[s].winHigh    = 0.0;
+      su[s].winLow     = 0.0;
+      su[s].doneReason = R_NONE;
+      if(day != 0 && cfg.slots[s].tradeEnabled)
+        {
+         long a = 0, b = 0;
+         if(tm.RangeAbs(day, cfg.slots[s].window, a, b))
+           {
+            su[s].winS = a;
+            su[s].winE = b;
+           }
+         for(int i = 0; i < cfg.slots[s].macroCount && i < OPR_MAX_MACROS; i++)
+            if(tm.RangeAbs(day, cfg.slots[s].macros[i], a, b))
+              {
+               su[s].macroS[i] = a;
+               su[s].macroE[i] = b;
+              }
+        }
+     }
+
+   //--- raccourci de journalisation
+   void              Log(const int code, const int slot, const int dir, const int reason, const int aux, const long id,
+                         const double p1, const double p2, const double p3, const double p4)
+     {
+      jr.Add(code, slot, dir, reason, aux, id, m_lastT, m_lastSrv, p1, p2, p3, p4);
+     }
+
+   void              Reject(const int code, const int s, const int dir, const int reason, const long id)
+     {
+      if(reason >= 0 && reason < OPR_MAX_REASON)
+         stats.rejected[reason]++;
+      Log(code, s, dir, reason, 0, id, 0.0, 0.0, 0.0, 0.0);
+     }
+
+   //+---------------------------------------------------------------+
+   //| Traitement d'une bougie M1 clôturée (srv = ouverture serveur) |
+   //+---------------------------------------------------------------+
+   void              ProcessBar(const datetime srv, const double o, const double h, const double l, const double c)
+     {
+      jr.Clear();
+      long st = tm.StratTime(srv);
+      m_lastT       = st;
+      m_lastSrv     = srv;
+      m_srvOffset   = st - (long)srv;
+      if(m_firstT == 0)
+         m_firstT = st;
+      m_bars++;
+      int day = tm.SessionDay(st);
+      if(day != m_day)
+         NewDay(day, st);
+
+      //--- 1) modèle book : exécution / annulation / sortie avec cette bougie
+      BookStep(st, srv, h, l);
+
+      //--- 2) OPR et plage asiatique
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+        {
+         int ev = opr[s].Update(st, h, l, OPR_BASE_SEC, m_firstT);
+         if(ev == OPR_RG_EV_BUILDING)
+            Log(J_OPR_BUILDING, s, 0, R_NONE, 0, 0, 0.0, 0.0, 0.0, 0.0);
+         else
+            if(ev == OPR_RG_EV_FINAL)
+              {
+               int stt = opr[s].m_st.status;
+               int code = (stt == OPR_ST_FINAL) ? J_OPR_FINAL : (stt == OPR_ST_INCOMPLETE ? J_OPR_INCOMPLETE : J_OPR_NODATA);
+               Log(code, s, 0, R_NONE, 0, 0, opr[s].m_st.high, opr[s].m_st.low, 0.0, 0.0);
+              }
+        }
+      int aev = asia.Update(st, h, l, OPR_BASE_SEC, m_firstT);
+      if(aev == OPR_RG_EV_FINAL && asia.IsFinal())
+        {
+         Log(J_ASIA_FINAL, -1, 0, R_NONE, 0, 0, asia.m_st.high, asia.m_st.low, 0.0, 0.0);
+         if(cfg.liqAsia)
+           {
+            liq.AddLevel(1, LIQ_SRC_ASIA, asia.m_st.high, asia.m_st.highT, asia.m_st.finalT);
+            liq.AddLevel(-1, LIQ_SRC_ASIA, asia.m_st.low, asia.m_st.lowT, asia.m_st.finalT);
+           }
+        }
+
+      //--- 3) bougies clôturées : statuts et détection des FVG, swings de liquidité
+      m_newEntryCount = 0;
+      m_m1.Add(st, srv, o, h, l, c, OPR_BASE_SEC);
+      OnAggClosed(m_m1);
+      if(cfg.entryTfMin == 5)
+        {
+         m_m5.Add(st, srv, o, h, l, c, OPR_BASE_SEC);
+         OnAggClosed(m_m5);
+        }
+      m_m15.Add(st, srv, o, h, l, c, OPR_BASE_SEC);
+      OnAggClosed(m_m15);
+
+      //--- 4) prises de liquidité par cette bougie
+      liq.OnBar(st, h, l);
+
+      //--- 5) contexte directionnel par OPR finalisé
+      UpdateContext(c);
+
+      //--- 6) fenêtres d'information
+      InfoWindows(st);
+
+      //--- 7) modèle d'entrée
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+         if(cfg.slots[s].tradeEnabled)
+            SetupStep(s, st, o, h, l, c);
+
+      m_prevClose = c;
+     }
+
+   //+---------------------------------------------------------------+
+   void              NewDay(const int day, const long st)
+     {
+      //--- clôture propre de la journée précédente
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+        {
+         if(su[s].state == SU_ARMED)
+           {
+            Reject(J_SETUP_CANCELLED, s, su[s].dir, R_WINDOW_END, su[s].setupId);
+            su[s].state = SU_DONE;
+           }
+        }
+      m_day = day;
+      stats.days++;
+      Log(J_DAY_START, -1, 0, R_NONE, 0, day, 0.0, 0.0, 0.0, 0.0);
+      fvgs.ExpireAll(st);
+      liq.Reset();
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+        {
+         opr[s].NewDay(tm, day, m_srvOffset);
+         ctx[s] = CTX_NA;
+         ResetSetup(s, day);
+        }
+      asia.NewDay(tm, day, m_srvOffset);
+      m_asiaFvgId   = 0;
+      m_asiaDone    = !cfg.asia.valid;
+      m_midFvgId    = 0;
+      m_midDone     = !(cfg.slots[0].calc.valid && cfg.london.valid);
+      m_tradesToday = 0;
+     }
+
+   //+---------------------------------------------------------------+
+   //| Bougies clôturées d'un agrégateur                             |
+   //+---------------------------------------------------------------+
+   void              OnAggClosed(const CCandleAgg &agg)
+     {
+      int tf = agg.PeriodMin();
+      for(int k = 0; k < agg.m_nClosed; k++)
+        {
+         OCandle cd;
+         cd = agg.m_closed[k];
+         long closeT = cd.t + agg.m_period;
+         //--- statuts des FVG de ce timeframe
+         fvgs.OnCandle(tf, cd, closeT);
+         for(int j = 0; j < fvgs.m_chgCount; j++)
+           {
+            int idx = fvgs.m_chgIdx[j];
+            if(fvgs.m_list[idx].role != FVG_ROLE_NONE)
+               Log(J_FVG_STATUS, fvgs.m_list[idx].slot, fvgs.m_list[idx].dir, R_NONE, tf * 10 + fvgs.m_list[idx].status,
+                   fvgs.m_list[idx].id, fvgs.m_list[idx].hi, fvgs.m_list[idx].lo, 0.0, 0.0);
+           }
+         //--- détection (seule la dernière bougie clôturée peut être c3)
+         if(k == agg.m_nClosed - 1)
+           {
+            int fi = fvgs.DetectOnClose(agg, 0.0, m_day);
+            if(fi >= 0)
+               OnNewFvg(fi, tf);
+           }
+         //--- swings de liquidité
+         if(k == agg.m_nClosed - 1)
+           {
+            if(tf == 1 && cfg.liqM1)
+               liq.OnCandle(agg, cfg.liqPivotM1, LIQ_SRC_M1);
+            if(tf == 15 && cfg.liqM15)
+               liq.OnCandle(agg, cfg.liqPivotM15, LIQ_SRC_M15);
+           }
+         //--- fin de la recherche du FVG asiatique
+         if(tf == 15 && !m_asiaDone && asia.m_st.endT > 0)
+           {
+            long lastC3 = (cfg.asiaRule == OPR_ASIA_C2_IN_RANGE) ? asia.m_st.endT : asia.m_st.endT - 900;
+            if(cd.t >= lastC3)
+              {
+               m_asiaDone = true;
+               if(m_asiaFvgId == 0)
+                  Log(J_ASIA_FVG_NONE, -1, 0, R_NONE, 0, 0, 0.0, 0.0, 0.0, 0.0);
+              }
+           }
+        }
+     }
+
+   void              OnNewFvg(const int fi, const int tf)
+     {
+      double size = fvgs.m_list[fi].hi - fvgs.m_list[fi].lo;
+      //--- premier FVG M15 de la plage asiatique (référence, jamais remplacé)
+      if(tf == 15 && !m_asiaDone && m_asiaFvgId == 0 && asia.m_st.endT > 0 &&
+         size >= cfg.asiaMinGapTicks * cfg.tickSize - 1e-9)
+        {
+         long as = asia.m_st.startT;
+         long ae = asia.m_st.endT;
+         bool in = false;
+         if(cfg.asiaRule == OPR_ASIA_C2_IN_RANGE)
+            in = (fvgs.m_list[fi].c2T >= as && fvgs.m_list[fi].c2T < ae);
+         else
+            if(cfg.asiaRule == OPR_ASIA_ALL_IN_RANGE)
+               in = (fvgs.m_list[fi].c1T >= as && fvgs.m_list[fi].formedT <= ae);
+            else
+               in = (fvgs.m_list[fi].c3T >= as && fvgs.m_list[fi].formedT <= ae);
+         if(in)
+           {
+            fvgs.m_list[fi].role = FVG_ROLE_ASIA;
+            m_asiaFvgId = fvgs.m_list[fi].id;
+            m_asiaDone = true;
+            stats.asiaFvgDays++;
+            Log(J_ASIA_FVG, -1, fvgs.m_list[fi].dir, R_NONE, 15, m_asiaFvgId, fvgs.m_list[fi].hi, fvgs.m_list[fi].lo, 0.0, 0.0);
+           }
+        }
+      //--- FPFVG M1 de minuit (référence)
+      if(tf == 1 && !m_midDone && m_midFvgId == 0)
+        {
+         long mid = tm.SessionAbs(m_day, cfg.slots[0].calc.startMin);
+         long lend = 0, lstart = 0;
+         tm.RangeAbs(m_day, cfg.london, lstart, lend);
+         if(fvgs.m_list[fi].c2T >= mid && fvgs.m_list[fi].c2T < lend &&
+            size >= cfg.midnightMinGapTicks * cfg.tickSize - 1e-9)
+           {
+            fvgs.m_list[fi].role = FVG_ROLE_MIDNIGHT;
+            m_midFvgId = fvgs.m_list[fi].id;
+            m_midDone = true;
+            Log(J_MIDNIGHT_FVG, -1, fvgs.m_list[fi].dir, R_NONE, 1, m_midFvgId, fvgs.m_list[fi].hi, fvgs.m_list[fi].lo, 0.0, 0.0);
+           }
+        }
+      //--- FVG du timeframe d'entrée : candidats potentiels du modèle
+      if(tf == cfg.entryTfMin)
+        {
+         if(m_newEntryCount >= ArraySize(m_newEntryFvg))
+            ArrayResize(m_newEntryFvg, m_newEntryCount + 4);
+         m_newEntryFvg[m_newEntryCount] = fi;
+         m_newEntryCount++;
+        }
+      bool inWindow = false;
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+         if(su[s].windowOpen && !su[s].windowClosed)
+            inWindow = true;
+      if(tf == 15 || logAllFvg || (tf == cfg.entryTfMin && inWindow))
+         Log(J_FVG_DETECTED, -1, fvgs.m_list[fi].dir, R_NONE, tf, fvgs.m_list[fi].id, fvgs.m_list[fi].hi, fvgs.m_list[fi].lo, 0.0, 0.0);
+     }
+
+   //+---------------------------------------------------------------+
+   //| Module 5 : contexte du prix par rapport à chaque OPR          |
+   //+---------------------------------------------------------------+
+   int               ContextOf(const int s, const double price) const
+     {
+      if(opr[s].m_st.status != OPR_ST_FINAL)
+         return CTX_NA;
+      if(price > opr[s].m_st.high)
+         return CTX_ABOVE;
+      if(price < opr[s].m_st.low)
+         return CTX_BELOW;
+      return CTX_INSIDE;
+     }
+
+   void              UpdateContext(const double c)
+     {
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+        {
+         int nc = ContextOf(s, c);
+         if(nc == ctx[s])
+            continue;
+         ctx[s] = nc;
+         if(!logContext || nc == CTX_NA)
+            continue;
+         int code = (nc == CTX_ABOVE) ? J_CTX_ABOVE : (nc == CTX_BELOW ? J_CTX_BELOW : J_CTX_INSIDE);
+         Log(code, s, 0, R_NONE, 0, 0, opr[s].m_st.high, opr[s].m_st.low, c, 0.0);
+        }
+     }
+
+   void              InfoWindows(const long st)
+     {
+      int m = tm.MinuteOfDay(st);
+      bool inObs = cfg.observe.Contains(m);
+      if(inObs != m_inObs)
+        {
+         m_inObs = inObs;
+         Log(inObs ? J_OBS_OPEN : J_OBS_CLOSE, -1, 0, R_NONE, 0, 0, 0.0, 0.0, 0.0, 0.0);
+        }
+      bool inLon = cfg.london.Contains(m);
+      if(inLon != m_inLondon)
+        {
+         m_inLondon = inLon;
+         Log(J_SESSION_INFO, -1, 0, R_NONE, inLon ? 1 : 0, 0, 0.0, 0.0, 0.0, 0.0);
+        }
+     }
+
+   //+---------------------------------------------------------------+
+   //| Module 6 : validation des conditions d'entrée                 |
+   //+---------------------------------------------------------------+
+   int               MacroAt(const int s, const long t) const
+     {
+      for(int i = 0; i < cfg.slots[s].macroCount && i < OPR_MAX_MACROS; i++)
+         if(t >= su[s].macroS[i] && t < su[s].macroE[i])
+            return i;
+      return -1;
+     }
+
+   void              SetBias(const int s, const int dir, const double price, const bool breakout)
+     {
+      su[s].dir = dir;
+      if(dir > 0)
+         stats.biasBuy++;
+      else
+         stats.biasSell++;
+      Log(breakout ? J_BIAS_BREAKOUT : J_BIAS, s, dir, R_NONE, 0, 0, price, opr[s].m_st.high, opr[s].m_st.low, 0.0);
+     }
+
+   void              SetupStep(const int s, const long st, const double o, const double h, const double l, const double c)
+     {
+      if(su[s].state == SU_OFF || su[s].winS == 0)
+         return;
+      //--- a) biais à l'ouverture de la fenêtre (prix à la clôture de la bougie qui se termine à l'ouverture)
+      if(!su[s].biasDone && st + OPR_BASE_SEC >= su[s].winS && st < su[s].winE)
+        {
+         su[s].biasDone = true;
+         double price = (st + OPR_BASE_SEC == su[s].winS) ? c : o;
+         if(opr[s].m_st.status != OPR_ST_FINAL)
+           {
+            su[s].state = SU_DONE;
+            su[s].doneReason = R_NO_OPR;
+            Reject(J_ENTRY_REJECTED, s, 0, R_NO_OPR, 0);
+           }
+         else
+            if(price > opr[s].m_st.high)
+              {
+               SetBias(s, 1, price, false);
+               su[s].state = SU_WAIT_SWEEP;
+              }
+            else
+               if(price < opr[s].m_st.low)
+                 {
+                  SetBias(s, -1, price, false);
+                  su[s].state = SU_WAIT_SWEEP;
+                 }
+               else
+                 {
+                  su[s].consol = true;
+                  su[s].state  = SU_WAIT_BIAS;
+                  stats.biasConsol++;
+                  Log(J_BIAS_CONSOL, s, 0, R_NONE, 0, 0, price, opr[s].m_st.high, opr[s].m_st.low, 0.0);
+                 }
+        }
+      //--- ouverture de la fenêtre
+      if(!su[s].windowOpen && st >= su[s].winS && st < su[s].winE)
+        {
+         su[s].windowOpen = true;
+         su[s].winHigh = h;
+         su[s].winLow  = l;
+         Log(J_WINDOW_OPEN, s, 0, R_NONE, 0, 0, 0.0, 0.0, 0.0, 0.0);
+        }
+      if(!su[s].windowOpen || su[s].windowClosed)
+         return;
+
+      bool inWin = (st < su[s].winE);
+      if(inWin)
+        {
+         if(h > su[s].winHigh)
+            su[s].winHigh = h;
+         if(l < su[s].winLow)
+            su[s].winLow = l;
+         //--- macros
+         int mi = MacroAt(s, st);
+         if(mi != su[s].macroOpen)
+           {
+            if(su[s].macroOpen >= 0)
+               Log(J_MACRO_CLOSE, s, 0, R_NONE, su[s].macroOpen, 0, 0.0, 0.0, 0.0, 0.0);
+            if(mi >= 0)
+               Log(J_MACRO_OPEN, s, 0, R_NONE, mi, 0, 0.0, 0.0, 0.0, 0.0);
+            su[s].macroOpen = mi;
+           }
+         StepState(s, st, h, l, c);
+        }
+
+      //--- fin de fenêtre (y compris clôture tardive si des bougies manquent)
+      if(st + OPR_BASE_SEC >= su[s].winE)
+        {
+         if(su[s].macroOpen >= 0)
+           {
+            Log(J_MACRO_CLOSE, s, 0, R_NONE, su[s].macroOpen, 0, 0.0, 0.0, 0.0, 0.0);
+            su[s].macroOpen = -1;
+           }
+         if(su[s].state == SU_ARMED && st + OPR_BASE_SEC >= su[s].winE + (long)cfg.graceMin * 60)
+           {
+            Reject(J_SETUP_CANCELLED, s, su[s].dir, R_WINDOW_END, su[s].setupId);
+            su[s].state = SU_DONE;
+           }
+         if(su[s].state != SU_ARMED)
+           {
+            su[s].windowClosed = true;
+            if(su[s].state != SU_IN_TRADE)
+               su[s].state = SU_DONE;
+            Log(J_WINDOW_CLOSE, s, 0, R_NONE, 0, 0, 0.0, 0.0, 0.0, 0.0);
+           }
+        }
+     }
+
+   void              StepState(const int s, const long st, const double h, const double l, const double c)
+     {
+      int dir = su[s].dir;
+      //--- prix dans l'OPR : attente d'une clôture d'un côté ou de l'autre (aucune direction forcée)
+      if(su[s].state == SU_WAIT_BIAS)
+        {
+         int nd = 0;
+         if(c > opr[s].m_st.high)
+            nd = 1;
+         else
+            if(c < opr[s].m_st.low)
+               nd = -1;
+         if(nd == 0)
+            return;
+         SetBias(s, nd, c, true);
+         dir = nd;
+         if(cfg.consolRequireSweep)
+           {
+            su[s].state = SU_WAIT_SWEEP;
+            return;
+           }
+         //--- sans prise de liquidité exigée : le swing de référence part de la bougie de cassure
+         su[s].sweepT   = st;
+         su[s].sweepSrc = 0;
+         su[s].extreme  = (dir < 0) ? h : l;
+         su[s].state    = SU_WAIT_FVG;
+        }
+
+      //--- b) prise de liquidité du côté opposé au trade
+      if(su[s].state == SU_WAIT_SWEEP)
+        {
+         int best = -1;
+         for(int k = 0; k < liq.m_sweepCount; k++)
+           {
+            int pi = liq.m_sweepIdx[k];
+            if(liq.m_pools[pi].side != -dir)
+               continue;
+            if(best < 0 || (dir < 0 ? liq.m_pools[pi].level > liq.m_pools[best].level : liq.m_pools[pi].level < liq.m_pools[best].level))
+               best = pi;
+           }
+         if(best < 0)
+           {
+            //--- un FVG dans le sens du biais sans prise de liquidité préalable : confirmation manquante
+            for(int k = 0; k < m_newEntryCount; k++)
+              {
+               int fi = m_newEntryFvg[k];
+               if(fvgs.m_list[fi].dir == dir)
+                  Reject(J_FVG_IGNORED, s, dir, R_NO_SWEEP, fvgs.m_list[fi].id);
+              }
+            return;
+           }
+         su[s].sweepT     = st;
+         su[s].sweepLevel = liq.m_pools[best].level;
+         su[s].sweepSrc   = liq.m_pools[best].src;
+         su[s].extreme    = (dir < 0) ? h : l;
+         su[s].state      = SU_WAIT_FVG;
+         stats.sweeps++;
+         Log(J_SWEEP, s, dir, R_NONE, su[s].sweepSrc, 0, su[s].sweepLevel, 0.0, 0.0, 0.0);
+         return;   // le FVG doit commencer à partir de la bougie de prise de liquidité : il ne peut pas se clôturer sur celle-ci
+        }
+
+      //--- c) FVG d'entrée après la prise de liquidité
+      if(su[s].state == SU_WAIT_FVG)
+        {
+         if(dir < 0 && h > su[s].extreme)
+            su[s].extreme = h;
+         if(dir > 0 && l < su[s].extreme)
+            su[s].extreme = l;
+         for(int k = 0; k < m_newEntryCount; k++)
+           {
+            int fi = m_newEntryFvg[k];
+            if(fvgs.m_list[fi].dir != dir)
+               continue;
+            long period = (long)cfg.entryTfMin * 60;
+            if(fvgs.m_list[fi].c1T + period <= su[s].sweepT)
+               continue;
+            if(fvgs.m_list[fi].hi - fvgs.m_list[fi].lo < cfg.minFvgTicks * cfg.tickSize - 1e-9)
+               continue;
+            stats.candidates++;
+            Log(J_FVG_CANDIDATE, s, dir, R_NONE, cfg.entryTfMin, fvgs.m_list[fi].id, fvgs.m_list[fi].hi, fvgs.m_list[fi].lo, 0.0, 0.0);
+            if(TryArm(s, fi, st))
+               return;
+            if(su[s].state != SU_WAIT_FVG)
+               return;
+           }
+         return;
+        }
+
+      //--- setup armé : invalidation du FVG avant l'exécution
+      if(su[s].state == SU_ARMED)
+        {
+         int fi = fvgs.Find(su[s].fvgId);
+         if(fi >= 0 && fvgs.m_list[fi].status == FVG_INVALIDATED)
+           {
+            Reject(J_SETUP_CANCELLED, s, dir, R_FVG_INVALID, su[s].setupId);
+            su[s].state = SU_WAIT_SWEEP;
+           }
+        }
+     }
+
+   //--- d) calcul et validation des niveaux ; arme le setup si tout est conforme
+   bool              TryArm(const int s, const int fi, const long st)
+     {
+      int dir = su[s].dir;
+      long fid = fvgs.m_list[fi].id;
+      int mi = MacroAt(s, fvgs.m_list[fi].c3T);
+      if(cfg.requireMacro && mi < 0)
+        {
+         Reject(J_FVG_IGNORED, s, dir, R_OUTSIDE_MACRO, fid);
+         return false;
+        }
+      if(cfg.oneTradePerMacro && mi >= 0 && su[s].macroUsed[mi])
+        {
+         Reject(J_FVG_IGNORED, s, dir, R_MACRO_USED, fid);
+         return false;
+        }
+      if(ArraySize(m_open) >= cfg.maxOpenTrades)
+        {
+         Reject(J_FVG_IGNORED, s, dir, R_IN_POSITION, fid);
+         return false;
+        }
+      if(cfg.maxTradesDay > 0 && m_tradesToday >= cfg.maxTradesDay)
+        {
+         Reject(J_ENTRY_REJECTED, s, dir, R_DAY_LIMIT, fid);
+         su[s].state = SU_DONE;
+         return false;
+        }
+      double lo = fvgs.m_list[fi].lo;
+      double hi = fvgs.m_list[fi].hi;
+      double entry = (cfg.entryLevel == OPR_ENTRY_CE) ? 0.5 * (lo + hi) : (dir > 0 ? hi : lo);
+      double buf = cfg.stopBufferTicks * cfg.tickSize;
+      double sl = (dir > 0) ? su[s].extreme - buf : su[s].extreme + buf;
+      double tp = OprStdLevel(opr[s].m_st, dir, cfg.tpStd);
+      //--- e) cible déjà atteinte dans la fenêtre : pas de trade
+      if((dir > 0 && su[s].winHigh >= tp) || (dir < 0 && su[s].winLow <= tp))
+        {
+         Reject(J_ENTRY_REJECTED, s, dir, R_TARGET_REACHED, fid);
+         su[s].state = SU_DONE;
+         su[s].doneReason = R_TARGET_REACHED;
+         return false;
+        }
+      bool ok = (dir > 0) ? (sl < entry && entry < tp) : (tp < entry && entry < sl);
+      if(!ok)
+        {
+         Reject(J_ENTRY_REJECTED, s, dir, R_INVALID_LEVELS, fid);
+         return false;
+        }
+      double risk = MathAbs(entry - sl);
+      if(cfg.minStop > 0.0 && risk < cfg.minStop - 1e-9)
+        {
+         Reject(J_ENTRY_REJECTED, s, dir, R_MIN_STOP, fid);
+         return false;
+        }
+      if(cfg.maxStop > 0.0 && risk > cfg.maxStop + 1e-9)
+        {
+         Reject(J_ENTRY_REJECTED, s, dir, R_MAX_STOP, fid);
+         return false;
+        }
+      fvgs.m_list[fi].role = FVG_ROLE_ENTRY;
+      fvgs.m_list[fi].slot = s;
+      su[s].setupId    = fid * 4 + s;
+      su[s].fvgId      = fid;
+      su[s].fvgLo      = lo;
+      su[s].fvgHi      = hi;
+      su[s].entry      = entry;
+      su[s].sl         = sl;
+      su[s].tp         = tp;
+      su[s].risk       = risk;
+      su[s].armedT     = st + OPR_BASE_SEC;
+      su[s].armedMacro = mi;
+      su[s].state      = SU_ARMED;
+      stats.armed++;
+      Log(J_ENTRY_AUTHORIZED, s, dir, R_NONE, mi, su[s].setupId, entry, sl, tp, risk);
+      return true;
+     }
+
+   //+---------------------------------------------------------------+
+   //| Module 7 : modèle book (entrée au niveau, résolution          |
+   //| conservatrice : sur la bougie d'entrée seul le stop est       |
+   //| vérifié ; stop et cible sur la même bougie = perte).          |
+   //+---------------------------------------------------------------+
+   void              BookStep(const long st, const datetime srv, const double h, const double l)
+     {
+      //--- sorties des trades ouverts (bougies postérieures à l'entrée)
+      for(int i = ArraySize(m_open) - 1; i >= 0; i--)
+        {
+         if(m_open[i].entryT >= st)
+            continue;
+         int dir = m_open[i].dir;
+         if(dir < 0 ? (h >= m_open[i].sl) : (l <= m_open[i].sl))
+            CloseTrade(i, st, srv, m_open[i].sl, BK_EXIT_SL);
+         else
+            if(dir < 0 ? (l <= m_open[i].tp) : (h >= m_open[i].tp))
+               CloseTrade(i, st, srv, m_open[i].tp, BK_EXIT_TP);
+        }
+      //--- ordres limites en attente
+      for(int s = 0; s < OPR_MAX_SLOTS; s++)
+        {
+         if(su[s].state != SU_ARMED || su[s].armedT > st)
+            continue;
+         int dir = su[s].dir;
+         bool hitEntry = (dir < 0) ? (h >= su[s].entry) : (l <= su[s].entry);
+         bool hitTp    = (dir < 0) ? (l <= su[s].tp) : (h >= su[s].tp);
+         if(hitEntry && hitTp)
+           {
+            Reject(J_SETUP_CANCELLED, s, dir, R_AMBIGUOUS, su[s].setupId);
+            su[s].state = SU_DONE;
+            continue;
+           }
+         if(hitTp)
+           {
+            Reject(J_SETUP_CANCELLED, s, dir, R_TARGET_REACHED, su[s].setupId);
+            su[s].state = SU_DONE;
+            continue;
+           }
+         if(!hitEntry)
+            continue;
+         int n = ArraySize(m_open);
+         ArrayResize(m_open, n + 1, 8);
+         m_open[n].setupId    = su[s].setupId;
+         m_open[n].slot       = s;
+         m_open[n].dir        = dir;
+         m_open[n].macro      = su[s].armedMacro;
+         m_open[n].entry      = su[s].entry;
+         m_open[n].sl         = su[s].sl;
+         m_open[n].tp         = su[s].tp;
+         m_open[n].risk       = su[s].risk;
+         m_open[n].entryT     = st;
+         m_open[n].entrySrv   = srv;
+         m_open[n].open       = true;
+         m_open[n].exitT      = 0;
+         m_open[n].exitSrv    = 0;
+         m_open[n].exitPx     = 0.0;
+         m_open[n].exitReason = 0;
+         m_open[n].r          = 0.0;
+         if(su[s].armedMacro >= 0)
+            su[s].macroUsed[su[s].armedMacro] = true;
+         su[s].trades++;
+         m_tradesToday++;
+         su[s].state = SU_IN_TRADE;
+         Log(J_TRADE_FILLED, s, dir, R_NONE, su[s].armedMacro, su[s].setupId, su[s].entry, su[s].sl, su[s].tp, su[s].risk);
+         //--- bougie d'entrée : seul le stop est vérifié
+         if(dir < 0 ? (h >= su[s].sl) : (l <= su[s].sl))
+            CloseTrade(n, st, srv, su[s].sl, BK_EXIT_SL);
+        }
+     }
+
+   void              CloseTrade(const int i, const long st, const datetime srv, const double px, const int reason)
+     {
+      double r = (reason == BK_EXIT_TP) ? MathAbs(m_open[i].tp - m_open[i].entry) / m_open[i].risk : -1.0;
+      m_open[i].open       = false;
+      m_open[i].exitT      = st;
+      m_open[i].exitSrv    = srv;
+      m_open[i].exitPx     = px;
+      m_open[i].exitReason = reason;
+      m_open[i].r          = r;
+      stats.trades++;
+      if(r > 0.0)
+         stats.wins++;
+      else
+         stats.losses++;
+      stats.netR += r;
+      int s = m_open[i].slot;
+      Log(J_TRADE_CLOSED, s, m_open[i].dir, R_NONE, reason, m_open[i].setupId, px, m_open[i].entry, 0.0, r);
+      if(s >= 0 && s < OPR_MAX_SLOTS && su[s].state == SU_IN_TRADE && su[s].setupId == m_open[i].setupId)
+         su[s].state = (su[s].windowClosed || (su[s].winE > 0 && st >= su[s].winE)) ? SU_DONE : SU_WAIT_SWEEP;
+      int nc = ArraySize(m_closed);
+      if(nc < 20000)
+        {
+         ArrayResize(m_closed, nc + 1, 256);
+         m_closed[nc] = m_open[i];
+        }
+      int no = ArraySize(m_open);
+      for(int j = i; j < no - 1; j++)
+         m_open[j] = m_open[j + 1];
+      ArrayResize(m_open, no - 1, 8);
+     }
+
+   //+---------------------------------------------------------------+
+   //| Accès pour l'EA                                               |
+   //+---------------------------------------------------------------+
+   int               FindFvgIdx(const long id) const { return (id == 0) ? -1 : fvgs.Find(id); }
+   long              SrvOf(const long st) const { return st - m_srvOffset; }
+
+   bool              RestoreOpr(const int s, const int day, const double high, const double low)
+     {
+      if(!opr[s].Restore(day, high, low))
+         return false;
+      Log(J_OPR_FINAL, s, 0, R_NONE, 1, 0, high, low, 0.0, 0.0);
+      return true;
+     }
+  };
+
+string OprSetupStateText(const int st)
+  {
+   switch(st)
+     {
+      case SU_OFF:        return "aucune règle d'entrée";
+      case SU_IDLE:       return "attente de la fenêtre";
+      case SU_WAIT_BIAS:  return "prix dans l'OPR : attente d'une clôture hors OPR";
+      case SU_WAIT_SWEEP: return "attente d'une prise de liquidité";
+      case SU_WAIT_FVG:   return "liquidité prise : attente du FVG";
+      case SU_ARMED:      return "ordre limite armé";
+      case SU_IN_TRADE:   return "en position";
+      case SU_DONE:       return "terminé pour aujourd'hui";
+      default:            return "?";
+     }
+  }
+
+#endif // OPR_ENGINE_MQH
+//+------------------------------------------------------------------+
+//=== fin OPR_Engine.mqh ===
+
+//+------------------------------------------------------------------+
 //| Inputs                                                           |
 //+------------------------------------------------------------------+
 input group "=== Général ==="
@@ -3674,8 +6167,9 @@ input bool             InpTGIF            = true;           // TGIF : vendredi 1
 input double           InpTGIFRetrace     = 0.25;           // TGIF : part du range hebdo visée (0.20-0.30)
 input int              InpSBMinLiqWeight  = 3;              // SB : poids minimal de la liquidité prise
 input int              InpSBMinTargetWeight = 4;            // SB : poids minimal du pool de liquidité visé
-input bool             InpUseLondonOPR    = true;           // London OPR (MOR, 02:50-04:10)
-input bool             InpLondonNeedMacro = true;           // London OPR : le sweep doit avoir lieu pendant une macro
+input bool             InpUseLondonOPR    = true;           // London OPR (MOR, 02:50-04:10) : interrupteur général
+input ENUM_LONDON_MODE InpLondonMode      = LONDON_PDF;     // London OPR : implémentation (PDF conseillé)
+input bool             InpLondonNeedMacro = true;           // London OPR v2.22 : le sweep doit avoir lieu pendant une macro
 input bool             InpUseOPR0130      = true;           // OPR 01:30-02:00 (fenêtre 02:00-05:00)
 input bool             InpUseOPR0700      = true;           // OPR 07:00-07:30 (fenêtre 07:30-09:30)
 input bool             InpUseOPR0930      = true;           // OPR 09:30-10:00 (fenêtre 10:00-12:00)
@@ -3692,7 +6186,7 @@ input bool             InpUseKillzoneModel= true;           // Modèle Killzone 
 
 input group "=== Profil personnalisé (utilisé si Profil = Personnalisé) ==="
 input double           InpScoreMin        = 60.0;           // Score ICT minimal (0-100)
-input double           InpMinRR           = 3.0;            // RR minimal vers la cible
+input double           InpMinRR           = 2.0;            // RR minimal vers la cible, modèles ICT (v2.22 : 3)
 input double           InpFallbackRR      = 3.0;            // Cible de secours sans DOL (R, 0 = rejet)
 input double           InpMaxRR           = 5.0;            // Cible plafonnée à x R (0 = pas de plafond)
 input double           InpSLFloorATR      = 0.8;            // SL minimum = x ATR M5 (0 = SL au sweep)
@@ -3709,6 +6203,61 @@ input bool             InpUseCRT0250      = true;           // CRT : macro 02:50
 input bool             InpUseCRTPM        = true;           // CRT : macro PM d'impulsion 14:50-15:10
 input bool             InpCRT50Rule       = true;           // CRT : entrée au bord du FVG, sortie si clôture au-delà du CE
 input bool             InpBlockAccumMacro = true;           // Pas de nouvelle entrée pendant la macro 15:15-15:45
+input double           InpCRTMinRR        = 3.0;            // CRT : RR minimal vers la DOL (gestion CRT : reste à la DOL >= 3R)
+
+input group "=== London OPR PDF : modèle (moteur OPR + FVG) ==="
+input ENUM_LONDON_MANAGE InpLondonManage  = LM_PDF;         // Gestion des trades (PDF : cible unique)
+input double           InpLondonMinRR     = 0.0;            // RR minimal (0 = la cible du PDF est acceptée telle quelle)
+input double           InpLOTpStd         = 2.0;            // Cible : déviation standard du MOR (notes : 2 à 2,5)
+input bool             InpLORequireMacro  = true;           // Le FVG d'entrée doit se former dans une macro
+input bool             InpLOOneTradePerMacro = true;        // 1 macro = 1 trade
+input bool             InpLOConsolRequireSweep = true;      // Prix dans le MOR à 2:50 : exiger aussi une prise de liquidité
+input double           InpLOStopBufferPts = 0.0;            // Stop : points au-delà du swing (0 = 1 tick)
+input double           InpLOMinStopPts    = 0.0;            // Stop minimum en points (0 = aucun)
+input double           InpLOMaxStopPts    = 0.0;            // Stop maximum en points (0 = aucun)
+input double           InpLOMaxChaseR     = 0.25;           // Entrée au marché tolérée au-delà du niveau (x R)
+input int              InpLOGraceMin      = 0;              // Ordre conservé après la fin de la fenêtre (minutes)
+input ENUM_OPR_ENTRY_TF    InpLOEntryTF   = OPR_TF_M1;      // Timeframe du FVG d'entrée
+input ENUM_OPR_ENTRY_LEVEL InpLOEntryLevel= OPR_ENTRY_EDGE; // Niveau d'entrée dans le FVG
+input double           InpLOMinFvgPts     = 0.0;            // FVG d'entrée : taille minimale en points (0 = 1 tick)
+
+input group "=== London OPR PDF : plages horaires (heure de New York) ==="
+input string           InpLOAsiaRange     = "20:00-00:00";  // Plage asiatique (1er FVG M15 ; high / low = liquidité)
+input string           InpLOLondonRange   = "00:00-06:00";  // Session de Londres (recherche du FPFVG M1 de minuit)
+input string           InpLOObsWindow     = "02:50-03:10";  // Fenêtre d'observation (journal uniquement)
+input string           InpLOOpr1Range     = "00:00-00:30";  // OPR 1 = MOR (Midnight Opening Range)
+input bool             InpLOOpr1Trade     = true;           // OPR 1 : modèle d'entrée actif (PDF London OPR)
+input string           InpLOOpr1Window    = "02:50-04:10";  // OPR 1 : fenêtre de trading
+input string           InpLOOpr1Macros    = "02:50-03:10,03:20-03:40,03:50-04:10"; // OPR 1 : macros
+input string           InpLOOpr2Range     = "07:00-07:30";  // OPR 2 : plage ("" = désactivé)
+input bool             InpLOOpr2Trade     = false;          // OPR 2 : modèle d'entrée (aucune règle documentée)
+input string           InpLOOpr2Window    = "";             // OPR 2 : fenêtre de trading
+input string           InpLOOpr2Macros    = "";             // OPR 2 : macros
+input string           InpLOOpr3Range     = "09:30-10:00";  // OPR 3 : plage
+input bool             InpLOOpr3Trade     = false;          // OPR 3 : modèle d'entrée (aucune règle documentée)
+input string           InpLOOpr3Window    = "";             // OPR 3 : fenêtre de trading
+input string           InpLOOpr3Macros    = "";             // OPR 3 : macros
+input string           InpLOOpr4Range     = "13:30-14:00";  // OPR 4 : plage
+input bool             InpLOOpr4Trade     = false;          // OPR 4 : modèle d'entrée (aucune règle documentée)
+input string           InpLOOpr4Window    = "";             // OPR 4 : fenêtre de trading
+input string           InpLOOpr4Macros    = "";             // OPR 4 : macros
+
+input group "=== London OPR PDF : FVG de référence et liquidité ==="
+input ENUM_OPR_ASIA_RULE InpLOAsiaRule    = OPR_ASIA_C2_IN_RANGE; // FVG asiatique « présenté pendant la plage »
+input double           InpLOAsiaMinGapPts = 0.0;            // FVG asiatique : taille minimale en points (0 = 1 tick)
+input double           InpLOMidMinGapPts  = 0.0;            // FPFVG M1 de minuit : taille minimale en points (0 = 1 tick)
+input bool             InpFPFVGFromEngine = true;           // FPFVG Asie / Midnight du moteur (false = calcul v2.22)
+input bool             InpLOLiqM1         = true;           // Liquidité : swings M1 (hauts / bas simples)
+input int              InpLOLiqPivotM1    = 1;              // Swings M1 : bougies de chaque côté
+input bool             InpLOLiqM15        = true;           // Liquidité : swings M15
+input int              InpLOLiqPivotM15   = 1;              // Swings M15 : bougies de chaque côté
+input bool             InpLOLiqAsia       = true;           // Liquidité : high / low de la plage asiatique
+
+input group "=== London OPR PDF : journal et persistance ==="
+input int              InpLOWarmupDays    = 3;              // Jours d'historique M1 rejoués au démarrage
+input bool             InpLOJournalCsv    = true;           // Journal CSV de chaque décision (Common\Files\ICTNAS)
+input bool             InpLOJournalPrint  = true;           // Décisions importantes dans le journal Experts
+input bool             InpLOPersist       = true;           // Sauvegarder les OPR finalisés (redémarrage de MT5)
 
 input group "=== Séquence d'entrée ==="
 input ENUM_TIMEFRAMES  InpExecTF          = PERIOD_M1;      // UT d'exécution (M1, M3 ou M5)
@@ -3730,8 +6279,8 @@ input bool             InpPDFilter        = false;          // Acheter seulement
 input ENUM_WEEKLY_BIAS InpWeeklyBias      = WB_NONE;        // Biais hebdo (manuel)
 input bool             InpWeeklyBiasFilter= false;          // Bloquer les trades contre le biais hebdo
 input string           InpFlatTime        = "15:50";        // Heure de flat (NY) : macro de settlement, tout est fermé
-input int              InpMaxTradesDay    = 3;              // Trades max par jour
-input int              InpMaxConcurrent   = 1;              // Positions / ordres simultanés max
+input int              InpMaxTradesDay    = 3;              // Trades exécutés max par jour (+ ordres en attente ; 0 = illimité)
+input int              InpMaxConcurrent   = 2;              // Positions / ordres simultanés max (toujours dans le même sens)
 
 input group "=== Score ICT ==="
 input int              InpHTFWeightMin    = 6;              // "Sweep HTF" : poids de liquidité minimal
@@ -3764,10 +6313,10 @@ input bool             InpUseSMT          = true;           // SMT NQ / ES
 input string           InpSMTSymbol       = "";             // Symbole ES / US500 (vide = détection auto)
 
 input group "=== Risque ==="
-input double           InpRiskPct         = 3.0;            // Risque par trade % (plafonné à 3 %)
-input double           InpDailyLossPct    = 3.0;            // Stop journalier % (avec 3 %/trade : 1 perte = arrêt du jour)
-input double           InpDailyTargetPct  = 9.0;            // Objectif journalier % (1 gain à 3R = 9 %)
-input double           InpMaxTotalDDPct   = 8.0;            // DD total max % (prop firm)
+input double           InpRiskPct         = 1.0;            // Risque par trade % (plafonné à 3 % ; v2.22 : 3 %)
+input double           InpDailyLossPct    = 2.0;            // Stop journalier % (0 = désactivé ; 2 % = 2 pertes à 1 %)
+input double           InpDailyTargetPct  = 3.0;            // Objectif journalier % (0 = désactivé)
+input double           InpMaxTotalDDPct   = 8.0;            // DD total max % (prop firm) : arrêt définitif, 0 = désactivé
 input bool             InpCloseOnDailyLimit = true;         // Tout fermer quand une limite journalière est atteinte
 input double           InpInitialBalance  = 0;              // Solde de référence DD total (0 = solde au lancement)
 input double           InpBEAtR           = 1.0;            // Break-even quand le prix atteint x R
@@ -3785,6 +6334,8 @@ input bool             InpFreshDBInTester = true;           // Testeur : base vi
 input group "=== Diagnostic ==="
 input bool             InpDebugLog        = false;          // Journal détaillé de chaque setup
 input bool             InpDailyDiagnostic = true;           // Résumé de l'entonnoir chaque jour dans le journal
+input bool             InpSelfTest        = true;           // Testeur : ordre de test (lot min) au démarrage pour vérifier l'exécution
+input double           InpMaxMarginPct    = 80.0;           // Marge max utilisée par un trade (% de la marge libre)
 
 input group "=== Affichage ==="
 input bool             InpDraw            = true;           // Tracés (mode debug)
@@ -3826,6 +6377,7 @@ CScorer           g_scorer;
 CMLInference      g_ml;
 CNewsFilter       g_news;
 CTradeManager     g_tm_trades;
+CLondonOprEngine  g_lo;             // v2.30 : moteur London OPR (PDF)
 
 datetime          g_anchor=0;       // jour de trading en cours (minuit NY)
 datetime          g_lastM1=0;
@@ -3838,7 +6390,7 @@ string            g_profile[];
 string            g_tzMsg="";
 bool              g_tzOk=true;
 int               g_gapsAbove0930=-1,g_gapsBelow0930=-1;
-int               g_tradesToday=0;
+int               g_tradesToday=0;  // ordres envoyés aujourd'hui (information ; la limite compte les exécutions)
 double            g_dayOpen=0;
 bool              g_flatDone=false;
 bool              g_limitClosed=false;
@@ -3868,6 +6420,8 @@ int               g_diagCnt[];
 //|                                                                  |
 //|  Priorité (validée) : Shadow > Silver Bullet > London OPR > OPR. |
 //|  ERL/IRL : modèle séparé (sweep H1 -> MSS M5 -> cible FVG H1).   |
+//|  v2.30 : RR minimal par famille (ICT / CRT / PDF), score ICT non |
+//|  bloquant pour les modèles PDF, limite de trades sur exécutions. |
 //|                                                                  |
 //|  Ce fichier utilise les objets globaux et les inputs de l'EA :   |
 //|  il est inclus APRÈS leur déclaration.                           |
@@ -3882,9 +6436,11 @@ int ModelRank(const string m)
    if(m=="SILVER_BULLET") return(2);
    if(m=="CRT_0830")      return(3);
    if(m=="LONDON_OPR")    return(4);
+   if(m==LO_MODEL)        return(4);
    if(m=="CRT_0250")      return(5);
    if(m=="CRT_OPR")       return(6);
    if(StringFind(m,"OPR_")==0) return(7);
+   if(StringFind(m,"OPRPDF_")==0) return(7);
    if(m=="CRT_PM")        return(8);
    if(m=="KILLZONE")      return(9);
    if(m=="SB_MOMENTUM")   return(10);
@@ -3895,6 +6451,8 @@ string ModelCode(const string m)
    if(m=="SHADOW") return("SH");
    if(m=="SILVER_BULLET") return("SB");
    if(m=="LONDON_OPR") return("LO");
+   if(m==LO_MODEL) return("LP");
+   if(StringFind(m,"OPRPDF_")==0) return("P"+StringSubstr(m,7));
    if(m=="ERL_IRL") return("EI");
    if(m=="KILLZONE") return("KZ");
    if(m=="SB_MOMENTUM") return("SM");
@@ -3928,6 +6486,23 @@ double STDVTarget(SRange &r,int dir,double k)
 #define RR_EPS 0.01                 // tolérance sur les comparaisons de RR (virgule flottante)
 int g_liqTargetW=0;                 // >0 : la DOL est choisie dans la carte de liquidité (poids min)
 
+//--- v2.30 : modèles issus du moteur OPR + FVG (PDF London OPR)
+bool IsPdfModel(const string m) { return(m==LO_MODEL || StringFind(m,"OPRPDF_")==0); }
+
+//--- v2.30 : RR minimal par famille de modèles
+//---   PDF : la cible est la déviation standard de l'OPR (InpLondonMinRR, 0 = acceptée telle quelle)
+//---   CRT : gestion CRT, reste à la DOL >= 3R (InpCRTMinRR)
+//---   autres modèles ICT : profil (règle validée « RR min 2 »)
+double ModelMinRR(const string model)
+  {
+   if(IsPdfModel(model)) return(InpLondonMinRR);
+   if(StringFind(model,"CRT_")==0) return(InpCRTMinRR);
+   return(g_pMinRR);
+  }
+
+//--- v2.30 : le score ICT n'est pas une règle du PDF : il est calculé et enregistré, sans bloquer
+bool ModelUsesScore(const string model) { return(!IsPdfModel(model)); }
+
 //--- DOL ICT : premier pool de liquidité intact (poids >= minW) situé à au moins g_pMinRR x R.
 //--- Les pools plus proches sont des aimants sur le chemin, pas des obstacles. 0 = aucun.
 double PickLiquidityDOL(int dir,double entry,double r,int minW)
@@ -3945,7 +6520,7 @@ double PickLiquidityDOL(int dir,double entry,double r,int minW)
 //+------------------------------------------------------------------+
 //| CRT_TRADE : cible = DOL opposé (PDH/PDL, CE des NDOG/NWOG, bord   |
 //| opposé de l'OPR). On prend le plus proche situé à au moins        |
-//| g_pMinRR x R ; à défaut le plus proche tout court (le RR décide). |
+//| InpCRTMinRR x R ; à défaut le plus proche (le RR décide).         |
 //+------------------------------------------------------------------+
 double CRTTarget(int dir,double entry,double r,double extra)
   {
@@ -3962,7 +6537,7 @@ double CRTTarget(int dir,double entry,double r,double extra)
       double d=dir*(cands[i]-entry);
       if(d<=0) continue;
       if(d<dAny) { dAny=d; bestAny=cands[i]; }
-      if(r>0 && d>=(g_pMinRR-RR_EPS)*r && d<dFar) { dFar=d; bestFar=cands[i]; }
+      if(r>0 && d>=(InpCRTMinRR-RR_EPS)*r && d<dFar) { dFar=d; bestFar=cands[i]; }
      }
    return(bestFar>0 ? bestFar : bestAny);
   }
@@ -4083,8 +6658,9 @@ bool ChooseModel(SSetup &c,datetime nowNY,double px,string &model,double &dol,do
       expiryNY=day+(9*60+10)*SEC_MIN;
       return(true);
      }
-   //--- 3. London OPR (MOR) : 02:50-04:10, biais de 02:50, sweep pendant une macro
-   if(InpUseLondonOPR && InMin(m,170,250) && g_opr.morBiasSet && g_opr.morBias==c.dir)
+   //--- 3. London OPR (MOR) v2.22 : 02:50-04:10, biais de 02:50, sweep pendant une macro
+   //---    v2.30 : le modèle du PDF (moteur OPR + FVG) le remplace par défaut (InpLondonMode)
+   if(InpUseLondonOPR && InpLondonMode!=LONDON_PDF && InMin(m,170,250) && g_opr.morBiasSet && g_opr.morBias==c.dir)
      {
       bool macroOk=!InpLondonNeedMacro || (CTimeManager::MacroLabel(g_tm.ServerToNY(c.tSweep))!="");
       if(macroOk)
@@ -4163,6 +6739,45 @@ bool OverlapsFPFVG(double top,double bot)
    return(false);
   }
 
+//--- v2.30 : contexte temporel d'un signal (partagé par tous les modèles)
+void FillTimeContext(SSignal &s,datetime nowNY)
+  {
+   int m=CTimeManager::MinuteOfDay(nowNY);
+   MqlDateTime st;
+   TimeToStruct(nowNY,st);
+   s.dow=st.day_of_week; s.month=st.mon; s.hour=st.hour; s.minute=st.min;
+   s.session=CTimeManager::SessionLabel(nowNY); s.killzone=s.session;
+   s.sbWindow=CTimeManager::SilverBulletLabel(nowNY,InpSBMode);
+   s.macro=CTimeManager::MacroLabel(nowNY);
+   s.dayQ=g_q.dayQ; s.q90=g_q.q90; s.q22=g_q.q22;
+   s.shadowActive=(g_opr.shadow.complete && InMin(m,ParseHHMM(InpShadowEnd),11*60+30))?1:0;
+  }
+
+//--- v2.30 : contexte de marché d'un signal (s.dir et s.entry doivent être renseignés)
+void FillMarketContext(SSignal &s,datetime now,double bid,double ask)
+  {
+   s.pdPct=g_liq.PDPercent(s.entry);
+   s.pdLabel=(s.pdPct<0)?"":(s.pdPct>=50?"PREMIUM":"DISCOUNT");
+   s.weeklyProfile=ProfileOf(g_anchor);
+   s.amdx=CQuarterlyEngine::AMDX(g_q.dayQ);
+   double to=(g_q.sessTO>0)?g_q.sessTO:g_q.dayTO;
+   s.qAlign=(to>0 && ((s.dir==-1 && s.entry>to) || (s.dir==1 && s.entry<to)))?1:0;
+   s.weeklyBias=(int)InpWeeklyBias;
+   s.gapBias=g_gap.ClusterBias(bid);
+   s.trendDay=g_opr.IsTrendDay()?1:0;
+   s.newsWin=g_news.InWindow(now)?1:0;
+   s.spread=ask-bid;
+   double hi,lo; datetime th,tl;
+   s.dayRange=M1Extremes(_Symbol,g_tm.NYToServer(g_anchor-6*SEC_HOUR),now+60,hi,lo,th,tl)?hi-lo:0;
+   s.asiaRange=g_liq.asia.valid?g_liq.asia.Size():0;
+   s.londonRange=g_liq.london.valid?g_liq.london.Size():0;
+   s.nyRange=g_liq.nyam.valid?g_liq.nyam.Size():0;
+   s.dDaily=(g_dayOpen>0)?bid-g_dayOpen:0;
+   s.dWeekly=(g_gap.weekOpen>0)?bid-g_gap.weekOpen:0;
+   s.dMonthly=(g_liq.monthOpen>0)?bid-g_liq.monthOpen:0;
+   s.dMidnight=(g_opr.midnightOpen>0)?bid-g_opr.midnightOpen:0;
+  }
+
 //--- Construit le signal complet à partir d'un candidat. false = aucun modèle.
 bool BuildSignal(SSetup &c,SSignal &s)
   {
@@ -4177,7 +6792,6 @@ bool BuildSignal(SSetup &c,SSignal &s)
    bool hasRef;
    ref.Reset("");
    if(!ChooseModel(c,nowNY,px,model,dol,runner,expNY,ref,hasRef)) return(false);
-   int m=CTimeManager::MinuteOfDay(nowNY);
    MqlDateTime st;
    TimeToStruct(nowNY,st);
    s.model=model;
@@ -4185,13 +6799,9 @@ bool BuildSignal(SSetup &c,SSignal &s)
    s.tSrv=now;
    s.tNY=nowNY;
    s.uid=ModelCode(model)+"-"+StringFormat("%04d%02d%02d%02d%02d",st.year,st.mon,st.day,st.hour,st.min)+(c.dir==1?"L":"S");
+   s.fixedUid=false; s.extId=0; s.slot=-1; s.cancelPx=0; s.chaseR=0;
    //--- temps
-   s.dow=st.day_of_week; s.month=st.mon; s.hour=st.hour; s.minute=st.min;
-   s.session=CTimeManager::SessionLabel(nowNY); s.killzone=s.session;
-   s.sbWindow=CTimeManager::SilverBulletLabel(nowNY,InpSBMode);
-   s.macro=CTimeManager::MacroLabel(nowNY);
-   s.dayQ=g_q.dayQ; s.q90=g_q.q90; s.q22=g_q.q22;
-   s.shadowActive=(g_opr.shadow.complete && InMin(m,ParseHHMM(InpShadowEnd),11*60+30))?1:0;
+   FillTimeContext(s,nowNY);
    //--- liquidité / structure
    s.liqType=(c.liqType==LIQ_ERL_H1)?"ERL_H1":CLiquidityEngine::TypeName(c.liqType);
    s.liqWeight=c.liqWeight; s.liqPrice=c.liqPrice; s.tSweep=c.tSweep; s.tSweepNY=g_tm.ServerToNY(c.tSweep);
@@ -4256,31 +6866,12 @@ bool BuildSignal(SSetup &c,SSignal &s)
    s.bePts=InpBEPts;
    s.beTrigger=(InpBEAtR>0)?s.entry+c.dir*InpBEAtR*r:0;
    //--- contexte
-   s.pdPct=g_liq.PDPercent(s.entry);
-   s.pdLabel=(s.pdPct<0)?"":(s.pdPct>=50?"PREMIUM":"DISCOUNT");
+   FillMarketContext(s,now,bid,ask);
    double legR=MathAbs(c.extreme-c.legEnd);
    double ret=(legR>0)?MathAbs(s.entry-c.legEnd)/legR:0;
    s.ote=(ret>=0.62 && ret<=0.79)?1:0;
    s.smt=c.smt;
    s.stdvReached=hasRef?((c.dir==-1)?ref.ExtUp():ref.ExtDn()):0;
-   s.weeklyProfile=ProfileOf(g_anchor);
-   s.amdx=CQuarterlyEngine::AMDX(g_q.dayQ);
-   double to=(g_q.sessTO>0)?g_q.sessTO:g_q.dayTO;
-   s.qAlign=(to>0 && ((c.dir==-1 && s.entry>to) || (c.dir==1 && s.entry<to)))?1:0;
-   s.weeklyBias=(int)InpWeeklyBias;
-   s.gapBias=g_gap.ClusterBias(bid);
-   s.trendDay=g_opr.IsTrendDay()?1:0;
-   s.newsWin=g_news.InWindow(now)?1:0;
-   s.spread=ask-bid;
-   double hi,lo; datetime th,tl;
-   s.dayRange=M1Extremes(_Symbol,g_tm.NYToServer(g_anchor-6*SEC_HOUR),now+60,hi,lo,th,tl)?hi-lo:0;
-   s.asiaRange=g_liq.asia.valid?g_liq.asia.Size():0;
-   s.londonRange=g_liq.london.valid?g_liq.london.Size():0;
-   s.nyRange=g_liq.nyam.valid?g_liq.nyam.Size():0;
-   s.dDaily=(g_dayOpen>0)?bid-g_dayOpen:0;
-   s.dWeekly=(g_gap.weekOpen>0)?bid-g_gap.weekOpen:0;
-   s.dMonthly=(g_liq.monthOpen>0)?bid-g_liq.monthOpen:0;
-   s.dMidnight=(g_opr.midnightOpen>0)?bid-g_opr.midnightOpen:0;
    //--- expiration de l'ordre / flat
    datetime flatNY=g_anchor+ParseHHMM(InpFlatTime)*SEC_MIN;
    datetime expCap=nowNY+InpPendingMaxMin*SEC_MIN;
@@ -4331,22 +6922,25 @@ void Decide(SSignal &s,bool conflictThisBar)
    else if(InpPDFilter && ((s.dir==1 && s.pdLabel=="PREMIUM") || (s.dir==-1 && s.pdLabel=="DISCOUNT"))) why="premium/discount";
    else if(InpWeeklyBiasFilter && InpWeeklyBias!=WB_NONE && (int)InpWeeklyBias!=s.dir) why="contre le biais hebdo";
    if(why!="") { s.decision="REJECTED_FILTER"; s.reason=why; return; }
-   //--- 2. cible / RR
-   if(s.planRR<g_pMinRR-RR_EPS)
+   //--- 2. cible / RR (v2.30 : RR minimal propre à la famille du modèle)
+   double minRR=ModelMinRR(s.model);
+   if(s.planRR<=0 || s.planRR<minRR-RR_EPS)
      {
       s.decision="REJECTED_RISK";
-      s.reason=(s.planRR<=0)?"pas de cible (DOL)":"RR "+DoubleToString(s.planRR,2)+" < "+DoubleToString(g_pMinRR,1);
+      s.reason=(s.planRR<=0)?"pas de cible (DOL)":"RR "+DoubleToString(s.planRR,2)+" < "+DoubleToString(minRR,1);
       return;
      }
-   //--- 3. score ICT
-   if(s.score<g_pScoreMin-1e-6) { s.decision="REJECTED_SCORE"; s.reason="score "+DoubleToString(s.score,0); return; }
+   //--- 3. score ICT (v2.30 : informatif pour les modèles PDF)
+   if(ModelUsesScore(s.model) && s.score<g_pScoreMin-1e-6) { s.decision="REJECTED_SCORE"; s.reason="score "+DoubleToString(s.score,0); return; }
    //--- 4. ML (filtre seulement si le modèle est promu ET le mode FILTRE choisi)
    if(InpMLMode==ML_FILTER && g_ml.Ready() && g_ml.Promoted() && s.mlProb>=0 && s.mlProb<g_ml.Threshold())
      { s.decision="REJECTED_ML"; s.reason="p="+DoubleToString(s.mlProb,2); return; }
    //--- 5. risque
    string rs;
    if(!g_risk.CanTrade(rs)) { s.decision="REJECTED_RISK"; s.reason=rs; return; }
-   if(g_tradesToday>=InpMaxTradesDay) { s.decision="REJECTED_RISK"; s.reason="max trades/jour"; return; }
+   //--- v2.30 : seuls les trades exécutés et les ordres encore en attente comptent (un ordre expiré ne compte plus)
+   if(InpMaxTradesDay>0 && g_tm_trades.FilledToday()+g_tm_trades.PendingCount()>=InpMaxTradesDay)
+     { s.decision="REJECTED_RISK"; s.reason="max trades/jour"; return; }
    //--- 6. conflit : un seul biais à la fois, jamais buy + sell
    int ad=g_tm_trades.ActiveDirection();
    if(conflictThisBar || (ad!=0 && ad!=s.dir) || g_tm_trades.ActiveCount()>=InpMaxConcurrent)
@@ -4354,7 +6948,11 @@ void Decide(SSignal &s,bool conflictThisBar)
    if(!InpTradingEnabled) { s.decision="OBSERVED"; s.reason="trading desactive (input)"; return; }
    //--- 7. taille et exécution
    double lots=g_risk.CalcLots(s.dir==1,s.entry,s.sl);
-   if(lots<=0) { s.decision="REJECTED_RISK"; s.reason="lot < lot minimum"; return; }
+   if(lots<=0) { s.decision="REJECTED_RISK"; s.reason="lot < lot minimum (risque trop faible pour ce SL)"; return; }
+   string mnote;
+   lots=FitMargin(s.dir,lots,s.entry,mnote);
+   if(mnote!="") Print("Setup ",s.uid," : ",mnote);
+   if(lots<=0) { s.decision="REJECTED_RISK"; s.reason=mnote; return; }
    double loss=0;
    OrderCalcProfit(s.dir==1?ORDER_TYPE_BUY:ORDER_TYPE_SELL,_Symbol,lots,s.entry,s.sl,loss);
    SetExitWeights(s);
@@ -4368,6 +6966,489 @@ void Decide(SSignal &s,bool conflictThisBar)
 #endif
 //+------------------------------------------------------------------+
 //=== fin ModelRouter.mqh ===
+
+//=== début LondonBridge.mqh ===
+//+------------------------------------------------------------------+
+//|                                                LondonBridge.mqh  |
+//|  v2.30 : branche le moteur « OPR + FVG » (CLondonOprEngine) sur  |
+//|  la chaîne de décision d'ICT NAS.                                |
+//|                                                                  |
+//|  - le moteur reçoit les bougies M1 CLÔTURÉES une par une ;       |
+//|  - chaque « entrée autorisée » du moteur devient un signal       |
+//|    LONDON_OPR_PDF (OPR 1) ou OPRPDF_hhmm (autres OPR, si une     |
+//|    fenêtre est configurée) qui passe par Decide() : filtres,     |
+//|    RR du modèle, ML, risque, conflit, puis ordre limite ;        |
+//|  - chaque annulation du moteur (FVG invalidé, cible atteinte     |
+//|    avant l'entrée, fin de fenêtre, trade book clôturé) supprime  |
+//|    l'ordre en attente correspondant ;                            |
+//|  - l'identifiant du signal (LP + id du setup) est déterministe : |
+//|    après un redémarrage, un ordre déjà envoyé n'est pas doublé.  |
+//|  Le moteur ne lit jamais une bougie en formation.                |
+//+------------------------------------------------------------------+
+#ifndef ICTNAS_LONDONBRIDGE_MQH
+#define ICTNAS_LONDONBRIDGE_MQH
+
+#define LO_LAST_MSGS 3
+
+bool              g_loReady=false;     // historique rejoué
+bool              g_loLive=false;      // false pendant le rattrapage : aucun ordre, aucun journal
+datetime          g_loLastBar=0;       // dernière bougie M1 transmise au moteur (heure serveur)
+double            g_loTick=0;
+int               g_loJournal=INVALID_HANDLE;
+long              g_loQueue[];         // setups autorisés à transformer en signaux
+string            g_loLast[LO_LAST_MSGS];
+
+string LoUid(const long setupId) { return("LP"+IntegerToString(setupId)); }
+
+//--- nom du modèle : OPR 1 = London OPR du PDF ; autres OPR (si une fenêtre est configurée) : OPRPDF_hhmm
+string LoModel(const int slot)
+  {
+   if(slot==0) return(LO_MODEL);
+   string hm=OprHHMM(g_lo.cfg.slots[slot].calc.startMin);
+   StringReplace(hm,":","");
+   return("OPRPDF_"+hm);
+  }
+
+//--- arrondi au tick dans le sens qui garde le déclenchement identique au modèle book du moteur
+double LoNormUp(const double p)   { return(NormalizeDouble(MathCeil(p/g_loTick-1e-9)*g_loTick,_Digits)); }
+double LoNormDown(const double p) { return(NormalizeDouble(MathFloor(p/g_loTick+1e-9)*g_loTick,_Digits)); }
+
+void LoAdd(string &a[],const string s) { int n=ArraySize(a); ArrayResize(a,n+1); a[n]=s; }
+
+void LoResetState(void)
+  {
+   g_loReady=false;
+   g_loLive=false;
+   g_loLastBar=0;
+   ArrayResize(g_loQueue,0);
+   for(int i=0;i<LO_LAST_MSGS;i++) g_loLast[i]="";
+  }
+
+//+------------------------------------------------------------------+
+//| Configuration du moteur (inputs du groupe London OPR PDF)        |
+//+------------------------------------------------------------------+
+bool LoFail(string &err,const string msg) { err=msg; return(false); }
+
+bool LoParseSlot(OPRConfig &c,const int s,const string range,const bool trade,const string window,const string macros,string &err)
+  {
+   string name="OPR "+IntegerToString(s+1);
+   OPRTimeRange r;
+   if(!OprParseRange(range,r)) return(LoFail(err,name+" : plage '"+range+"' (format HH:MM-HH:MM)"));
+   c.slots[s].calc=r;
+   c.slots[s].tradeEnabled=false;
+   g_lo.slotName[s]=r.valid ? name+" "+OprHHMM(r.startMin) : name;
+   if(s==0 && r.valid) g_lo.slotName[s]="MOR "+OprHHMM(r.startMin);
+   if(!trade) return(true);
+   if(!r.valid) return(LoFail(err,name+" : modele d'entree actif mais plage de calcul vide"));
+   OPRTimeRange w;
+   if(!OprParseRange(window,w)) return(LoFail(err,name+" : fenetre '"+window+"'"));
+   if(!w.valid)
+      return(LoFail(err,name+" : modele d'entree actif sans fenetre de trading. Aucune regle n'est documentee pour cet OPR : "+
+                    "desactivez l'entree ou renseignez la fenetre et les macros."));
+   if(!g_lo.tm.FitsInSession(r) || !g_lo.tm.FitsInSession(w))
+      return(LoFail(err,name+" : plage ou fenetre a cheval sur 18:00 NY (debut de la journee de trading)"));
+   int calcEnd=g_lo.tm.SessionMinute(r.startMin)+r.Length();
+   if(g_lo.tm.SessionMinute(w.startMin)<calcEnd)
+      return(LoFail(err,name+" : la fenetre de trading commence avant la fin de l'OPR (le biais exige un OPR finalise)"));
+   OPRTimeRange ms[];
+   if(!OprParseRanges(macros,ms)) return(LoFail(err,name+" : macros '"+macros+"'"));
+   int n=ArraySize(ms);
+   if(n>OPR_MAX_MACROS) return(LoFail(err,name+StringFormat(" : %d macros maximum",OPR_MAX_MACROS)));
+   if(n==0 && InpLORequireMacro) return(LoFail(err,name+" : aucune macro alors que 'macro exigee' est actif"));
+   for(int i=0;i<n;i++)
+     {
+      int ws=g_lo.tm.SessionMinute(w.startMin);
+      int m0=g_lo.tm.SessionMinute(ms[i].startMin);
+      if(m0<ws || m0+ms[i].Length()>ws+w.Length())
+         Print("London OPR - attention : ",name," macro ",OprRangeText(ms[i])," deborde de la fenetre ",OprRangeText(w));
+      c.slots[s].macros[i]=ms[i];
+     }
+   c.slots[s].macroCount=n;
+   c.slots[s].window=w;
+   c.slots[s].tradeEnabled=true;
+   return(true);
+  }
+
+double LoTicks(const double pts) { return((pts>0 && g_loTick>0) ? pts/g_loTick : 1.0); }
+
+bool LoBuildConfig(OPRConfig &c,string &err)
+  {
+   c.Defaults();
+   //--- fuseau : toutes les heures de la stratégie sont en New York ; le serveur suit InpServerTZ
+   c.stratTz=OPR_STZ_NEW_YORK;
+   if(InpServerTZ==TZ_NY_PLUS_7)       { c.serverMode=OPR_SRV_GMT_US_DST; c.serverGmtSec=2*3600; }
+   else if(InpServerTZ==TZ_GMT_EU_DST) { c.serverMode=OPR_SRV_GMT_EU_DST; c.serverGmtSec=InpServerGMTOff*3600; }
+   else                                { c.serverMode=OPR_SRV_GMT_FIXED;  c.serverGmtSec=InpServerGMTOff*3600; }
+   c.dayStartMin=18*60;
+   g_lo.tm.Configure(c.stratTz,c.serverMode,c.serverGmtSec,c.dayStartMin);
+
+   if(!OprParseRange(InpLOAsiaRange,c.asia))     return(LoFail(err,"plage asiatique '"+InpLOAsiaRange+"'"));
+   if(!OprParseRange(InpLOLondonRange,c.london)) return(LoFail(err,"session de Londres '"+InpLOLondonRange+"'"));
+   if(!OprParseRange(InpLOObsWindow,c.observe))  return(LoFail(err,"fenetre d'observation '"+InpLOObsWindow+"'"));
+   if(!g_lo.tm.FitsInSession(c.asia))            return(LoFail(err,"la plage asiatique doit tenir dans la journee de trading (debut 18:00 NY)"));
+
+   if(!LoParseSlot(c,0,InpLOOpr1Range,InpLOOpr1Trade,InpLOOpr1Window,InpLOOpr1Macros,err)) return(false);
+   if(!LoParseSlot(c,1,InpLOOpr2Range,InpLOOpr2Trade,InpLOOpr2Window,InpLOOpr2Macros,err)) return(false);
+   if(!LoParseSlot(c,2,InpLOOpr3Range,InpLOOpr3Trade,InpLOOpr3Window,InpLOOpr3Macros,err)) return(false);
+   if(!LoParseSlot(c,3,InpLOOpr4Range,InpLOOpr4Trade,InpLOOpr4Window,InpLOOpr4Macros,err)) return(false);
+
+   c.asiaRule           =InpLOAsiaRule;
+   c.asiaMinGapTicks    =LoTicks(InpLOAsiaMinGapPts);
+   c.midnightMinGapTicks=LoTicks(InpLOMidMinGapPts);
+   c.entryTfMin         =InpLOEntryTF;
+   c.entryLevel         =InpLOEntryLevel;
+   c.minFvgTicks        =LoTicks(InpLOMinFvgPts);
+   c.liqM1              =InpLOLiqM1;
+   c.liqPivotM1         =MathMax(InpLOLiqPivotM1,1);
+   c.liqM15             =InpLOLiqM15;
+   c.liqPivotM15        =MathMax(InpLOLiqPivotM15,1);
+   c.liqAsia            =InpLOLiqAsia;
+   c.requireMacro       =InpLORequireMacro;
+   c.oneTradePerMacro   =InpLOOneTradePerMacro;
+   c.consolRequireSweep =InpLOConsolRequireSweep;
+   c.stopBufferTicks    =LoTicks(InpLOStopBufferPts);
+   c.tpStd              =InpLOTpStd;
+   c.graceMin           =MathMax(InpLOGraceMin,0);
+   c.minStop            =InpLOMinStopPts;
+   c.maxStop            =InpLOMaxStopPts;
+   c.maxOpenTrades      =1;
+   c.maxTradesDay       =0;
+   c.tickSize           =g_loTick;
+   if(InpLOTpStd<=0) return(LoFail(err,"la cible doit etre une deviation standard > 0"));
+   if(!InpLOLiqM1 && !InpLOLiqM15 && !InpLOLiqAsia) return(LoFail(err,"aucune source de liquidite : le modele ne pourrait jamais entrer"));
+   return(true);
+  }
+
+void LoLogConfig(void)
+  {
+   for(int s=0;s<OPR_MAX_SLOTS;s++)
+     {
+      if(!g_lo.cfg.slots[s].calc.valid) continue;
+      string m="";
+      for(int i=0;i<g_lo.cfg.slots[s].macroCount;i++) m+=(i>0?", ":"")+OprRangeText(g_lo.cfg.slots[s].macros[i]);
+      if(g_lo.cfg.slots[s].tradeEnabled)
+         Print("London OPR : ",g_lo.slotName[s]," ",OprRangeText(g_lo.cfg.slots[s].calc)," -> fenetre ",OprRangeText(g_lo.cfg.slots[s].window),
+               " macros ",m,StringFormat(" | FVG d'entree M%d, cible %.2f STD | modele %s",g_lo.cfg.entryTfMin,g_lo.cfg.tpStd,LoModel(s)));
+      else
+         Print("London OPR : ",g_lo.slotName[s]," ",OprRangeText(g_lo.cfg.slots[s].calc)," -> niveaux et contexte seulement (entree desactivee)");
+     }
+   string mode=!InpUseLondonOPR ? "desactive (niveaux et journal seulement)" :
+               (InpLondonMode==LONDON_PDF ? "PDF (moteur OPR + FVG)" : (InpLondonMode==LONDON_LEGACY ? "v2.22 (moteur en observation)" : "PDF + v2.22"));
+   Print("London OPR : implementation ",mode," | gestion ",(InpLondonManage==LM_PDF?"PDF (cible unique)":"ICT NAS (BE + partiel)"),
+         " | RR min ",DoubleToString(InpLondonMinRR,2));
+  }
+
+//+------------------------------------------------------------------+
+//| Persistance des OPR finalisés (variables globales du terminal)   |
+//+------------------------------------------------------------------+
+string LoGvName(const int s,const string what)
+  {
+   return("ICTNAS_"+IntegerToString(InpMagic)+"_"+_Symbol+"_LO"+IntegerToString(s)+"_"+what);
+  }
+
+void LoSaveOpr(const int s)
+  {
+   GlobalVariableSet(LoGvName(s,"D"),(double)g_lo.opr[s].m_st.day);
+   GlobalVariableSet(LoGvName(s,"H"),g_lo.opr[s].m_st.high);
+   GlobalVariableSet(LoGvName(s,"L"),g_lo.opr[s].m_st.low);
+  }
+
+void LoRestoreLevels(void)
+  {
+   if(!InpLOPersist) return;
+   for(int s=0;s<OPR_MAX_SLOTS;s++)
+     {
+      if(!GlobalVariableCheck(LoGvName(s,"D"))) continue;
+      int day=(int)GlobalVariableGet(LoGvName(s,"D"));
+      double h=GlobalVariableGet(LoGvName(s,"H"));
+      double l=GlobalVariableGet(LoGvName(s,"L"));
+      if(day!=g_lo.m_day) continue;
+      if(g_lo.opr[s].m_st.status==OPR_ST_FINAL)
+        {
+         if(MathAbs(g_lo.opr[s].m_st.high-h)>g_loTick*0.5 || MathAbs(g_lo.opr[s].m_st.low-l)>g_loTick*0.5)
+            Print("London OPR - attention : ",g_lo.slotName[s]," recalcule (",PxStr(g_lo.opr[s].m_st.high),"/",PxStr(g_lo.opr[s].m_st.low),
+                  ") different de la sauvegarde (",PxStr(h),"/",PxStr(l),") : historique du broker modifie, le recalcul est conserve");
+        }
+      else if(g_lo.RestoreOpr(s,day,h,l))
+        {
+         Print("London OPR : ",g_lo.slotName[s]," restaure depuis la sauvegarde (historique insuffisant) : ",PxStr(h)," / ",PxStr(l));
+         g_lo.jr.Clear();
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Journal (CSV + Experts) et événements du moteur                  |
+//+------------------------------------------------------------------+
+void LoOpenJournal(void)
+  {
+   if(!InpLOJournalCsv) return;
+   string fn="ICTNAS\\"+_Symbol+"_london_opr_journal.csv";
+   FolderCreate("ICTNAS",FILE_COMMON);
+   if(InpFreshDBInTester && MQLInfoInteger(MQL_TESTER)) FileDelete(fn,FILE_COMMON);
+   g_loJournal=FileOpen(fn,FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ|FILE_COMMON,';');
+   if(g_loJournal==INVALID_HANDLE) { Print("London OPR : impossible d'ouvrir le journal ",fn); return; }
+   FileSeek(g_loJournal,0,SEEK_END);
+   if(FileTell(g_loJournal)==0)
+      FileWrite(g_loJournal,"heure_serveur","heure_ny","code","opr","sens","raison","id","p1","p2","p3","p4","message");
+  }
+
+void LoCloseJournal(void)
+  {
+   if(g_loJournal!=INVALID_HANDLE) FileClose(g_loJournal);
+   g_loJournal=INVALID_HANDLE;
+  }
+
+void LoQueue(const long id)
+  {
+   for(int i=0;i<ArraySize(g_loQueue);i++) if(g_loQueue[i]==id) return;
+   int n=ArraySize(g_loQueue);
+   ArrayResize(g_loQueue,n+1);
+   g_loQueue[n]=id;
+  }
+
+//--- le moteur a abandonné le setup (ou son trade book est clôturé) : l'ordre en attente correspondant est supprimé
+void LoCancelReal(const long id,const int reason)
+  {
+   string uid=LoUid(id);
+   if(g_tm_trades.CancelUid(uid))
+      Print("London OPR : ordre ",uid," supprime (",(reason>0?OprReasonText(reason):"trade book cloture"),")");
+   g_log.CancelPending(uid,TimeCurrent());
+  }
+
+void LoOnEvent(const OJEvent &e)
+  {
+   if(e.code==J_OPR_FINAL && e.aux==0 && InpLOPersist && e.slot>=0) LoSaveOpr(e.slot);
+   if(!g_loLive) return;
+   if(e.code==J_ENTRY_AUTHORIZED) LoQueue(e.id);
+   if(e.code==J_SETUP_CANCELLED)  LoCancelReal(e.id,e.reason);
+   if(e.code==J_TRADE_CLOSED)     LoCancelReal(e.id,0);
+   string name=(e.slot>=0 && e.slot<OPR_MAX_SLOTS) ? g_lo.slotName[e.slot] : "";
+   string txt=OprEventText(e,name,_Digits);
+   string clock=OprHHMM(g_lo.tm.MinuteOfDay(e.st));
+   if(g_loJournal!=INVALID_HANDLE)
+     {
+      FileWrite(g_loJournal,TimeToString(e.srv,TIME_DATE|TIME_MINUTES),clock,e.code,e.slot+1,e.dir,e.reason,
+                IntegerToString(e.id),PxStr(e.p1),PxStr(e.p2),PxStr(e.p3),DoubleToString(e.p4,2),txt);
+      FileFlush(g_loJournal);
+     }
+   bool important=(e.code==J_OPR_FINAL || e.code==J_BIAS || e.code==J_BIAS_BREAKOUT || e.code==J_BIAS_CONSOL ||
+                   e.code==J_SWEEP || e.code==J_ENTRY_AUTHORIZED || e.code==J_ENTRY_REJECTED || e.code==J_SETUP_CANCELLED ||
+                   e.code==J_TRADE_FILLED || e.code==J_TRADE_CLOSED || e.code==J_ASIA_FVG);
+   if(!important) return;
+   for(int i=LO_LAST_MSGS-1;i>0;i--) g_loLast[i]=g_loLast[i-1];
+   g_loLast[0]=clock+" "+txt;
+   if(InpLOJournalPrint) Print("London OPR [",clock," NY] ",txt);
+  }
+
+void LoFeed(const MqlRates &r)
+  {
+   g_lo.ProcessBar(r.time,r.open,r.high,r.low,r.close);
+   for(int i=0;i<g_lo.jr.m_count;i++) LoOnEvent(g_lo.jr.m_ev[i]);
+  }
+
+//+------------------------------------------------------------------+
+//| FPFVG Asie / Midnight : références du moteur                     |
+//+------------------------------------------------------------------+
+void LoFvgToSFVG(const long id,SFVG &out)
+  {
+   out.Clear();
+   int fi=g_lo.FindFvgIdx(id);
+   if(fi<0) return;
+   out.valid =true;
+   out.dir   =g_lo.fvgs.m_list[fi].dir;
+   out.top   =g_lo.fvgs.m_list[fi].hi;
+   out.bottom=g_lo.fvgs.m_list[fi].lo;
+   out.t1    =g_lo.fvgs.m_list[fi].c1Srv;
+   out.t3    =(datetime)((long)g_lo.fvgs.m_list[fi].formedSrv-(long)g_lo.fvgs.m_list[fi].tfMin*60);
+  }
+
+void LoSyncFPFVG(void)
+  {
+   if(!InpFPFVGFromEngine) return;
+   LoFvgToSFVG(g_lo.m_asiaFvgId,g_fpAsia);
+   LoFvgToSFVG(g_lo.m_midFvgId,g_fpMid);
+  }
+
+//+------------------------------------------------------------------+
+//| Historique et nouvelles bougies                                  |
+//+------------------------------------------------------------------+
+bool LoWarmup(void)
+  {
+   int avail=Bars(_Symbol,PERIOD_M1);
+   if(avail<200) return(false);
+   int want=MathMin(MathMax(InpLOWarmupDays,1)*1440+120,avail-1);
+   MqlRates r[];
+   int got=CopyRates(_Symbol,PERIOD_M1,1,want,r);
+   if(got<200) return(false);
+   g_loLive=false;
+   for(int i=0;i<got;i++) LoFeed(r[i]);
+   g_loLastBar=r[got-1].time;
+   LoRestoreLevels();
+   g_loLive=true;
+   g_loReady=true;
+   //--- setup armé pendant le rattrapage : traité comme une autorisation (l'uid empêche tout doublon)
+   for(int s=0;s<OPR_MAX_SLOTS;s++)
+      if(g_lo.su[s].state==SU_ARMED) LoQueue(g_lo.su[s].setupId);
+   LoSyncFPFVG();
+   PrintFormat("London OPR : %d bougies M1 rejouees, etat du jour : %s",got,OprSetupStateText(g_lo.su[0].state));
+   return(true);
+  }
+
+void LoProcessNewBars(void)
+  {
+   if(!g_loReady && !LoWarmup()) return;
+   datetime lastClosed=iTime(_Symbol,PERIOD_M1,1);
+   if(lastClosed==0 || lastClosed<=g_loLastBar) return;
+   int shift=iBarShift(_Symbol,PERIOD_M1,g_loLastBar,true);
+   int count=(shift>1) ? shift-1 : 1;
+   if(shift<0) count=500;
+   if(count>5000) count=5000;
+   MqlRates r[];
+   int got=CopyRates(_Symbol,PERIOD_M1,1,count,r);
+   for(int i=0;i<got;i++)
+     {
+      if(r[i].time<=g_loLastBar) continue;
+      LoFeed(r[i]);
+      g_loLastBar=r[i].time;
+     }
+   LoSyncFPFVG();
+  }
+
+//+------------------------------------------------------------------+
+//| Setup armé du moteur -> signal ICT NAS                           |
+//+------------------------------------------------------------------+
+//--- extension STDV déjà atteinte par l'OPR de référence (contexte enregistré)
+double LoStdvReached(const int slot,const int dir)
+  {
+   if(slot==0) return(dir==-1 ? g_opr.mor.ExtUp()     : g_opr.mor.ExtDn());
+   if(slot==1) return(dir==-1 ? g_opr.opr0700.ExtUp() : g_opr.opr0700.ExtDn());
+   if(slot==2) return(dir==-1 ? g_opr.opr0930.ExtUp() : g_opr.opr0930.ExtDn());
+   return(dir==-1 ? g_opr.opr1330.ExtUp() : g_opr.opr1330.ExtDn());
+  }
+
+bool LoBuildSignal(const int slot,SSignal &s)
+  {
+   datetime now=TimeCurrent();
+   datetime nowNY=g_tm.ServerToNY(now);
+   double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID),ask=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   int dir=g_lo.su[slot].dir;
+   long id=g_lo.su[slot].setupId;
+   if(dir==0 || id==0) return(false);
+   s.model=LoModel(slot);
+   s.dir=dir;
+   s.tSrv=now;
+   s.tNY=nowNY;
+   s.uid=LoUid(id);
+   s.fixedUid=true;
+   s.extId=id;
+   s.slot=slot;
+   FillTimeContext(s,nowNY);
+   //--- liquidité prise (règle du PDF : « la macro doit commencer par prendre une liquidité »)
+   int src=g_lo.su[slot].sweepSrc;
+   s.liqType=(src==LIQ_SRC_ASIA) ? "ASIA" : (src==LIQ_SRC_M15 ? "SWING_M15" : (src==LIQ_SRC_M1 ? "SWING_M1" : "OPR_BREAKOUT"));
+   s.liqWeight=(src==LIQ_SRC_ASIA) ? CLiquidityEngine::Weight(LIQ_ASIA) : (src==LIQ_SRC_M15 ? CLiquidityEngine::Weight(LIQ_SWING_M15) : (src==LIQ_SRC_M1 ? 2 : 0));
+   s.liqPrice=g_lo.su[slot].sweepLevel;
+   s.tSweep=(datetime)g_lo.SrvOf(g_lo.su[slot].sweepT);
+   s.tSweepNY=g_tm.ServerToNY(s.tSweep);
+   //--- structure : le PDF n'exige ni MSS/CISD ni displacement minimal
+   s.mss=0; s.cisd=0; s.disp=0; s.dispBodyATR=0; s.dispCandles=0; s.dispSize=0;
+   s.atr1=g_atr.Get(PERIOD_M1); s.atr5=g_atr.Get(PERIOD_M5); s.atr15=g_atr.Get(PERIOD_M15);
+   s.ifvg=0; s.breaker=0; s.unicorn=0; s.ob=0;
+   s.fvgTop=g_lo.su[slot].fvgHi;
+   s.fvgBot=g_lo.su[slot].fvgLo;
+   s.fvgCE=(s.fvgTop+s.fvgBot)/2.0;
+   s.fvgSize=s.fvgTop-s.fvgBot;
+   int fi=g_lo.FindFvgIdx(g_lo.su[slot].fvgId);
+   s.tFVG=(fi>=0) ? g_lo.fvgs.m_list[fi].c1Srv : now;
+   s.fvgType=OverlapsFPFVG(s.fvgTop,s.fvgBot) ? "FPFVG" : "CLASSIC";
+   //--- plan du moteur : limite au bord du FVG, SL au-delà du swing, cible ±k STD de l'OPR
+   s.market=false;
+   s.entry=(dir<0) ? LoNormUp(g_lo.su[slot].entry) : LoNormDown(g_lo.su[slot].entry);
+   s.sl   =(dir<0) ? LoNormUp(g_lo.su[slot].sl)    : LoNormDown(g_lo.su[slot].sl);
+   double tp=(dir<0) ? LoNormDown(g_lo.su[slot].tp) : LoNormUp(g_lo.su[slot].tp);
+   if(dir*(s.entry-s.sl)<=0 || dir*(tp-s.entry)<=0) return(false);
+   s.inval=0;
+   s.riskPts=MathAbs(s.entry-s.sl);
+   double r=s.riskPts;
+   s.tp1=tp; s.tp2=tp; s.tp3=tp;
+   if(InpLondonManage==LM_ICTNAS && g_pTP1R>0 && dir*(tp-(s.entry+dir*g_pTP1R*r))>0) s.tp1=s.entry+dir*g_pTP1R*r;
+   s.planRR=(r>0) ? MathAbs(tp-s.entry)/r : 0;
+   s.bePts=InpBEPts;
+   s.beTrigger=(InpLondonManage==LM_ICTNAS && InpBEAtR>0) ? s.entry+dir*InpBEAtR*r : 0;
+   //--- PDF Macro : « si ta cible est prise avant que le marché t'ait donné une entrée, pas de trade »
+   s.cancelPx=tp;
+   s.chaseR=InpLOMaxChaseR;
+   //--- contexte (mêmes colonnes que les autres modèles)
+   FillMarketContext(s,now,bid,ask);
+   s.ote=0;
+   s.smt=-1;
+   s.stdvReached=LoStdvReached(slot,dir);
+   //--- expiration : fin de la fenêtre du moteur (+ grâce), jamais après le flat
+   datetime flatSrv=g_tm.NYToServer(g_anchor+ParseHHMM(InpFlatTime)*SEC_MIN);
+   datetime expSrv=(datetime)g_lo.SrvOf(g_lo.su[slot].winE+(long)g_lo.cfg.graceMin*60);
+   s.expirySrv=(expSrv<flatSrv) ? expSrv : flatSrv;
+   s.flatSrv=flatSrv;
+   s.mlProb=-1; s.mlModel=""; s.score=0; s.taken=false;
+   s.decision=""; s.reason="";
+   return(true);
+  }
+
+//--- signaux London de la bougie (appelé par ProcessSetups) ; renvoie le nouveau nombre de signaux
+int LoCollectSignals(SSignal &sigs[],int k)
+  {
+   int n=ArraySize(g_loQueue);
+   for(int q=0;q<n;q++)
+     {
+      long id=g_loQueue[q];
+      int s=(int)(id%4);
+      if(s<0 || s>=OPR_MAX_SLOTS) continue;
+      if(g_lo.su[s].state!=SU_ARMED || g_lo.su[s].setupId!=id) continue;    // déjà exécuté ou annulé par le moteur
+      if(!InpUseLondonOPR || InpLondonMode==LONDON_LEGACY) continue;         // moteur en observation (niveaux, journal)
+      string uid=LoUid(id);
+      if(g_tm_trades.ExistsOnServer(uid)) continue;                           // déjà envoyé avant un redémarrage
+      SSignal sg;
+      if(!LoBuildSignal(s,sg)) continue;
+      ArrayResize(sigs,k+1);
+      sigs[k]=sg;
+      k++;
+     }
+   ArrayResize(g_loQueue,0);
+   return(k);
+  }
+
+//+------------------------------------------------------------------+
+//| Panneau et diagnostic                                            |
+//+------------------------------------------------------------------+
+void LoPanelLines(string &L[])
+  {
+   string mode=!InpUseLondonOPR ? "OFF" : (InpLondonMode==LONDON_PDF ? "PDF" : (InpLondonMode==LONDON_LEGACY ? "v2.22" : "PDF+v2.22"));
+   if(!g_loReady) { LoAdd(L,"London OPR "+mode+" : rattrapage de l'historique en attente"); return; }
+   string lv=(g_lo.opr[0].m_st.status==OPR_ST_FINAL) ? PxStr(g_lo.opr[0].m_st.high)+"/"+PxStr(g_lo.opr[0].m_st.low)
+                                                       : OprRangeStatusText(g_lo.opr[0].m_st.status);
+   LoAdd(L,"London OPR "+mode+" | "+g_lo.slotName[0]+" "+lv+" | biais "+OprDirText(g_lo.su[0].dir)+
+           " | book "+IntegerToString(g_lo.stats.trades)+" trades "+DoubleToString(g_lo.stats.netR,1)+"R");
+   LoAdd(L,"  "+OprSetupStateText(g_lo.su[0].state));
+   for(int i=0;i<LO_LAST_MSGS;i++) if(g_loLast[i]!="") LoAdd(L,"  "+g_loLast[i]);
+  }
+
+void LoDiagLines(string &a[])
+  {
+   ArrayResize(a,0);
+   LoAdd(a,"6. London OPR PDF (moteur) : jours "+IntegerToString(g_lo.stats.days)+" | biais achat "+IntegerToString(g_lo.stats.biasBuy)+
+           " / vente "+IntegerToString(g_lo.stats.biasSell)+" / consolidation "+IntegerToString(g_lo.stats.biasConsol));
+   LoAdd(a,"   prises de liquidite "+IntegerToString(g_lo.stats.sweeps)+" | FVG candidats "+IntegerToString(g_lo.stats.candidates)+
+           " | setups armes "+IntegerToString(g_lo.stats.armed)+" | trades book "+IntegerToString(g_lo.stats.trades)+
+           " ("+DoubleToString(g_lo.stats.netR,1)+"R)");
+   LoAdd(a,"   rejets : sans sweep "+IntegerToString(g_lo.stats.rejected[R_NO_SWEEP])+" | hors macro "+IntegerToString(g_lo.stats.rejected[R_OUTSIDE_MACRO])+
+           " | macro deja tradee "+IntegerToString(g_lo.stats.rejected[R_MACRO_USED])+" | cible deja atteinte "+IntegerToString(g_lo.stats.rejected[R_TARGET_REACHED])+
+           " | OPR non finalise "+IntegerToString(g_lo.stats.rejected[R_NO_OPR])+" | position book ouverte "+IntegerToString(g_lo.stats.rejected[R_IN_POSITION]));
+  }
+
+#endif
+//+------------------------------------------------------------------+
+//=== fin LondonBridge.mqh ===
+
 
 //+------------------------------------------------------------------+
 //| Aides                                                            |
@@ -4420,6 +7501,7 @@ void StartDay(datetime anchor)
    g_gap.NewDay(anchor);
    g_q.NewDay(anchor);
    g_risk.NewDay();
+   g_tm_trades.NewDay();
    g_draw.NewDay(anchor);
    g_smt.Check();
    g_setup.NewDay();
@@ -4719,13 +7801,15 @@ void UpdatePanel(datetime nowNY,double bid)
              (lots>0?DoubleToString(lots,2):"sous le lot min")+" | Jour "+Signed(g_risk.DayPnLPct(),2)+"%");
    AddLine(L,"Trading: "+(can?"autorise":"BLOQUE ("+why+")")+" | DB: "+(g_db.IsOpen()?"SQLite OK":"inactive"));
    AddLine(L,"Chasses actives: "+IntegerToString(g_setup.ActiveHunts())+" | Setups jour: "+IntegerToString(g_setupsToday)+
-             " | Trades: "+IntegerToString(g_tradesToday)+"/"+IntegerToString(InpMaxTradesDay));
+             " | Trades executes: "+IntegerToString(g_tm_trades.FilledToday())+"/"+IntegerToString(InpMaxTradesDay)+
+             " | en attente: "+IntegerToString(g_tm_trades.PendingCount()));
    AddLine(L,"Signaux suivis: "+IntegerToString(g_log.Tracking())+" | enregistres: "+IntegerToString(g_log.Written())+
              " | Score min "+DoubleToString(g_pScoreMin,0)+" (poids "+g_scorer.Source()+")");
    AddLine(L,(InpMLMode==ML_OFF)?"ML : desactive":g_ml.Status()+(InpMLMode==ML_OBSERVE?" [observation]":" [filtre]"));
    AddLine(L,g_news.Status());
    if(g_fpAsia.valid) AddLine(L,"FPFVG Asie "+(g_fpAsia.dir==1?"haussier ":"baissier ")+PxStr(g_fpAsia.bottom)+"-"+PxStr(g_fpAsia.top));
    if(g_fpMid.valid)  AddLine(L,"FPFVG Midnight "+(g_fpMid.dir==1?"haussier ":"baissier ")+PxStr(g_fpMid.bottom)+"-"+PxStr(g_fpMid.top));
+   LoPanelLines(L);
    for(int i=ArraySize(g_recent)-1;i>=0;i--) AddLine(L,"> "+g_recent[i]);
    if(g_tm_trades.LastMessage()!="") AddLine(L,"Dernier ordre: "+g_tm_trades.LastMessage());
    g_panel.Show(L);
@@ -4811,23 +7895,25 @@ void DrawSignal(SSignal &s)
 
 //+------------------------------------------------------------------+
 //| Profil d'entrée -> paramètres effectifs                          |
+//| v2.30 : RR minimal 2 (règle validée « RR min 2 ») pour les       |
+//| modèles ICT ; CRT : InpCRTMinRR ; London PDF : InpLondonMinRR.    |
 //+------------------------------------------------------------------+
 void ApplyProfile(void)
   {
    switch(InpProfile)
      {
       case PROFILE_STRICT:
-         g_pScoreMin=60; g_pMinRR=3.0; g_pFallbackRR=0; g_pMaxRR=0; g_pSLFloorATR=0; g_pSLCapATR=0; g_pTP1R=2.0;
+         g_pScoreMin=60; g_pMinRR=2.0; g_pFallbackRR=0; g_pMaxRR=0; g_pSLFloorATR=0; g_pSLCapATR=0; g_pTP1R=2.0;
          g_pMinFVG=5; g_pDispMult=1.5; g_pHuntBars=30; g_pRequireDisp=true; g_pMarket=false;
          g_pMomentum=false; g_pKillzone=false;
          break;
       case PROFILE_STANDARD:
-         g_pScoreMin=25; g_pMinRR=3.0; g_pFallbackRR=3.0; g_pMaxRR=5.0; g_pSLFloorATR=0.8; g_pSLCapATR=2.5; g_pTP1R=2.0;
+         g_pScoreMin=25; g_pMinRR=2.0; g_pFallbackRR=3.0; g_pMaxRR=5.0; g_pSLFloorATR=0.8; g_pSLCapATR=2.5; g_pTP1R=2.0;
          g_pMinFVG=3; g_pDispMult=1.2; g_pHuntBars=45; g_pRequireDisp=true; g_pMarket=false;
          g_pMomentum=InpUseMomentum; g_pKillzone=InpUseKillzoneModel;
          break;
       case PROFILE_AGGRESSIVE:
-         g_pScoreMin=0; g_pMinRR=3.0; g_pFallbackRR=3.0; g_pMaxRR=4.0; g_pSLFloorATR=0.8; g_pSLCapATR=2.5; g_pTP1R=2.0;
+         g_pScoreMin=0; g_pMinRR=2.0; g_pFallbackRR=3.0; g_pMaxRR=4.0; g_pSLFloorATR=0.8; g_pSLCapATR=2.5; g_pTP1R=2.0;
          g_pMinFVG=2; g_pDispMult=1.0; g_pHuntBars=60; g_pRequireDisp=false; g_pMarket=true;
          g_pMomentum=InpUseMomentum; g_pKillzone=InpUseKillzoneModel;
          break;
@@ -4838,8 +7924,8 @@ void ApplyProfile(void)
          g_pRequireDisp=InpRequireDisp; g_pMarket=InpMarketEntry;
          g_pMomentum=InpUseMomentum; g_pKillzone=InpUseKillzoneModel;
      }
-   PrintFormat("Profil %s : score>=%.0f RR>=%.1f cible secours %.1fR SL %.1f-%.1f ATR M5 allegement 50%% a %.1fR FVG>=%.1f disp %.1f ATR %s | momentum %s | killzone %s",
-               EnumToString(InpProfile),g_pScoreMin,g_pMinRR,g_pFallbackRR,g_pSLFloorATR,g_pSLCapATR,g_pTP1R,
+   PrintFormat("Profil %s : score>=%.0f RR>=%.1f (CRT %.1f, London PDF %.1f) cible secours %.1fR SL %.1f-%.1f ATR M5 allegement 50%% a %.1fR FVG>=%.1f disp %.1f ATR %s | momentum %s | killzone %s",
+               EnumToString(InpProfile),g_pScoreMin,g_pMinRR,InpCRTMinRR,InpLondonMinRR,g_pFallbackRR,g_pSLFloorATR,g_pSLCapATR,g_pTP1R,
                g_pMinFVG,g_pDispMult,g_pMarket?"MARCHE":"LIMITE CE",g_pMomentum?"on":"off",g_pKillzone?"on":"off");
   }
 
@@ -4897,6 +7983,76 @@ void ScanMomentum(void)
    g_lastMomentum=now;
   }
 
+//+------------------------------------------------------------------+
+//| v2.22 : l'EA a-t-il le droit de trader ? (cause n°1 de "aucune   |
+//| entrée" en live : bouton Algo Trading / option de l'EA)          |
+//+------------------------------------------------------------------+
+string g_tradeReady="";
+bool TradeReadiness(void)
+  {
+   string why="";
+   if(!MQLInfoInteger(MQL_TESTER) && !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+      why+="Bouton 'Algo Trading' desactive dans le terminal. ";
+   if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+      why+="Option 'Allow Algo Trading' decochee dans les proprietes de l'EA (onglet Commun). ";
+   if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+      why+="Trading interdit sur ce compte (mot de passe investisseur ?). ";
+   if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
+      why+="Le broker interdit les EA sur ce compte. ";
+   long tm=SymbolInfoInteger(_Symbol,SYMBOL_TRADE_MODE);
+   if(tm==SYMBOL_TRADE_MODE_DISABLED)  why+="Trading desactive sur "+_Symbol+". ";
+   if(tm==SYMBOL_TRADE_MODE_CLOSEONLY) why+="Symbole "+_Symbol+" en cloture seule. ";
+   if(tm==SYMBOL_TRADE_MODE_LONGONLY)  why+="Symbole en achat seul. ";
+   if(tm==SYMBOL_TRADE_MODE_SHORTONLY) why+="Symbole en vente seule. ";
+   g_tradeReady=(why=="")?"Trading autorise":"BLOQUE : "+why;
+   if(why!="") { Print("!!! ",g_tradeReady); if(!MQLInfoInteger(MQL_TESTER)) Alert("ICT NAS : ",g_tradeReady); }
+   return(why=="");
+  }
+
+//--- Réduit le lot jusqu'à ce que la marge requise tienne dans x % de la marge libre
+double FitMargin(int dir,double lots,double price,string &note)
+  {
+   note="";
+   double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP),vmin=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   if(step<=0) step=0.01;
+   double freeM=AccountInfoDouble(ACCOUNT_MARGIN_FREE)*InpMaxMarginPct/100.0;
+   ENUM_ORDER_TYPE t=(dir==1)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+   double m=0;
+   if(!OrderCalcMargin(t,_Symbol,lots,price,m) || m<=freeM) return(lots);
+   double m1=0;
+   if(!OrderCalcMargin(t,_Symbol,1.0,price,m1) || m1<=0) return(lots);
+   double fit=MathFloor(freeM/m1/step+1e-9)*step;
+   if(fit<vmin) { note="marge insuffisante (lot min demande "+DoubleToString(vmin*m1,2)+", libre "+DoubleToString(freeM,2)+")"; return(0.0); }
+   note="lot reduit "+DoubleToString(lots,2)+" -> "+DoubleToString(fit,2)+" (marge)";
+   return(NormalizeDouble(fit,8));
+  }
+
+//--- Testeur : ordre de test au lot minimum pour vérifier toute la chaîne d'exécution
+bool g_selfTestDone=false;
+void SelfTest(void)
+  {
+   if(g_selfTestDone || !InpSelfTest || !MQLInfoInteger(MQL_TESTER)) return;
+   g_selfTestDone=true;
+   CTrade t;
+   t.SetExpertMagicNumber(InpMagic+999);
+   t.SetTypeFillingBySymbol(_Symbol);
+   double v=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   if(!t.Buy(v,_Symbol,0,0,0,"ICTNAS self-test"))
+     {
+      Print("!!! ORDRE DE TEST REFUSE : ",t.ResultRetcode()," ",t.ResultRetcodeDescription(),
+            " -> l'EA ne pourra pas trader tant que ce probleme n'est pas regle.");
+      return;
+     }
+   ulong pos=0;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong tk=PositionGetTicket(i);
+      if(tk>0 && PositionGetInteger(POSITION_MAGIC)==InpMagic+999) { pos=tk; break; }
+     }
+   if(pos>0) t.PositionClose(pos);
+   Print("Ordre de test OK (",DoubleToString(v,2)," lot ouvert puis ferme) : la chaine d'execution fonctionne.");
+  }
+
 void DiagCount(const string key)
   {
    for(int i=0;i<ArraySize(g_diagKey);i++)
@@ -4919,17 +8075,36 @@ void PrintDiagnostic(const string title)
    Print("4. Setups hors fenetre / hors condition de modele (non enregistres) : ",g_nNoModel);
    Print("5. Decisions sur les setups valides :");
    for(int i=0;i<ArraySize(g_diagKey);i++) Print("     ",g_diagKey[i]," : ",g_diagCnt[i]);
+   string lo[];
+   LoDiagLines(lo);
+   for(int i=0;i<ArraySize(lo);i++) Print(lo[i]);
    if(g_setup.nSweeps==0)
       Print("   -> Aucune liquidite prise : verifier le mode de ticks du testeur (utiliser 'Every tick based on real ticks') et l'historique.");
    else if(g_setup.nEmitted==0)
       Print("   -> Des sweeps mais aucun setup complet : essayer InpProfile=Agressif.");
+   Print("   ",g_tradeReady);
+   //--- v2.22 : copie dans Common\Files\ICTNAS\diagnostic.txt (facile à retrouver et à envoyer)
+   FolderCreate("ICTNAS",FILE_COMMON);
+   int h=FileOpen("ICTNAS\\diagnostic.txt",FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h!=INVALID_HANDLE)
+     {
+      FileWriteString(h,"DIAGNOSTIC "+title+" | "+_Symbol+" | v"+ICTNAS_VERSION+" | profil "+EnumToString(InpProfile)+"\r\n");
+      FileWriteString(h,g_tradeReady+"\r\n");
+      FileWriteString(h,"Liquidites prises : "+IntegerToString(g_setup.nSweeps)+" | ERL H1 : "+IntegerToString(g_setup.nERL)+"\r\n");
+      FileWriteString(h,"Abandons : pas de MSS/CISD="+IntegerToString(g_setup.nTimeout)+" | sans displacement="+IntegerToString(g_setup.nNoDisp)+
+                        " | sans FVG="+IntegerToString(g_setup.nNoFVG)+"\r\n");
+      FileWriteString(h,"Setups complets : "+IntegerToString(g_setup.nEmitted)+" | hors modele : "+IntegerToString(g_nNoModel)+"\r\n");
+      for(int i=0;i<ArraySize(g_diagKey);i++) FileWriteString(h,"  "+g_diagKey[i]+" : "+IntegerToString(g_diagCnt[i])+"\r\n");
+      for(int i=0;i<ArraySize(lo);i++) FileWriteString(h,lo[i]+"\r\n");
+      FileClose(h);
+      Print("   Diagnostic ecrit dans : ",TerminalInfoString(TERMINAL_COMMONDATA_PATH),"\\Files\\ICTNAS\\diagnostic.txt");
+     }
   }
 
 void ProcessSetups(void)
   {
    SSetup c[];
    int n=g_setup.PopSetups(c);
-   if(n==0) return;
    SSignal sigs[];
    int k=0;
    for(int i=0;i<n;i++)
@@ -4948,6 +8123,9 @@ void ProcessSetups(void)
       sigs[k]=s;
       k++;
      }
+   //--- v2.30 : setups autorisés par le moteur London OPR (PDF) sur cette bougie
+   k=LoCollectSignals(sigs,k);
+   if(k==0) return;
    //--- tri par priorité de modèle (insertion)
    for(int i=1;i<k;i++)
      {
@@ -4960,7 +8138,7 @@ void ProcessSetups(void)
    for(int i=0;i<k;i++)
      {
       g_setupsToday++;
-      sigs[i].uid+=IntegerToString(g_setupsToday);
+      if(!sigs[i].fixedUid) sigs[i].uid+=IntegerToString(g_setupsToday);
       Decide(sigs[i],takenThisBar);
       string rk=sigs[i].decision;
       if(sigs[i].decision!="TAKEN" && sigs[i].reason!="")
@@ -4971,6 +8149,10 @@ void ProcessSetups(void)
          else if(StringFind(rr,"p=")==0) rr="proba ML < seuil";
          else if(StringFind(rr,"SL trop large")==0) rr="SL trop large";
          else if(StringFind(rr,"ordre refuse")==0) rr="ordre refuse";
+         else if(StringFind(rr,"marge insuffisante")==0) rr="marge insuffisante";
+         else if(StringFind(rr,"lot < lot minimum")==0) rr="lot < lot minimum";
+         else if(StringFind(rr,"DD total")==0) rr="DD total atteint";
+         else if(StringFind(rr,"setup manque")==0) rr="setup manque (prix trop loin)";
          rk+=" ("+rr+")";
         }
       DiagCount(rk);
@@ -5013,6 +8195,10 @@ void CheckDayGuards(datetime nowNY)
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   //--- v2.30 : MT5 ne réinitialise pas les globales sur un changement de graphique / de paramètres
+   g_anchor=0; g_lastM1=0; g_lastM15=0; g_lastM5=0; g_lastH1=0; g_lastExec=0;
+   g_setupsToday=0; g_tradesToday=0; g_nNoModel=0;
+   ArrayResize(g_recent,0); ArrayResize(g_diagKey,0); ArrayResize(g_diagCnt,0);
    g_tm.Init(InpServerTZ,InpServerGMTOff);
    g_tzMsg=g_tm.CheckLiveOffset(g_tzOk);
    Print(g_tzMsg);
@@ -5032,6 +8218,23 @@ int OnInit()
      }
    if(InpRiskPct>RISK_HARD_CAP_PCT)
       Print("Risque demande ",InpRiskPct,"% > plafond ",RISK_HARD_CAP_PCT,"% : plafonne.");
+   if(InpDailyLossPct>0 && InpDailyLossPct<InpRiskPct*1.999)
+      Print("Attention : stop journalier ",InpDailyLossPct,"% < 2 x risque ",InpRiskPct,"% -> une seule perte arrete la journee.");
+
+   //--- v2.30 : moteur London OPR (PDF) - configuration vérifiée avant tout le reste
+   g_loTick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(g_loTick<=0) g_loTick=_Point;
+   LoResetState();
+   OPRConfig oc;
+   string oerr="";
+   if(!LoBuildConfig(oc,oerr))
+     {
+      Print("London OPR - parametre invalide : ",oerr);
+      return(INIT_PARAMETERS_INCORRECT);
+     }
+   g_lo.logContext=true;
+   g_lo.logAllFvg=false;
+   g_lo.Init(oc);
 
    ParseList(InpWeeklyProfile,g_profile);
    g_atr.Init(_Symbol);
@@ -5066,7 +8269,13 @@ int OnInit()
 
    g_fpAsia.Clear();
    g_fpMid.Clear();
-   Print("ICT NAS Institutional ",ICTNAS_VERSION," | ",_Symbol," | ordres ",(InpTradingEnabled?"ACTIVES":"desactives (observation)"));
+   //--- v2.30 : journal du moteur London OPR et rattrapage de l'historique M1
+   LoCloseJournal();
+   LoOpenJournal();
+   LoLogConfig();
+   LoWarmup();
+   TradeReadiness();
+   Print("ICT NAS Institutional ",ICTNAS_VERSION," | ",_Symbol," | ordres ",(InpTradingEnabled?"ACTIVES":"desactives (observation)")," | ",g_tradeReady);
    Print("Contrat : ",g_risk.SpecString());
    Print(g_smt.Status());
    return(INIT_SUCCEEDED);
@@ -5085,6 +8294,7 @@ void OnDeinit(const int reason)
       LogDay(nowNY>=g_anchor+17*SEC_HOUR);
      }
    g_db.Close();
+   LoCloseJournal();
    g_liq.Deinit();
    g_atr.Deinit();
    g_ml.Release();
@@ -5104,6 +8314,7 @@ void OnTick()
      {
       if(g_anchor>0)
         {
+         TradeReadiness();
          LogDay(true);
          if(InpDailyDiagnostic) PrintDiagnostic("cumul au "+DateStr(g_anchor));
         }
@@ -5112,6 +8323,7 @@ void OnTick()
 
    double bid=SymbolInfoDouble(_Symbol,SYMBOL_BID);
    if(bid<=0) return;
+   SelfTest();
    g_liq.OnTick(bid,now);
    g_setup.OnSweeps();
    g_tm_trades.OnTick();
@@ -5138,7 +8350,9 @@ void OnTick()
          MqlRates o;
          if(FirstBarAtOrAfter(_Symbol,g_tm.NYToServer(g_anchor-6*SEC_HOUR),3*SEC_HOUR,o)) g_dayOpen=o.open;
         }
-      UpdateFPFVG(now);
+      //--- v2.30 : moteur London OPR (PDF) sur les bougies M1 clôturées ; FPFVG du moteur ou calcul v2.22
+      LoProcessNewBars();
+      if(!InpFPFVGFromEngine) UpdateFPFVG(now);
       //--- High / Low des OPR 00:00, 09:30 et 13:30 dans la carte de liquidité (modèle CRT OPR)
       AddOPRLevels(g_opr.mor,"OPR00",g_oprLvl0000);
       AddOPRLevels(g_opr.opr0930,"OPR0930",g_oprLvl0930);
