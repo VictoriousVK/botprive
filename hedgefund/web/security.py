@@ -168,6 +168,15 @@ class AuthService:
         self._record(username.strip(), ip, ok, now)
         if not ok:
             return None
+        return self.open_session(u["id"], ip, user_agent)
+
+    def open_session(self, user_id: int, ip: str, user_agent: str) -> tuple[str, Session]:
+        """New session for an already-authenticated user (password checked, or a single-use
+        e-mail link clicked)."""
+        u = self._user(user_id)
+        if u is None:
+            raise ValueError("utilisateur introuvable")
+        now = int(time.time())
         token, csrf = new_token(), new_token()
         self.store.execute(
             f"INSERT INTO {self.sessions} (token_hash, user_id, csrf, created_at, last_seen, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

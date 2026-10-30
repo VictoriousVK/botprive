@@ -9,7 +9,7 @@ import { SaasTab } from "./saas";
 import { api, ApiError, clock, dateFr, duration, fcfa, setCsrf, type Leader, type Me, type Payment } from "@/lib/api";
 
 type Overview = {
-  members: number; paying: Record<string, number>; to_review: number; revenue_30d_xof: number; leads: number; wave: string; copytrading: string;
+  members: number; unverified: number; paying: Record<string, number>; to_review: number; revenue_30d_xof: number; leads: number; wave: string; copytrading: string;
   bots: { id: string; name: string; strategy: string }[];
   labels: { access: Record<string, string>; course_status: Record<string, string>; providers: Record<string, string>; leader_status: Record<string, string> };
   offers: { key: string; label: string; price_xof: number | null; category: string; period: string; purchasable: boolean }[];
@@ -129,7 +129,7 @@ function OverviewTab({ ov }: { ov: Overview }) {
   return (
     <div className="grid gap-5">
       <div className="card grid grid-cols-2 gap-6 p-6 md:grid-cols-5">
-        <Stat label="Membres" value={ov.members} />
+        <Stat label="Membres confirmés" value={<>{ov.members}{ov.unverified > 0 && <span className="ml-2 text-xs font-normal text-gold-300">+{ov.unverified} en attente</span>}</>} hint="Les inscriptions en attente n'ont pas encore cliqué sur le lien de confirmation (supprimées après 7 jours)." />
         <Stat label="Abonnés actifs" value={paying} />
         <Stat label="Encaissé (30 j)" value={fcfa(ov.revenue_30d_xof)} />
         <Stat label="À vérifier" value={ov.to_review} tone={ov.to_review ? "text-gold-300" : ""} />
@@ -233,7 +233,7 @@ function MembersTab({ ov }: { ov: Overview }) {
       <input className="input mb-4 max-w-sm" placeholder="Rechercher (nom, e-mail)" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="card scroll-x">
         {!rows ? <div className="p-6"><Spinner /></div> : (
-          <table className="table min-w-[760px]">
+          <table className="table min-w-[900px]">
             <thead><tr><th>Membre</th><th>Téléphone</th><th>Offre</th><th>Inscrit le</th><th>Statut</th><th /></tr></thead>
             <tbody>
               {rows.map((m) => (
@@ -246,9 +246,13 @@ function MembersTab({ ov }: { ov: Overview }) {
                     ))}
                   </td>
                   <td className="num text-muted">{dateFr(m.created_at)}</td>
-                  <td><span className={`chip ${m.status === "active" ? "chip-green" : "chip-red"}`}>{m.status === "active" ? "Actif" : "Suspendu"}</span></td>
+                  <td>
+                    <span className={`chip ${m.status === "active" ? "chip-green" : "chip-red"}`}>{m.status === "active" ? "Actif" : "Suspendu"}</span>
+                    {!m.email_verified && <span className="chip chip-gold ml-1" title="Le membre n'a pas encore cliqué sur le lien reçu par e-mail">E-mail non confirmé</span>}
+                  </td>
                   <td className="text-right">
                     <div className="flex justify-end gap-2">
+                      {!m.email_verified && <button className="btn btn-ghost btn-sm" onClick={() => run(() => op(`/api/admin/members/${m.id}/verify-email`, "POST"), "Adresse confirmée.").then(load)}>Confirmer l&apos;e-mail</button>}
                       <button className="btn btn-ghost btn-sm" onClick={() => setGrant({ id: m.id, offer: "pro_trader", months: 1, reason: "" })}>Attribuer</button>
                       <button className="btn btn-ghost btn-sm" onClick={() => run(() => op(`/api/admin/members/${m.id}/status`, "POST", { status: m.status === "active" ? "suspended" : "active" })).then(load)}>
                         {m.status === "active" ? "Suspendre" : "Réactiver"}
@@ -647,3 +651,4 @@ function LeadsTab() {
     </div>
   );
 }
+

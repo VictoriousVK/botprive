@@ -2,6 +2,7 @@
 of its own, with the mistakes the Coach is meant to find, and a banner on the site."""
 
 import os
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +17,9 @@ def _seeded(tmp_path):
     c, eng, saas, clock = make_app(tmp_path)
     data = tmp_path / "demo"
     data.mkdir()
-    creds = demo.seed(c.app, AuthService(eng.store), data, NOW)
+    # Today, as `python -m hedgefund.web demo` does: the statistics count "the last 30 days" from
+    # the real date, so trades dated from a fixed day drift out of the window as time passes.
+    creds = demo.seed(c.app, AuthService(eng.store), data, int(time.time() * 1000))
     return c, creds, data
 
 
@@ -47,6 +50,15 @@ def test_demo_seeds_members_accounts_trades_and_a_pending_payment(tmp_path):
     operator(c)  # the test operator still works: the demo only adds its own
 
 
+def test_demo_seeds_without_email_confirmation_too(tmp_path):
+    c, eng, saas, clock = make_app(tmp_path, member_settings=MemberSettings(email_verification=False))
+    data = tmp_path / "demo"
+    data.mkdir()
+    creds = demo.seed(c.app, AuthService(eng.store), data, NOW)
+    m = TestClient(c.app)
+    assert m.post("/api/m/login", json={"email": creds["prospect"]["email"], "password": creds["prospect"]["password"]}).status_code == 200
+
+
 def test_demo_reset_only_deletes_a_demo_folder(tmp_path):
     real = tmp_path / "var"
     real.mkdir()
@@ -68,8 +80,14 @@ def test_demo_environment_never_points_at_real_data(tmp_path, monkeypatch):
     monkeypatch.setenv("LF_WAVE_API_KEY", "x")
     monkeypatch.setenv("HF_COOKIE_SECURE", "1")
     monkeypatch.setenv("HF_PUBLIC_HOST", "trading.example.com")
+    monkeypatch.setenv("LF_EMAIL_VERIFICATION", "1")
+    monkeypatch.delenv("HF_DEMO_CONFIRMATION", raising=False)
     d = demo.demo_dir(tmp_path / "var")
     demo.prepare_environment(d)
+    assert MemberSettings.from_env().email_verification is False  # no e-mail leaves a demo: sign-up goes on at once
+    monkeypatch.setenv("HF_DEMO_CONFIRMATION", "1")
+    demo.prepare_environment(d)
+    assert MemberSettings.from_env().email_verification is True  # to show the step (link in the server window)
     assert "HF_SAAS_DB" not in os.environ and "LF_WAVE_API_KEY" not in os.environ and "HF_PUBLIC_HOST" not in os.environ
     assert os.environ["HF_COOKIE_SECURE"] == "0"  # served over http: a secure cookie would never come back
     assert os.environ["HF_DATA_DIR"] == str(d) and os.environ["HF_FEED"] == "simulation" and os.environ["HF_ALLOW_REAL_TRADING"] == "0"

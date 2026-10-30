@@ -29,15 +29,16 @@ def test_mentor_rules_answer_access_filter_and_advice(tmp_path):
     assert c.post("/api/app/mentor/ask", json={"question": "C'est quoi un FVG ?"}, headers=h).status_code == 403
     grant(op, oh, 1, "starter")
     r = c.post("/api/app/mentor/ask", json={"question": "Qu'est-ce qu'un FVG et quand est-il mitigé ?"}, headers=h).json()
-    assert r["label"] == "PARTIAL" and r["citations"] and r["narrated_by"] == "rules" and "Définitions ICT" in r["citations"][0]["title"]
+    assert r["label"] == "PARTIAL" and r["citations"] and r["narrated_by"] == "rules"
+    assert any("Définitions ICT" in x["title"] or x["ref"] == "fiche:05-fvg-et-desequilibres" for x in r["citations"])  # the engine's definitions or the FVG sheet
     adv = c.post("/api/app/mentor/ask", json={"question": "Dois-je acheter l'or maintenant ?"}, headers=h).json()
     assert adv["label"] == "REFUSED_ADVICE"
     doc = {"title": "Module 7 : zorglub", "source": "fiche", "access": "formation_ict", "text": "Le concept zorglub se lit sur le graphique M5 après un sweep de la liquidité. " * 3}
     assert op.post("/api/admin/knowledge", json=doc, headers=oh).status_code == 200
-    out = c.post("/api/app/mentor/ask", json={"question": "Explique le zorglub"}, headers=h).json()
+    out = c.post("/api/app/mentor/ask", json={"question": "Le zorglub ?"}, headers=h).json()
     assert out["label"] == "OUT_OF_CORPUS"  # starter does not include the ICT course
     grant(op, oh, 1, "formation_ict")
-    assert c.post("/api/app/mentor/ask", json={"question": "Explique le zorglub"}, headers=h).json()["citations"][0]["title"] == "Module 7 : zorglub"
+    assert c.post("/api/app/mentor/ask", json={"question": "Le zorglub ?"}, headers=h).json()["citations"][0]["title"] == "Module 7 : zorglub"
 
 
 def test_mentor_model_must_cite_passages(tmp_path):

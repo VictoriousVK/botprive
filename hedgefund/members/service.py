@@ -8,9 +8,11 @@ import secrets
 import time
 from typing import Any, Callable
 
+from hedgefund.members.antibot import is_blocked_domain
+from hedgefund.members.mailer import LogMailer, reset_mail, verification_mail
 from hedgefund.members.site import FREE_OFFER, MemberSettings, SiteConfig
 from hedgefund.members.wave import WaveClient, WaveError
-from hedgefund.web.security import AuthService, hash_password
+from hedgefund.web.security import AuthService, hash_password, new_token, token_hash
 
 TERMS_VERSION = "2026-10"
 EMAIL_RE = re.compile(r"^[^@\s<>\"']{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
@@ -18,6 +20,9 @@ PHONE_RE = re.compile(r"^\+?[0-9 ]{8,20}$")
 TXN_RE = re.compile(r"^[A-Za-z0-9._-]{6,40}$")
 PENDING = ("pending", "declared")
 log = logging.getLogger(__name__)
+VERIFY_HOURS = 48  # e-mail confirmation link lifetime
+RESET_MINUTES = 60  # password reset link lifetime
+UNVERIFIED_PURGE_DAYS = 7  # unconfirmed accounts (bots, typos) are deleted after this
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS members (
@@ -30,7 +35,8 @@ CREATE TABLE IF NOT EXISTS members (
     totp_enabled INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
     terms_version TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    email_verified_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS member_sessions (
     token_hash TEXT PRIMARY KEY,
@@ -70,6 +76,15 @@ CREATE TABLE IF NOT EXISTS member_access (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (member_id, product)
 );
+CREATE TABLE IF NOT EXISTS email_tokens (
+    token_hash TEXT PRIMARY KEY,
+    member_id INTEGER NOT NULL,
+    purpose TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_email_tokens_member ON email_tokens(member_id, purpose);
 CREATE TABLE IF NOT EXISTS leads (
     email TEXT NOT NULL,
     interest TEXT NOT NULL,
@@ -97,15 +112,26 @@ def member_auth(store: Any, session_hours: int = 72) -> AuthService:
     return AuthService(store, session_hours=session_hours, idle_minutes=7 * 24 * 60, users="members", sessions="member_sessions", login_column="email", attempt_prefix="m:")
 
 
+def migrate(store: Any) -> None:
+    """Brings an existing database up to date. Accounts created before e-mail confirmation
+    existed are considered confirmed."""
+    store.executescript(SCHEMA)
+    cols = {r["name"] for r in store.execute("PRAGMA table_info(members)")}
+    if "email_verified_at" not in cols:
+        store.execute("ALTER TABLE members ADD COLUMN email_verified_at INTEGER")
+        store.execute("UPDATE members SET email_verified_at = created_at")
+
+
 class Members:
-    def __init__(self, store: Any, site: SiteConfig, settings: MemberSettings, wave: WaveClient | None = None, now=time.time):
+    def __init__(self, store: Any, site: SiteConfig, settings: MemberSettings, wave: WaveClient | None = None, now=time.time, mailer: Any = None):
         self.store, self.site, self.settings, self.now = store, site, settings, now
-        store.executescript(SCHEMA)
+        migrate(store)
         self.auth = member_auth(store)
         self.wave = wave or (WaveClient(settings.wave_api_key, settings.wave_api_base) if settings.wave_api_enabled else None)
         # Payment events for the team's alerts and the member's notifications:
         # fn(event, data), event in payment_declared | payment_succeeded | payment_rejected.
         self.listeners: list[Callable[[str, dict[str, Any]], None]] = []
+        self.mailer = mailer or LogMailer()  # confirmation and password reset links
 
     def _emit(self, event: str, payment_id: str) -> None:
         p = self.payment(payment_id)
@@ -124,6 +150,10 @@ class Members:
 
     # ---------------- accounts ----------------
     def register(self, email: str, password: str, name: str, phone: str = "", ip: str = "") -> int:
+        """Creates the account. With e-mail confirmation on (the default), the account can't sign
+        in until its owner clicks the link sent by ``send_verification``. Signing up again with
+        an address that was never confirmed replaces that pending account (typo, lost e-mail),
+        so nobody can block an address they don't own."""
         if not self.settings.registration_open:
             raise MemberError("les inscriptions sont fermées pour le moment")
         email = email.strip().lower()
@@ -131,6 +161,8 @@ class Members:
         phone = phone.strip()
         if not EMAIL_RE.match(email):
             raise MemberError("adresse e-mail invalide")
+        if is_blocked_domain(email, self.settings.blocked_email_domains):
+            raise MemberError("les adresses e-mail jetables ne sont pas acceptées : utilisez votre adresse habituelle")
         if not 2 <= len(name) <= 80:
             raise MemberError("nom : 2 à 80 caractères")
         if phone and not PHONE_RE.match(phone):
@@ -141,16 +173,127 @@ class Members:
         if ip and recent >= 5:
             raise MemberError("trop d'inscriptions depuis cette connexion : réessayez dans une heure")
         pw = hash_password(password)  # raises ValueError if too short
+        verified = None if self.settings.email_verification else now
+        self.purge_unverified()
         with self.store.atomic():
-            if self.store.execute("SELECT 1 FROM members WHERE email = ?", (email,)):
-                raise MemberError("un compte existe déjà avec cette adresse")
-            self.store.execute(
-                "INSERT INTO members (email, name, phone, password_hash, terms_version, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (email, name, phone or None, pw, TERMS_VERSION, now),
-            )
+            rows = self.store.execute("SELECT id, email_verified_at FROM members WHERE email = ?", (email,))
+            if rows and rows[0]["email_verified_at"] is not None:
+                raise MemberError("un compte existe déjà avec cette adresse : connectez-vous (ou « mot de passe oublié »)")
+            if rows:  # pending, never confirmed: the new sign-up replaces it
+                self.store.execute(
+                    "UPDATE members SET name = ?, phone = ?, password_hash = ?, terms_version = ?, created_at = ?, email_verified_at = ? WHERE id = ?",
+                    (name, phone or None, pw, TERMS_VERSION, now, verified, rows[0]["id"]),
+                )
+            else:
+                self.store.execute(
+                    "INSERT INTO members (email, name, phone, password_hash, terms_version, created_at, email_verified_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (email, name, phone or None, pw, TERMS_VERSION, now, verified),
+                )
             if ip:
                 self.store.execute("INSERT INTO login_attempts (key, ts, ok) VALUES (?, ?, 1)", (key, now))
         return self.store.execute("SELECT id FROM members WHERE email = ?", (email,))[0]["id"]
+
+    @staticmethod
+    def is_verified(m: dict[str, Any] | None) -> bool:
+        return bool(m) and m.get("email_verified_at") is not None
+
+    def purge_unverified(self) -> int:
+        """Deletes accounts never confirmed after UNVERIFIED_PURGE_DAYS (bots, typos)."""
+        cutoff = int(self.now()) - UNVERIFIED_PURGE_DAYS * 86_400
+        rows = self.store.execute(
+            "SELECT id FROM members m WHERE email_verified_at IS NULL AND created_at < ? AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.member_id = m.id)", (cutoff,)
+        )
+        for r in rows:
+            self.store.execute("DELETE FROM email_tokens WHERE member_id = ?", (r["id"],))
+            self.store.execute("DELETE FROM members WHERE id = ?", (r["id"],))
+        return len(rows)
+
+    # ---------------- e-mail links (confirmation, password reset) ----------------
+    def _issue_token(self, member_id: int, purpose: str, ttl_s: int) -> str:
+        now = int(self.now())
+        token = new_token()
+        with self.store.atomic():
+            self.store.execute("DELETE FROM email_tokens WHERE member_id = ? AND purpose = ?", (member_id, purpose))  # one live link at a time
+            self.store.execute(
+                "INSERT INTO email_tokens (token_hash, member_id, purpose, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+                (token_hash(token), member_id, purpose, now, now + ttl_s),
+            )
+        return token
+
+    def _consume_token(self, token: str, purpose: str) -> int:
+        now = int(self.now())
+        if not token or len(token) > 200:
+            raise MemberError("lien invalide ou expiré : demandez-en un nouveau")
+        with self.store.atomic():
+            rows = self.store.execute("SELECT * FROM email_tokens WHERE token_hash = ? AND purpose = ?", (token_hash(token.strip()), purpose))
+            if not rows or rows[0]["used_at"] is not None or rows[0]["expires_at"] < now:
+                raise MemberError("lien invalide ou expiré : demandez-en un nouveau")
+            self.store.execute("UPDATE email_tokens SET used_at = ? WHERE token_hash = ?", (now, rows[0]["token_hash"]))
+            return int(rows[0]["member_id"])
+
+    def _rate_ok(self, key: str, limit: int, window_s: int = 3600) -> bool:
+        now = int(self.now())
+        n = self.store.execute("SELECT COUNT(*) AS n FROM login_attempts WHERE key = ? AND ts > ?", (key, now - window_s))[0]["n"]
+        if n >= limit:
+            return False
+        self.store.execute("INSERT INTO login_attempts (key, ts, ok) VALUES (?, ?, 1)", (key, now))
+        return True
+
+    def send_verification(self, member_id: int, base_url: str) -> bool:
+        m = self.get(member_id)
+        if m is None or self.is_verified(m):
+            return False
+        if not self._rate_ok(f"mailv:{m['email']}", 4):
+            return False
+        token = self._issue_token(member_id, "verify", VERIFY_HOURS * 3600)
+        self.mailer.send(verification_mail(m["email"], m["name"], f"{base_url}/compte/verifier/?jeton={token}", VERIFY_HOURS))
+        return True
+
+    def resend_verification(self, email: str, base_url: str, ip: str = "") -> None:
+        """Always silent (never tells whether an address has an account)."""
+        if ip and not self._rate_ok(f"mailv-ip:{ip}", 10):
+            raise MemberError("trop de demandes : réessayez dans une heure")
+        rows = self.store.execute("SELECT id FROM members WHERE email = ?", (email.strip().lower(),))
+        if rows:
+            self.send_verification(rows[0]["id"], base_url)
+
+    def verify_email(self, token: str) -> dict[str, Any]:
+        member_id = self._consume_token(token, "verify")
+        self.store.execute("UPDATE members SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?", (int(self.now()), member_id))
+        m = self.get(member_id)
+        if m is None:
+            raise MemberError("compte introuvable")
+        return m
+
+    def mark_verified(self, member_id: int) -> None:
+        """Confirmation by the team (member who never got the e-mail)."""
+        if self.get(member_id) is None:
+            raise MemberError("membre introuvable")
+        self.store.execute("UPDATE members SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?", (int(self.now()), member_id))
+
+    def request_password_reset(self, email: str, base_url: str, ip: str = "") -> None:
+        """Always silent. Only confirmed, active accounts get a link."""
+        if ip and not self._rate_ok(f"reset-ip:{ip}", 10):
+            raise MemberError("trop de demandes : réessayez dans une heure")
+        rows = self.store.execute("SELECT * FROM members WHERE email = ?", (email.strip().lower(),))
+        if not rows or rows[0]["status"] != "active" or rows[0]["email_verified_at"] is None:
+            return
+        m = dict(rows[0])
+        if not self._rate_ok(f"reset:{m['email']}", 3):
+            return
+        token = self._issue_token(m["id"], "reset", RESET_MINUTES * 60)
+        self.mailer.send(reset_mail(m["email"], m["name"], f"{base_url}/compte/mot-de-passe/?jeton={token}", RESET_MINUTES))
+
+    def reset_password(self, token: str, password: str) -> dict[str, Any]:
+        hash_password(password)  # validates the length before the link is spent
+        member_id = self._consume_token(token, "reset")
+        self.auth.set_password(member_id, password)  # also closes every open session
+        # the link proved the member owns the address
+        self.store.execute("UPDATE members SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?", (int(self.now()), member_id))
+        m = self.get(member_id)
+        if m is None:
+            raise MemberError("compte introuvable")
+        return m
 
     def get(self, member_id: int) -> dict[str, Any] | None:
         rows = self.store.execute("SELECT * FROM members WHERE id = ?", (member_id,))
@@ -174,7 +317,7 @@ class Members:
         return subs[-1] if subs else None
 
     def entitlements(self, m: dict[str, Any] | None) -> set[str]:
-        if not m or m.get("status") != "active":
+        if not m or m.get("status") != "active" or not self.is_verified(m):
             return set()
         ents = set(self.site.free_entitlements)
         for a in self.accesses(m["id"]):
@@ -197,6 +340,7 @@ class Members:
             "offer": main["product"] if main else FREE_OFFER, "offer_label": main["label"] if main else self.site.free.get("label", "Compte gratuit"),
             "offer_expires_at": main["expires_at"] if main else None, "access": acc,
             "entitlements": sorted(ents), "community": self.community_links(ents), "totp_enabled": bool(m["totp_enabled"]), "created_at": m["created_at"],
+            "email_verified": self.is_verified(m),
         }
 
     def add_lead(self, email: str, interest: str) -> None:
@@ -411,7 +555,8 @@ class Members:
         )
         revenue = self.store.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM payments WHERE status = 'succeeded' AND applied_at > ?", (now - 30 * 86_400,))[0]["s"]
         return {
-            "members": self.store.execute("SELECT COUNT(*) AS n FROM members")[0]["n"],
+            "members": self.store.execute("SELECT COUNT(*) AS n FROM members WHERE email_verified_at IS NOT NULL")[0]["n"],
+            "unverified": self.store.execute("SELECT COUNT(*) AS n FROM members WHERE email_verified_at IS NULL")[0]["n"],
             "paying": {r["offer"]: r["n"] for r in paying},
             "to_review": self.store.execute("SELECT COUNT(*) AS n FROM payments WHERE status = 'declared'")[0]["n"],
             "revenue_30d_xof": revenue,

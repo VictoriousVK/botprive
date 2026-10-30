@@ -40,6 +40,9 @@ def make_feed(kind: str = "auto"):
 
 
 def build_platform(config_path: str | None = None, data_dir: str | None = None, feed: str | None = None, settings: WebSettings | None = None, start_engine: bool = True):
+    from hedgefund.web.observability import init_sentry
+
+    init_sentry()  # no-op without SENTRY_DSN
     cfg = load_config(config_path)
     data = Path(data_dir or os.environ.get("HF_DATA_DIR") or cfg.var_dir)
     store = PlatformStore(data / "platform.db")

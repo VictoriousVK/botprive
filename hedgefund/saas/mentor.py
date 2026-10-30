@@ -5,11 +5,12 @@ guardrail applies. Without a model the member gets the closest passages, quoted 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import desc
+from sqlalchemy import desc, select
 
 from hedgefund.saas import guardrails as GR
 from hedgefund.saas.api import ROUTERS, ApiContext, guard
@@ -20,6 +21,8 @@ from hedgefund.saas.llm import LLMError
 from hedgefund.saas.router import ADVICE_REPLY
 from hedgefund.saas.schemas import MentorLLMOut
 from hedgefund.saas.service import Access, SaaS
+
+log = logging.getLogger(__name__)
 
 
 class AskIn(BaseModel):
@@ -98,6 +101,26 @@ class Mentor:
             "exercise": exercise, "disclaimer": GR.DISCLAIMER,
         }
 
+    def recent_questions(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Latest questions, all members (team view, from the audit records): what the content
+        does not cover yet (« hors des contenus ») tells which sheet or course to write next. No
+        name or e-mail: the question, the date, the verdict and the passages used."""
+        from hedgefund.saas.db import audit_records
+
+        out: list[dict[str, Any]] = []
+        with self.saas.db.system() as conn:
+            rows = conn.execute(select(audit_records.c.body, audit_records.c.created_at).order_by(desc(audit_records.c.created_at)).limit(limit * 10))
+            for r in rows:
+                body = r.body if isinstance(r.body, dict) else json.loads(r.body or "{}")
+                if body.get("graph") != "mentor":
+                    continue
+                concl = body.get("conclusion") or {}
+                out.append({"created_at": r.created_at, "question": (body.get("request") or {}).get("question", ""), "label": concl.get("label", ""),
+                            "narrated_by": concl.get("narrated_by", ""), "passages": len(body.get("evidence") or [])})
+                if len(out) >= limit:
+                    break
+        return out
+
     def history(self, acc: Access) -> list[dict[str, Any]]:
         with self.saas.db.tenant(acc.tenant_id) as s:
             rows = s.select(agent_runs, {"user_id": acc.member_id, "graph": "mentor"}, order_by=desc(agent_runs.c.created_at), limit=30)
@@ -134,6 +157,10 @@ def mount(ctx: ApiContext) -> None:
     def reindex(s=Depends(ctx.operator)) -> dict:  # noqa: B008
         return mentor.kb.reindex()
 
+    @app.get("/api/admin/mentor/questions")
+    def questions(s=Depends(ctx.operator)) -> list[dict]:  # noqa: B008
+        return mentor.recent_questions()
+
 
 def install(saas: SaaS) -> Mentor:
     from hedgefund.saas.tools import Tool, ToolContext
@@ -151,10 +178,11 @@ def install(saas: SaaS) -> Mentor:
 
     saas.tools.register(Tool("knowledge.search", "Recherche dans les contenus de la formation accessibles au membre (définitions ICT, cours, fiches).", SearchIn, _search))
     try:
-        if not kb.docs():
-            kb.reindex()
+        # At every start: an edited ICT sheet or a skill is picked up by a restart; the team's own
+        # documents are kept.
+        kb.reindex()
     except Exception:  # noqa: BLE001 - an empty knowledge base must not stop the platform
-        pass
+        log.exception("Mentor : indexation des contenus impossible")
     return m
 
 

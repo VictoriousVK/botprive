@@ -23,6 +23,26 @@ $env:LF_WAVE_WEBHOOK_SECRET = ""   # secret du webhook Wave (https://votredomain
 $env:LF_REGISTRATION = "1"         # "0" pour fermer les inscriptions
 $env:LF_COPYTRADING = "demo"       # off | demo (la copie réelle attend l'avis juridique)
 $env:LF_MEDIA_HOSTS = ""           # domaines autorisés pour des fichiers vidéo .mp4 (sinon Bunny/Mux/Vimeo…)
+
+# --- E-mails (confirmation d'inscription, mot de passe oublié) : voir docs/MISE_EN_ROUTE_V0.4.md ---
+$env:LF_EMAIL_VERIFICATION = "1"   # "1" = confirmation d'e-mail obligatoire (recommandé)
+$env:LF_SMTP_HOST = ""             # ex. "smtp-relay.brevo.com" ou "smtp.resend.com" (vide = liens écrits dans la fenêtre du serveur)
+$env:LF_SMTP_PORT = "587"
+$env:LF_SMTP_SECURITY = "starttls" # starttls (port 587) | ssl (port 465)
+$env:LF_SMTP_USER = ""
+$env:LF_SMTP_PASSWORD = ""
+$env:LF_MAIL_FROM = ""             # ex. "Liberté Financière <no-reply@mondomaine.com>"
+
+# --- Anti-robots (optionnel) : Cloudflare Turnstile + domaines bloqués en plus de la liste intégrée ---
+$env:LF_TURNSTILE_SITE_KEY = ""
+$env:LF_TURNSTILE_SECRET = ""
+$env:LF_BLOCKED_EMAIL_DOMAINS = ""
+
+# --- Sentry (optionnel) : erreurs et performances. DSN dans Sentry -> Settings -> Projects -> Client Keys ---
+$env:SENTRY_DSN = ""               # projet serveur (Python / FastAPI)
+$env:SENTRY_BROWSER_DSN = ""       # projet site (Browser JavaScript)
+$env:SENTRY_ENVIRONMENT = "production"
+
 # Liens d'invitation privés : plutôt dans /admin/ → Réglages (ces variables ne servent que de secours)
 $env:LF_TELEGRAM_URL = ""
 $env:LF_DISCORD_URL = ""

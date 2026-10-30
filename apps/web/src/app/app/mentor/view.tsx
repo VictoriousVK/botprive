@@ -15,7 +15,7 @@ const fmtTs = (s: number) => `${Math.floor(s / 60)} min ${String(s % 60).padStar
 
 export function MentorView() {
   return (
-    <AppShell title="Mentor IA" subtitle="Questions de cours, réponses tirées des contenus de la formation, avec leurs sources" feature="mentor">
+    <AppShell title="Mentor IA" subtitle="Questions sur ICT et sur les cours, réponses tirées des fiches et des contenus de la formation, avec leurs sources" feature="mentor">
       <Mentor />
     </AppShell>
   );

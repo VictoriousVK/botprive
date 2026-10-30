@@ -1,5 +1,10 @@
 # Site Liberté Financière : guide des cofondateurs
 
+> **Nouveau (v0.4).** Les inscriptions doivent être confirmées par e-mail, « mot de passe
+> oublié » existe, le Mentor de l'espace de trading répond aux questions ICT à partir de 15
+> fiches de référence et Sentry peut surveiller les erreurs. Réglages à faire :
+> [MISE_EN_ROUTE_V0.4.md](MISE_EN_ROUTE_V0.4.md).
+
 La plateforme sert maintenant deux espaces sur la même adresse :
 
 | Adresse | Pour qui | Contenu |
@@ -67,8 +72,7 @@ une période et un statut :
 - **Prix** : `price_usd` est affiché ; le montant payé avec Wave est `price_xof`, ou à défaut
   `price_usd` × `billing.usd_xof` (583) arrondi au millier.
 - **Points « bientôt »** : un point écrit `{text: "…", soon: true}` s'affiche avec la mention
-  « bientôt » (dashboard, journal, connexion MT5, IA Trading Coach, formation EA, calendrier
-  économique ne sont pas encore construits). Retirez `soon: true` quand ils existent.
+  « bientôt » (aujourd'hui : la formation EA). Retirez `soon: true` quand le point existe.
 - Un membre peut **cumuler** plusieurs accès (par exemple la formation ICT à vie + Starter +
   le groupe Elite). Son espace affiche chaque accès et sa date de fin.
 - Mentorat individuel (ou tout paiement reçu hors du site) : encaissez, puis donnez l'accès

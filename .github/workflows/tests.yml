@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[research,web,saas,dev]"
+      - run: pip install -e ".[research,web,saas,dev,monitoring]"
       - name: PostgreSQL role for the RLS tests
         env:
           PGPASSWORD: postgres
@@ -54,6 +54,6 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx next build
-      - run: test -f out/index.html && test -f out/compte/index.html && test -f out/admin/index.html && for p in app app/journal app/revue app/analyse app/risque app/bienvenue app/mentor app/formation app/labo app/ea app/reglages; do test -f out/$p/index.html || exit 1; done
+      - run: test -f out/index.html && test -f out/compte/index.html && test -f out/admin/index.html && for p in app app/journal app/revue app/analyse app/risque app/bienvenue app/mentor app/formation app/labo app/ea app/reglages compte/verifier compte/mot-de-passe coach; do test -f out/$p/index.html || exit 1; done
       - name: The committed site export is present
         run: test -f ../../hedgefund/web/site/index.html

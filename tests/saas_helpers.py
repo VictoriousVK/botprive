@@ -3,6 +3,7 @@ feed on a fixed clock, and a scripted (or absent) model."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from hedgefund.bots.simfeed import SimulatedFeed
 from hedgefund.bots.store import PlatformStore
 from hedgefund.config import load_config
 from hedgefund.core.clock import SimClock
+from hedgefund.members.mailer import LogMailer
 from hedgefund.members.site import MemberSettings, load_site
 from hedgefund.saas.db import Database
 from hedgefund.saas.llm import AnthropicLLM, NullLLM, ScriptedClient
@@ -41,14 +43,22 @@ def make_app(tmp_path: Path, turns: list[Any] | None = None, now: int = NOW, gra
     if auth.user_count() == 0:
         auth.create_user("vic", PW)
     saas = make_saas(feed, clock, turns)
+    ms = member_settings or MemberSettings()
+    if not ms.public_url:  # e-mail links (confirmation, password reset) need the public address
+        ms = replace(ms, public_url="https://lf.test")
     app = create_app(eng, auth, WebSettings(cookie_secure=False, hsts=False), start_engine=False, site=load_site(),
-                     member_settings=member_settings or MemberSettings(), site_dir=Path(tmp_path) / "nosite", saas=saas)
+                     member_settings=ms, site_dir=Path(tmp_path) / "nosite", saas=saas, mailer=LogMailer())
     return TestClient(app), eng, saas, clock
 
 
 def register(c: TestClient, email: str = "awa@example.com") -> dict[str, str]:
+    """Signs up and, when e-mail confirmation is on, clicks the link like a member would."""
     r = c.post("/api/m/register", json={"email": email, "password": PW, "name": "Awa Ndiaye", "phone": "", "accept_terms": True})
     assert r.status_code == 200, r.text
+    if r.json().get("pending"):
+        token = c.app.state.mailer.outbox[-1].text.split("jeton=", 1)[1].split()[0]
+        r = c.post("/api/m/verify", json={"token": token})
+        assert r.status_code == 200, r.text
     return {"X-CSRF-Token": r.json()["csrf"]}
 
 

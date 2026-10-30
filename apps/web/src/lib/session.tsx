@@ -38,7 +38,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [setMe]);
 
   useEffect(() => {
-    api<SiteInfo>("/api/site").then(setSite).catch(() => setSite(null));
+    api<SiteInfo>("/api/site")
+      .then((info) => {
+        setSite(info);
+        if (info.sentry) startSentry(info.sentry);
+      })
+      .catch(() => setSite(null));
     refreshMe();
   }, [refreshMe]);
 
@@ -51,6 +56,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 }
 
 export const useSession = () => useContext(SessionCtx);
+
+// Error reporting for the pages (only when the server sets SENTRY_BROWSER_DSN). Loaded on
+// demand, so visitors download nothing extra when it is off. No personal data is sent.
+let sentryStarted = false;
+function startSentry(cfg: NonNullable<SiteInfo["sentry"]>) {
+  if (sentryStarted) return;
+  sentryStarted = true;
+  import("@sentry/browser")
+    .then((Sentry) => {
+      Sentry.init({
+        dsn: cfg.dsn,
+        environment: cfg.environment,
+        release: cfg.release,
+        sendDefaultPii: false,
+        tracesSampleRate: 0,
+        beforeSend(event) {
+          if (event.request?.url) event.request.url = event.request.url.split("?")[0]; // e-mail links carry tokens
+          if (event.request?.query_string) delete event.request.query_string;
+          return event;
+        },
+        beforeBreadcrumb(b) {
+          if (typeof b.data?.url === "string") b.data.url = b.data.url.split("?")[0];
+          if (typeof b.data?.to === "string") b.data.to = b.data.to.split("?")[0];
+          if (typeof b.data?.from === "string") b.data.from = b.data.from.split("?")[0];
+          return b;
+        },
+      });
+    })
+    .catch(() => {});
+}
 
 export function useApi<T>(path: string | null, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);

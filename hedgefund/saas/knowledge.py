@@ -1,5 +1,6 @@
-"""Knowledge base of the Mentor: only content Victor owns (ICT definitions in the skills, the
-academy's courses, transcripts and sheets added by the team). Lexical search (BM25 on
+"""Knowledge base of the Mentor: only content Victor owns (ICT definitions in the skills, the ICT
+reference sheets in ``fiches_ict/``, the academy's courses, transcripts and sheets added by the
+team). Lexical search (BM25 on
 normalised terms, title boost), filtered by the member's access rights before ranking, so a
 paid module never leaks into a free member's answer.
 
@@ -24,6 +25,10 @@ from hedgefund.saas.db import knowledge_chunks, knowledge_docs, new_id, now_ms
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS = ROOT / ".claude" / "skills"
+# ICT reference sheets, one topic per file (``NN-topic.md``, first ``# `` line = title). To teach the
+# Mentor something or correct it, edit or add a sheet, then « Réindexer » in /admin/ (or restart).
+FICHES = Path(__file__).resolve().parent / "fiches_ict"
+FICHES_ACCESS = "academy_member"  # every member who has the Mentor
 STOP = set("""
 a au aux avec ce ces cet cette dans de des du elle en et est il ils je la le les leur lui ma mais me meme mes moi mon ne nos notre nous on ou par pas pour qu que qui sa se ses son sur ta te tes toi ton tu un une vos votre vous y
 d l c j n s t qu est sont etre avoir fait faire plus tres tout tous toute toutes quand comme donc alors aussi entre sans sous vers chez ici la
@@ -100,16 +105,22 @@ class Knowledge:
             conn.execute(delete(knowledge_docs).where(knowledge_docs.c.id.in_(ids)))
 
     def reindex(self) -> dict[str, int]:
-        """Rebuilds the automatic sources (skills and academy); team documents are kept."""
-        counts = {"skill": 0, "course": 0}
+        """Rebuilds the automatic sources (skills, ICT sheets, academy); team documents are kept."""
+        counts = {"skill": 0, "fiche_ict": 0, "course": 0}
         with self.saas.db.system() as conn:
-            self._delete_sources(conn, ("skill", "course"))
+            self._delete_sources(conn, ("skill", "fiche_ict", "course"))  # never the team's own documents
             for f in sorted(SKILLS.glob("*/SKILL.md")):
                 text = f.read_text(encoding="utf-8")
                 body = re.sub(r"^---.*?---\s*", "", text, flags=re.S)
                 title = next((line.lstrip("# ").strip() for line in body.splitlines() if line.startswith("#")), f.parent.name)
                 self._insert_doc(conn, "skill", title, "journal", f"skill:{f.parent.name}", body)
                 counts["skill"] += 1
+            for f in sorted(FICHES.glob("[0-9]*.md")):
+                text = f.read_text(encoding="utf-8").strip()
+                first = text.splitlines()[0] if text else ""
+                title = first[2:].strip() if first.startswith("# ") else f.stem
+                self._insert_doc(conn, "fiche_ict", title, FICHES_ACCESS, f"fiche:{f.stem}", text)
+                counts["fiche_ict"] += 1
             store = getattr(self.saas.platform, "store", None)
             if store is not None:
                 try:

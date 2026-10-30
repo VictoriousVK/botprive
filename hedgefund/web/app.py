@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import re
 import threading
@@ -39,12 +40,17 @@ from hedgefund.bots.templates import DIRECTIONS, TEMPLATES, TIMEFRAMES, new_bot_
 from hedgefund.core.ledger import Kind
 from hedgefund.members.academy import FRAME_SOURCES, Academy
 from hedgefund.members.alerts import OperatorAlerts
+from hedgefund.members.antibot import TURNSTILE_ORIGIN
 from hedgefund.members.api import SiteContext, mount_members
+from hedgefund.members.mailer import mailer_from_env
 from hedgefund.members.copytrading import Copytrading
 from hedgefund.members.service import Members
 from hedgefund.members.site import MemberSettings, SiteConfig, load_site
 from hedgefund.mt5.catalog import CATEGORY_LABELS
+from hedgefund.web.observability import sentry_browser_hosts
 from hedgefund.web.security import AuthService, Session, totp_uri
+
+log = logging.getLogger("hedgefund.web")
 
 STATIC = Path(__file__).parent / "static"  # operator console
 SITE = Path(__file__).parent / "site"  # public site (Next.js static export of apps/web)
@@ -58,12 +64,15 @@ class SitePages:
     """Serves the exported site. Next.js pages carry small inline scripts, so each page gets a
     Content-Security-Policy allowing exactly those scripts (by hash) and nothing else."""
 
-    def __init__(self, root: Path, media_hosts: tuple[str, ...] = ()):
+    def __init__(self, root: Path, media_hosts: tuple[str, ...] = (), script_hosts: tuple[str, ...] = (), frame_hosts: tuple[str, ...] = (), connect_hosts: tuple[str, ...] = ()):
         self.root = root.resolve()
         media = " ".join(["'self'", *(f"https://{h}" for h in media_hosts)])
+        connect = " ".join(["'self'", *connect_hosts])
+        frames = " ".join([*FRAME_SOURCES, *frame_hosts])
+        self.script_hosts = " ".join(script_hosts)
         self.base = (
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; "
-            f"frame-src {' '.join(FRAME_SOURCES)}; media-src {media}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+            f"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src {connect}; "
+            f"frame-src {frames}; media-src {media}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         )
         self._csp: dict[Path, tuple[int, str]] = {}
 
@@ -88,7 +97,7 @@ class SitePages:
         hit = self._csp.get(page)
         if hit is None or hit[0] != mtime:
             hashes = " ".join(f"'sha256-{base64.b64encode(hashlib.sha256(m).digest()).decode()}'" for m in _INLINE_SCRIPT.findall(page.read_bytes()) if m.strip())
-            hit = self._csp[page] = (mtime, f"{self.base}; script-src 'self' {hashes}".rstrip())
+            hit = self._csp[page] = (mtime, " ".join(f"{self.base}; script-src 'self' {self.script_hosts} {hashes}".split()))
         return hit[1]
 
 
@@ -180,11 +189,17 @@ def create_app(
     member_settings: MemberSettings | None = None,
     site_dir: Path | None = None,
     saas: Any = None,
+    mailer: Any = None,
 ) -> FastAPI:
     settings = settings or WebSettings.from_env()
     site = site or load_site()
     member_settings = member_settings or MemberSettings.from_env()
-    pages = SitePages(site_dir or SITE, member_settings.media_hosts)
+    mailer = mailer or mailer_from_env()
+    if member_settings.email_verification and not getattr(mailer, "configured", False):
+        log.warning("Confirmation d'e-mail active mais aucun serveur SMTP (LF_SMTP_HOST) : les liens sont écrits dans ce journal au lieu d'être envoyés.")
+    sentry_hosts = sentry_browser_hosts()
+    turnstile = (TURNSTILE_ORIGIN,) if member_settings.turnstile_enabled else ()
+    pages = SitePages(site_dir or SITE, member_settings.media_hosts, script_hosts=turnstile, frame_hosts=turnstile, connect_hosts=sentry_hosts)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -490,17 +505,23 @@ def create_app(
         return {"ok": True, "unlocked": engine.real_trading_enabled()}
 
     # ---------------- public site: members, payments, academy, copytrading ----------------
-    members = Members(engine.store, site, member_settings)
+    members = Members(engine.store, site, member_settings, mailer=mailer)
     academy = Academy(engine.store, site, member_settings)
+    # Origin written into e-mail links: the configured public address, never the Host header.
+    host = settings.public_host
+    local = host.split(":")[0] in ("localhost", "127.0.0.1")
+    public_origin = member_settings.public_url or (f"{'http' if local else 'https'}://{host}" if host else "")
     pay_alerts = OperatorAlerts(engine.store, public_url=member_settings.public_url)
     members.listeners.append(pay_alerts.on_payment)  # the team hears about a payment at once
     member_dep = mount_members(app, SiteContext(
         engine=engine, site=site, settings=member_settings, members=members,
         academy=academy, copy=Copytrading(engine.store, engine, member_settings.copytrading),
         cookie_secure=settings.cookie_secure, client_ip=client_ip, operator=session, check_write=check_write, alerts=pay_alerts,
+        public_origin=public_origin,
     ))
     app.state.members = members
     app.state.alerts = pay_alerts
+    app.state.mailer = members.mailer
 
     # ---------------- Alpha Edge SaaS: journal, analysis, risk, AI agents ----------------
     if saas is not None:

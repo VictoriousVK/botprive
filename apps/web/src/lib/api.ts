@@ -63,6 +63,9 @@ export type SiteInfo = {
   registration_open: boolean;
   demo?: boolean;
   version: string;
+  email_verification: boolean;
+  turnstile_site_key: string;
+  sentry: { dsn: string; environment: string; release: string } | null;
 };
 export type Robot = { key: string; name: string; status: string; status_label: string; headline: string; markets: string; access: string | null; description: string; timeframes: string[]; origin: string; params: number };
 export type Quote = { symbol: string; label: string; price: number; digits: number; change_pct: number | null };
@@ -70,8 +73,12 @@ export type Quotes = { synthetic: boolean; source: string; quotes: Quote[] };
 export type Access = { product: string; label: string; category: string; period: string; starts_at: number; expires_at: number | null; page: string };
 export type Me = {
   id: number; email: string; name: string; phone: string | null; offer: string; offer_label: string; offer_expires_at: number | null; access: Access[];
-  entitlements: string[]; community: { telegram?: string; discord?: string }; totp_enabled: boolean; created_at: number; csrf?: string;
+  entitlements: string[]; community: { telegram?: string; discord?: string }; totp_enabled: boolean; created_at: number; email_verified: boolean; csrf?: string;
 };
+export type Pending = { pending: true; email: string };
+export type CoachTopic = { id: string; title: string };
+export type CoachState = { enabled: boolean; entitled: boolean; remaining: number; limit: number; topics: CoachTopic[] };
+export type CoachAnswer = { answer: string; sources: CoachTopic[]; out_of_base: boolean; remaining: number };
 export type Payment = { id: string; offer: string; offer_label: string; months: number; amount: number; currency: string; method: string; method_label: string; status: string; status_label: string; transaction_ref: string | null; launch_url: string | null; created_at: number; applied_at: number | null; email?: string; name?: string; note?: string | null };
 export type CheckoutResult = { payment: Payment; launch_url?: string; manual?: { number: string | null; link: string | null; amount: number; reference: string } };
 export type CourseSummary = { slug: string; title: string; subtitle: string; level: string; access: string; access_label: string; status: string; parts: number; duration_s: number; free_parts: number; planned?: boolean };

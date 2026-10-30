@@ -28,7 +28,7 @@ en services séparés sous Docker.
 | `/app/revue/` | Coach IA : revue sur 7, 30 ou 90 jours, leçons à accepter, reformuler ou refuser, mémoire hebdomadaire modifiable | Gratuit (4 revues par mois) |
 | `/app/analyse/` | Analyste ICT : graphique avec FVG, liquidité, zone d'entrée, invalidation et objectifs ; risk gate ; carte de décision valable 2 h ; briefing et calendrier ; webhooks TradingView | Starter (briefing), Pro Trader (TradingView) |
 | `/app/risque/` | État des limites de perte (journalière, maximale), calculateur de taille, profils de prop firm | Gratuit (plan), Pro Trader (profils prop firm) |
-| `/app/mentor/` | Questions de cours, réponses tirées des contenus avec leurs sources | Starter |
+| `/app/mentor/` | Questions sur ICT et sur les cours, réponses tirées des contenus (15 fiches ICT de `hedgefund/saas/fiches_ict/`, définitions du moteur, cours) avec leurs sources ; `/coach/` y renvoie | Starter |
 | `/app/labo/` | Monte Carlo sur vos R, rapport démo / réel, robustesse d'une stratégie (walk-forward, Sharpe déflaté), surveillance des EA | Pro Trader |
 | `/app/ea/` | Usine EA : spécification → code MQL5 → revue par règles → compilation → model card → approbation pour la démo | Quant Elite |
 | `/app/reglages/` | Plan de trading, profil, EA Journal Sync, mot de passe investisseur, Telegram, jetons d'API, export et effacement des données | Gratuit |

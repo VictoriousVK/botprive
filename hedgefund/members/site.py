@@ -230,6 +230,15 @@ class MemberSettings:
     telegram_url: str = ""  # private invite links: environment or admin settings, never the repository
     discord_url: str = ""
     demo: bool = False  # demonstration data (python -m hedgefund.web demo): a banner says so on every page
+    # anti-bot: e-mail confirmation, Cloudflare Turnstile, extra blocked domains
+    email_verification: bool = True
+    turnstile_site_key: str = ""
+    turnstile_secret: str = ""
+    blocked_email_domains: frozenset[str] = frozenset()
+
+    @property
+    def turnstile_enabled(self) -> bool:
+        return bool(self.turnstile_site_key and self.turnstile_secret)
 
     @classmethod
     def from_env(cls) -> "MemberSettings":
@@ -239,6 +248,10 @@ class MemberSettings:
         if copy == "live" and not _flag("LF_COPYTRADING_LEGAL_OK"):
             copy = "demo"  # live copy needs the legal green light to be recorded explicitly
         return cls(
+            email_verification=_flag("LF_EMAIL_VERIFICATION", "1"),
+            turnstile_site_key=os.environ.get("LF_TURNSTILE_SITE_KEY", "").strip(),
+            turnstile_secret=os.environ.get("LF_TURNSTILE_SECRET", "").strip(),
+            blocked_email_domains=frozenset(d.strip().lower() for d in os.environ.get("LF_BLOCKED_EMAIL_DOMAINS", "").split(",") if d.strip()),
             public_url=os.environ.get("LF_PUBLIC_URL", "").strip().rstrip("/"),
             wave_api_key=os.environ.get("LF_WAVE_API_KEY", "").strip(),
             wave_webhook_secret=os.environ.get("LF_WAVE_WEBHOOK_SECRET", "").strip(),

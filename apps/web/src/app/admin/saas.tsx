@@ -1,9 +1,10 @@
 "use client";
 
-// Operators: SaaS health (jobs, runs, AI costs), Mentor knowledge base, calendar and news imports,
-// pre-session briefing, and the ICT golden set (annotation tool and precision / recall).
+// Operators: SaaS health (jobs, runs, AI costs), Mentor knowledge base and the questions it could
+// not answer, calendar and news imports, pre-session briefing, and the ICT golden set (annotation
+// tool and precision / recall).
 
-import { BookOpen, CalendarClock, Crosshair, Gauge, RefreshCw, Trash } from "lucide-react";
+import { BookOpen, CalendarClock, Crosshair, Gauge, MessageCircleQuestion, RefreshCw, Trash } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Candles, Kv, Section, type Bar, type Mark, type Zone } from "@/components/app-ui";
 import { Notice, Spinner, Stat } from "@/components/ui";
@@ -65,6 +66,7 @@ export function SaasTab() {
         <Knowledge />
         <Research />
       </div>
+      <MentorQuestions />
       <Golden />
     </div>
   );
@@ -129,8 +131,8 @@ function Knowledge() {
   };
   return (
     <Section title="Base de connaissances du Mentor" icon={<BookOpen className="size-4" />}
-      actions={<button className="btn btn-ghost btn-sm" disabled={busy} onClick={async () => { if (await run(() => op<Record<string, number>>("/api/admin/knowledge/reindex", "POST"), (r) => `Réindexé : ${Object.entries(r).map(([k, v]) => `${v} ${k === "skill" ? "fiche(s)" : k === "course" ? "cours" : k}`).join(", ")}`)) reload(); }}>Réindexer</button>}>
-      <p className="mb-3 text-sm text-muted">Le Mentor ne répond qu&apos;à partir de ces documents, filtrés selon l&apos;accès du membre. Les fiches de compétences et les cours de l&apos;académie sont indexés automatiquement.</p>
+      actions={<button className="btn btn-ghost btn-sm" disabled={busy} onClick={async () => { if (await run(() => op<Record<string, number>>("/api/admin/knowledge/reindex", "POST"), (r) => `Réindexé : ${Object.entries(r).map(([k, v]) => `${v} ${k === "skill" ? "définition(s) du moteur" : k === "fiche_ict" ? "fiche(s) ICT" : k === "course" ? "cours" : k}`).join(", ")}`)) reload(); }}>Réindexer</button>}>
+      <p className="mb-3 text-sm text-muted">Le Mentor ne répond qu&apos;à partir de ces documents, filtrés selon l&apos;accès du membre. Les définitions du moteur, les fiches ICT (<code>hedgefund/saas/fiches_ict/</code>) et les cours de l&apos;académie sont indexés automatiquement à chaque démarrage.</p>
       <ul className="mb-4 grid max-h-64 gap-1.5 overflow-y-auto text-sm">
         {(data ?? []).map((d) => (
           <li key={d.id} className="flex flex-wrap items-center gap-2 border-b border-white/5 pb-1.5">
@@ -151,6 +153,48 @@ function Knowledge() {
       </div>
       <button className="btn btn-primary btn-sm mt-3" disabled={busy || f.title.length < 3 || f.text.length < 20} onClick={add}>Ajouter</button>
       {note}
+    </Section>
+  );
+}
+
+// ---------------- questions to the Mentor ----------------
+type MentorQuestion = { created_at: number; question: string; label: string; narrated_by: string; passages: number };
+const MENTOR_LABEL: Record<string, [string, string]> = {
+  ANSWERED: ["Répondue", "chip-green"], PARTIAL: ["Partielle", "chip-gold"], OUT_OF_CORPUS: ["Hors des contenus", "chip-red"], REFUSED_ADVICE: ["Conseil refusé", ""],
+};
+
+function MentorQuestions() {
+  const { data, error, reload } = useOp<MentorQuestion[]>("/api/admin/mentor/questions");
+  const [gaps, setGaps] = useState(true);
+  // To cover: nothing found, or an answer the model itself judged partial. Without AI every answer
+  // is "extracts" (narrated by the rules): that is not a gap in the content.
+  const gap = (q: MentorQuestion) => q.label === "OUT_OF_CORPUS" || (q.label === "PARTIAL" && q.narrated_by === "llm");
+  const rows = (data ?? []).filter((q) => !gaps || gap(q));
+  return (
+    <Section title="Questions posées au Mentor" icon={<MessageCircleQuestion className="size-4" />} actions={<button className="btn btn-ghost btn-sm" onClick={reload}><RefreshCw className="size-4" aria-hidden /> Actualiser</button>}>
+      <p className="mb-3 text-sm text-muted">Les questions « hors des contenus », et celles que l&apos;IA a jugées « partielles », montrent ce qu&apos;il manque : ajoutez une fiche dans <code>hedgefund/saas/fiches_ict/</code> (ou un document ci-dessus), puis réindexez. Ni nom ni e-mail : seulement la question.</p>
+      <label className="mb-3 flex items-center gap-2 text-sm text-muted"><input type="checkbox" className="size-4 accent-brand-500" checked={gaps} onChange={(e) => setGaps(e.target.checked)} /> Seulement celles à couvrir</label>
+      {error ? <Notice kind="error">{error}</Notice> : !data ? <Spinner /> : (
+        <div className="max-h-80 overflow-auto">
+          <table className="table min-w-[560px]">
+            <thead><tr><th>Date</th><th>Question</th><th>Verdict</th><th className="text-right">Passages</th></tr></thead>
+            <tbody>
+              {rows.map((q, i) => {
+                const [label, chip] = q.label === "PARTIAL" && q.narrated_by !== "llm" ? ["Extraits (sans IA)", ""] : MENTOR_LABEL[q.label] ?? [q.label, ""];
+                return (
+                  <tr key={`${q.created_at}-${i}`}>
+                    <td className="num whitespace-nowrap text-muted">{when(q.created_at)}</td>
+                    <td className="max-w-md">{q.question}</td>
+                    <td><span className={`chip ${chip}`}>{label}</span></td>
+                    <td className="num text-right">{q.passages}</td>
+                  </tr>
+                );
+              })}
+              {!rows.length && <tr><td colSpan={4} className="text-faint">{gaps ? "Aucune question à couvrir pour le moment." : "Aucune question pour le moment."}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Section>
   );
 }

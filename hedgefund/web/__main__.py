@@ -78,10 +78,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "member-password":
-        from hedgefund.members.service import SCHEMA, member_auth
+        from hedgefund.members.service import member_auth, migrate
 
         store = _store(args)
-        store.executescript(SCHEMA)
+        migrate(store)
         rows = store.execute("SELECT id FROM members WHERE email = ?", (args.email.strip().lower(),))
         if not rows:
             sys.exit("membre inconnu")

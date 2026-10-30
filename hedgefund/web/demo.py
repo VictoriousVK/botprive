@@ -63,6 +63,9 @@ def prepare_environment(data: Path) -> None:
     os.environ["HF_ALLOW_REAL_TRADING"] = "0"
     os.environ["HF_COOKIE_SECURE"] = "0"  # a demo is served over http (this machine, or a VPS without a domain)
     os.environ["HF_HSTS"] = "0"
+    # No e-mail can leave a demo: sign-up goes straight to the guided set-up. To show the
+    # confirmation step, HF_DEMO_CONFIRMATION=1 (the link is written in the server window).
+    os.environ["LF_EMAIL_VERIFICATION"] = "1" if os.environ.get("HF_DEMO_CONFIRMATION", "").strip() == "1" else "0"
     # Never the real database, never real Wave payments, never the production host or proxy settings.
     for key in ("HF_SAAS_DB", "LF_WAVE_API_KEY", "LF_WAVE_WEBHOOK_SECRET", "HF_PUBLIC_HOST", "HF_TRUST_PROXY", "HF_PUBLIC_URL", "LF_PUBLIC_URL"):
         os.environ.pop(key, None)
@@ -205,9 +208,17 @@ def seed(app: Any, auth: Any, data: Path, now_ms: int, base: str = "http://127.0
     auth.create_user(OPERATOR, creds["operator"]["password"])
     oh = {"X-CSRF-Token": ok(op.post("/api/auth/login", json={"username": OPERATOR, "password": creds["operator"]["password"]}))["csrf"]}
 
+    def member(email: str, name: str, password: str) -> tuple[Any, dict[str, str]]:
+        cl = TestClient(app)
+        r = ok(cl.post("/api/m/register", json={"email": email, "password": password, "name": name, "phone": "", "accept_terms": True}))
+        if r.get("pending"):  # e-mail confirmation on: the team confirms it, as for a member who never got the e-mail
+            mid = next(m["id"] for m in ok(op.get("/api/admin/members", params={"q": email})) if m["email"] == email)
+            ok(op.post(f"/api/admin/members/{mid}/verify-email", headers=oh))
+            r = ok(cl.post("/api/m/login", json={"email": email, "password": password}))
+        return cl, {"X-CSRF-Token": r["csrf"]}
+
     # The trader: Quant Elite (every feature), onboarding done, two accounts with fictitious history.
-    c = TestClient(app)
-    h = {"X-CSRF-Token": ok(c.post("/api/m/register", json={"email": TRADER[0], "password": creds["trader"]["password"], "name": TRADER[1], "phone": "", "accept_terms": True}))["csrf"]}
+    c, h = member(TRADER[0], TRADER[1], creds["trader"]["password"])
     mid = ok(c.get("/api/m/me"))["id"]
     ok(op.post(f"/api/admin/members/{mid}/grant", json={"offer": "quant_elite", "months": 1, "reason": "compte de démonstration"}, headers=oh))
     ok(c.put("/api/app/profile", json=PROFILE, headers=h))
@@ -223,8 +234,7 @@ def seed(app: Any, auth: Any, data: Path, now_ms: int, base: str = "http://127.0
     _journal_notes(c, h, ftmo["id"])
 
     # The prospect: free account, a Starter payment declared and waiting for the team.
-    p = TestClient(app)
-    ph = {"X-CSRF-Token": ok(p.post("/api/m/register", json={"email": PROSPECT[0], "password": creds["prospect"]["password"], "name": PROSPECT[1], "phone": "", "accept_terms": True}))["csrf"]}
+    p, ph = member(PROSPECT[0], PROSPECT[1], creds["prospect"]["password"])
     try:
         pay = ok(p.post("/api/m/checkout", json={"offer": "starter", "months": 1}, headers=ph))
         ok(p.post(f"/api/m/payments/{pay['payment']['id']}/declare", json={"transaction_ref": "DEMO-" + secrets.token_hex(4).upper()}, headers=ph))

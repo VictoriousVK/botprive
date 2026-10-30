@@ -13,7 +13,7 @@ des vraies données, qu'elles ne touchent jamais.
 | Parcours | Dans la démo | État |
 |---|---|---|
 | Site, offres, paiement Wave manuel | oui | prêt |
-| Inscription en deux temps, accueil guidé en 4 étapes | oui, en direct | prêt |
+| Inscription en deux temps, accueil guidé en 4 étapes | oui, en direct | prêt ; en démonstration, pas de confirmation d'e-mail (aucun e-mail ne part) : `HF_DEMO_CONFIRMATION=1` pour montrer l'étape, le lien s'affiche dans la fenêtre du serveur |
 | Journal : import MT5, statistiques par killzone, notes par trade | oui (FTMO 100K fictif) | prêt |
 | Coach IA : écarts au plan, leçons à valider | oui | prêt ; texte par les règles sans clé Anthropic, rédigé par l'IA avec |
 | Garde-fou prop firm : limites, taille de position | oui (FTMO 100K, Topstep 50K) | prêt ; profils « à vérifier » |

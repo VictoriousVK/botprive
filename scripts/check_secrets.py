@@ -46,6 +46,8 @@ def scan(paths: list[str]) -> list[str]:
             for m in rx.finditer(text):
                 if re.search(r"exemple|example|placeholder|xxxx", m.group(0), re.I):
                     continue  # obvious fakes used by tests and docs
+                if re.search(r"%filtered%|\[filtered\]|\[filtré\]", m.group(0), re.I):
+                    continue  # redaction placeholders (the Sentry SDK masks passwords in URLs this way)
                 line = text.count("\n", 0, m.start()) + 1
                 hits.append(f"{rel}:{line}: {label}")
     return hits
