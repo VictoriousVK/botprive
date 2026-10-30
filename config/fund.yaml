@@ -1,0 +1,49 @@
+name: "One-Person 24/7 Crypto Fund"
+mode: paper                 # backtest | paper | shadow. `live` is refused by config loader.
+base_currency: USDT
+starting_nav: 1000000
+bar_interval: 4h
+risk_limits_file: config/risk_limits.yaml
+strategy_dir: config/strategies
+var_dir: var
+
+# Fees below are ASSUMPTIONS modelled on published base-tier taker rates.
+# Verify against your own venue account tier before trusting any backtest.
+instruments:
+  BTCUSDT:
+    {kind: spot, base: BTC, quote: USDT, cluster: crypto_beta, taker_fee_bps: 10, maker_fee_bps: 10,
+     half_spread_bps: 0.5, impact_k_bps: 4, min_notional: 10}
+  ETHUSDT:
+    {kind: spot, base: ETH, quote: USDT, cluster: crypto_beta, taker_fee_bps: 10, maker_fee_bps: 10,
+     half_spread_bps: 0.8, impact_k_bps: 5, min_notional: 10}
+  BTCUSDT-PERP:
+    {kind: perp, base: BTC, quote: USDT, cluster: crypto_beta, taker_fee_bps: 5, maker_fee_bps: 2,
+     half_spread_bps: 0.5, impact_k_bps: 3, min_notional: 10, venue_symbol: BTCUSDT}
+  ETHUSDT-PERP:
+    {kind: perp, base: ETH, quote: USDT, cluster: crypto_beta, taker_fee_bps: 5, maker_fee_bps: 2,
+     half_spread_bps: 0.8, impact_k_bps: 4, min_notional: 10, venue_symbol: ETHUSDT}
+
+jev:
+  engine: reference         # reference | remote. remote requires JEV_API_URL, JEV_API_KEY,
+                            # and JEV_WIRE_FORMAT_VERIFIED=1 (see hedgefund/jev/remote.py)
+  shadow_engine: null       # run a second engine in shadow and log disagreements
+  timeout_ms: 250           # over budget => no trade (fail closed)
+  calibration_bundle: null  # path to a replay-tested bundle from `python -m hedgefund recalibrate`
+
+research:
+  model: claude-opus-5-5
+  effort: high
+  max_tokens: 64000
+
+data:
+  live_lookback_days: 220   # enough for 200-day moving averages
+  max_staleness_bars: 2
+
+schedule:                   # all times UTC
+  evening_review: "20:00"
+  overnight_research: "02:00"
+  health_check_minutes: 15
+
+monitoring:
+  alert_webhook_env: ALERT_WEBHOOK_URL   # Slack-compatible incoming webhook ({"text": ...})
+  jev_latency_p99_ms: 500

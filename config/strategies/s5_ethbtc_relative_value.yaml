@@ -1,0 +1,74 @@
+id: ethbtc_rv
+name: ETH/BTC relative value (dollar-neutral ratio reversion)
+version: 1
+owner_desk: quant
+stage: data             # implemented + tested offline; next gate needs >=1y of real point-in-time data
+impl: hedgefund.strategy.library.relative_value:EthBtcRelativeValue
+edge_source: behavioral
+hypothesis: >
+  Short-horizon deviations of ln(ETH/BTC) from its 30-day mean are partly driven by
+  transient flows (rotations, liquidations concentrated in one asset) and revert when the
+  ratio is not in a structural trend. A dollar-neutral long/short package isolates the ratio
+  and removes most market beta. Structural ratio trends (narratives, ETF flows) are the
+  enemy; the efficiency-ratio filter exists to stay out of them.
+universe: [ETHUSDT-PERP, BTCUSDT-PERP]
+packages:
+  - key: ETHBTC
+    legs:
+      - {symbol: ETHUSDT-PERP, weight: 1.0}
+      - {symbol: BTCUSDT-PERP, weight: -1.0}
+timeframe: 4h
+allowed_directions: [long, short]   # long = long ETH / short BTC
+features: [ratio_z, ratio_er, rv_ratio]
+entry_rules:
+  - "|z| >= entry_z where z = (ln(ETH/BTC) - mean_30d) / std_30d"
+  - "ratio efficiency ratio over the window < max_ratio_er (not trending)"
+  - "short package when z > 0, long package when z < 0"
+exit_rules:
+  - "|z| reverts inside exit_z"
+  - "|z| >= stop_z (structural break)"
+  - "time stop after max_hold_days"
+expected_holding: "2-20 days"
+params:
+  z_window_days: 30
+  entry_z: 2.0
+  exit_z: 0.5
+  stop_z: 3.5
+  max_ratio_er: 0.30
+  max_hold_days: 20
+  stop_distance_pct: 0.08
+risk:
+  risk_per_trade_pct_nav: 0.006
+  max_package_notional_pct_nav: 0.10
+  rebalance_threshold: 0.5
+  exit_on_crisis: true
+costs:
+  fee_bps_roundtrip: 20      # two perp legs in and out
+  slippage_bps_roundtrip: 4
+  funding_note: "Pays funding on one leg, receives on the other; net usually small but can diverge."
+liquidity:
+  min_bar_notional_volume: 50000000
+jev:
+  profile: relative_value
+  allowed_regimes: [mean_reverting, trending]
+  min_setup_quality: 2
+  min_liquidity_quality: 2
+  max_toxic_flow: 1
+  min_expected_edge: 55
+  min_confidence: 0.62
+  calibration_horizon_bars: 60     # 10 days
+  instructions:
+    direction: "'long' = long ETH/short BTC is supported, 'short' = short ETH/long BTC, 'flat' = no reversion edge."
+    setup_quality: "Judge the stretch of the ETH/BTC ratio versus its recent range and whether the ratio is trending."
+    should_trade: "Answer yes only if the ratio is more likely to revert halfway to its mean than to extend further."
+invalidation:
+  - {metric: rolling_sharpe_90d, op: "<", threshold: 0.0, min_observations: 540, action: demote}
+  - {metric: strategy_drawdown, op: ">", threshold: 0.04, action: halt}
+  - {metric: brier_should_trade, op: ">", threshold: 0.25, min_observations: 40, action: demote}
+data_sources: [binance_usdm_klines, binance_usdm_funding]
+failure_modes:
+  - "Structural ratio trend (multi-month ETH underperformance or outperformance) produces repeated stop-outs."
+  - "Leg-specific event (ETH upgrade, ETF flows, hack) is information, not noise."
+  - "Hedge ratio instability: ETH beta to BTC is ~1.1-1.3 and varies; dollar-neutral is not beta-neutral."
+capacity_usd: 20000000
+research_memo: null

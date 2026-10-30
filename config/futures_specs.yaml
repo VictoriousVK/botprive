@@ -1,0 +1,23 @@
+# Contrats à terme (CME Group) : valeur d'un point de prix pour UN contrat, en dollars, et pas de
+# cotation. Source : fiches de contrat CME Group (spécifications stables, à revoir si le CME
+# les modifie). « micro: true » : un micro compte pour 1/10 de contrat mini dans les plafonds
+# de contrats des prop firms (ex. Topstep 50K : 5 minis ou 50 micros).
+#
+# Exemple : MNQ vaut 2 $ par point ; un stop de 25 points sur 3 MNQ risque 3 × 25 × 2 = 150 $.
+
+contracts:
+  NQ:  {name: "E-mini Nasdaq-100",        point_value: 20,     tick_size: 0.25}
+  MNQ: {name: "Micro E-mini Nasdaq-100",  point_value: 2,      tick_size: 0.25,    micro: true}
+  ES:  {name: "E-mini S&P 500",           point_value: 50,     tick_size: 0.25}
+  MES: {name: "Micro E-mini S&P 500",     point_value: 5,      tick_size: 0.25,    micro: true}
+  YM:  {name: "E-mini Dow",               point_value: 5,      tick_size: 1}
+  MYM: {name: "Micro E-mini Dow",         point_value: 0.5,    tick_size: 1,       micro: true}
+  RTY: {name: "E-mini Russell 2000",      point_value: 50,     tick_size: 0.1}
+  M2K: {name: "Micro E-mini Russell 2000", point_value: 5,     tick_size: 0.1,     micro: true}
+  GC:  {name: "Or (100 onces)",           point_value: 100,    tick_size: 0.1}
+  MGC: {name: "Micro or (10 onces)",      point_value: 10,     tick_size: 0.1,     micro: true}
+  SI:  {name: "Argent (5 000 onces)",     point_value: 5000,   tick_size: 0.005}
+  CL:  {name: "Pétrole WTI (1 000 barils)", point_value: 1000, tick_size: 0.01}
+  MCL: {name: "Micro pétrole WTI (100 barils)", point_value: 100, tick_size: 0.01,  micro: true}
+  6E:  {name: "Euro FX (125 000 €)",      point_value: 125000, tick_size: 0.00005}
+  M6E: {name: "Micro Euro FX (12 500 €)", point_value: 12500,  tick_size: 0.0001,  micro: true}

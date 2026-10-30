@@ -1,0 +1,74 @@
+{
+  "name": "Alpha Edge — briefing pré-New York",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 6 * * 1-5"
+            }
+          ]
+        }
+      },
+      "name": "Planning : briefing pré-New York",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ALPHA_EDGE_URL }}/api/jobs/briefing",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Jobs-Secret",
+              "value": "={{ $env.HF_JOBS_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $workflow.id + '-' + $now.toFormat('yyyyMMddHHmm') }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"session\": \"new_york\"}"
+      },
+      "name": "Alpha Edge : /api/jobs/briefing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Planning : briefing pré-New York": {
+      "main": [
+        [
+          {
+            "node": "Alpha Edge : /api/jobs/briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/New_York",
+    "executionOrder": "v1"
+  },
+  "active": false
+}
