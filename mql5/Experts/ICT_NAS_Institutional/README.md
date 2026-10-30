@@ -1,4 +1,69 @@
-# ICT NAS Institutional v2.50
+# ICT NAS Institutional v2.51
+
+La v2.51 applique l'audit « la v2.50 s'est éloignée d'ICT en cherchant à prendre des trades ». **Chaque ajout est derrière un input** pour être comparé en backtest. Les entrées, les SL, le risque et les limites journalières ne changent pas.
+
+## Bugs corrigés
+
+| # | Bug | Correction | Paramètre |
+|---|---|---|---|
+| 1 | Le suivi virtuel ignorait la 1re minute de chaque signal (la bougie en cours lors de la création était rejetée) : `r_multiple`, l'apprentissage modèle × session et le ML étaient biaisés | `Step()` accepte la bougie qui contient l'heure du signal | — |
+| 2 | Le facteur « FVG valide » valait toujours 1 (10 points gratuits) : le score ne filtrait presque rien | Remplacé par **le biais journalier** (`daily_bias`) | `InpDailyBiasMode` |
+| 3 | Un même sweep pouvait donner `SILVER_BULLET`, `SB_V6`, `LONDON_OPR_PDF` et `CRT_0250` : risque doublé sur une seule idée | **Un seul trade par sweep** (même sens, 15 min), tous moteurs confondus. Refus : `REJECTED_CONFLICT (meme sweep deja trade)` | `InpOneTradePerSweep = true` |
+| 4 | Au lot minimum, le partiel est impossible en réel mais la simulation comptait 50 % au TP1 | La répartition des sorties est calculée sur le lot réel (arrondi au pas), en réel et en simulation, pour les signaux pris **et** non pris. Colonne `partial_ok` | — |
+| 5 | Filtre news inactif dans le testeur sans `news_usd.csv` | En réel/démo, l'EA **exporte le calendrier MT5** (USD, impact fort, 5 ans) vers `Common\Files\ICTNAS\news_usd.csv`, lu ensuite par le testeur. Sans ce fichier, alerte dans le journal et dans `diagnostic.txt` | `InpNewsExportCSV = true`, `InpNewsExportYears = 5` |
+
+**Changement d'heure :** l'Europe est passée à l'heure d'hiver le 25 octobre, les États-Unis le font le 1er novembre. Avec `InpServerTZ = TZ_NY_PLUS_7` et un broker qui suit le DST US, rien à faire. Sinon, vérifie la ligne `Fuseau serveur verifie` au démarrage en réel.
+
+## Retour à ICT
+
+| Ajout | Détail | Paramètre (défaut) |
+|---|---|---|
+| **Biais journalier** | Bougie du jour de trading précédent (18:00 → 17:00 NY, calculée en H1, donc indépendante du fuseau du serveur) : clôture au-dessus du haut de l'avant-veille → haussier ; sous le bas → baissier ; purge du haut puis clôture dedans → baissier ; purge du bas puis clôture dedans → haussier ; inside day → aucun biais | `InpDailyBiasMode = DBIAS_SCORE` (OFF / SCORE / FILTRE) |
+| Règle NY AM (mode FILTRE) | 07:00-12:00 NY, en biais haussier : achat **sous le Midnight Open**, après la prise d'une SSL depuis minuit (Judas). Vente : l'inverse | `InpJudasRule = true` |
+| Inside day | En FILTRE, un jour sans biais n'est pas bloqué, sauf si tu le demandes | `InpDailyBiasNoneBlocks = false` |
+| **MSS significatif** | Le swing cassé doit être à au moins x ATR M5 de l'extrême du sweep : un fractal M1 à 2 points n'est plus un MSS | `InpMSSMinRangeATR = 0.3` (0 = comme la v2.50) |
+| CISD seul | `false` = la cassure d'un swing est exigée | `InpAllowCISDOnly = true` |
+| **Silver Bullet** | Le FVG doit se **former** dans la fenêtre (bougie 3), et l'entrée rester possible avant sa fin | — |
+| **Source de la cible** | Colonne `tp_source` : `DOL` (liquidité, STD du MOR, IRL...), `CAP` (DOL plafonnée à 5 R), `FALLBACK` (cible inventée) | — |
+| ICT strict | `false` = pas de DOL, pas de trade (aussi pour les modèles v6.20) | `InpAllowFallbackTarget = true` |
+| Macros | Génériques (xx:50-xx:10, xx:20-xx:40) ou publiées par ICT : 02:33-03:00, 04:03-04:30, 08:50-09:10, 09:50-10:10, 10:50-11:10, 11:50-12:10, 13:10-13:40, 15:15-15:45 | `InpMacroTable = MACRO_GENERIC` |
+
+**Base SQLite :** trois colonnes sont ajoutées à `signals` (`daily_bias`, `tp_source`, `partial_ok`). Une base existante est migrée automatiquement au démarrage. Dans `ict_quant`, le facteur `fvg_valid` devient `daily_bias` : un fichier `ict_weights.json` ou un modèle ONNX entraîné avec l'ancien nom doit être régénéré (sinon : poids par défaut, et le ML voit 0 pour ce facteur).
+
+**Non traité ici :** les modèles CRT restent des étiquettes horaires. La vraie Candle Range Theory (range d'une bougie H1/H4/D1, purge de son extrême, clôture dedans, cible l'extrême opposé) est un nouveau modèle à part entière. Le TP1 reste à 2 R au lieu de la première liquidité opposée.
+
+## Banc de test (données synthétiques, 3 graines × 60 jours)
+
+| Configuration | Trades / jour | R total (R / trade) | Gagnants / perdants |
+|---|---|---|---|
+| v2.50 | 2,55 | 266 R (0,58) | 238 / 221 |
+| **v2.51 (défaut : biais en score)** | 2,44 | 257 R (0,59) | 228 / 211 |
+| v2.51 + biais en FILTRE (Judas NY AM) | 2,00 | 220 R (0,61) | 199 / 161 |
+| v2.51 ICT strict (filtre, sans cible de secours, MSS exigé) | 2,00 | 211 R (0,59) | 196 / 164 |
+| v2.51 sans les modèles v6.20 | 1,87 | 233 R (0,69) | 177 / 160 |
+
+- **Écart entre le R réel et le R simulé d'un même trade** : 0,18 R → 0,11 R (graine 71) et 0,10 R → 0,06 R (graine 72). C'est l'effet du bug n°1 : tes données d'apprentissage sont plus justes.
+- **Les données synthétiques sont une marche aléatoire : un biais journalier n'y a aucune valeur.** Le tableau montre seulement combien de trades chaque option enlève, pas si elle est rentable. Seul ton historique réel répondra.
+
+## Mesurer avant d'ajouter
+
+1. Lance l'EA une fois en démo ou en réel : il exporte `news_usd.csv` (journal : `News : N dates USD … exportees`).
+2. Backtest long (12 mois si possible), M1, « chaque tick basé sur les ticks réels », `InpProfile = Agressif` pour tout capturer.
+3. Ouvre `Common\Files\ICTNAS\ict_nas.sqlite` et lance `analyse_v251.sql` :
+   - espérance par modèle × session ;
+   - avec ou contre le biais journalier ;
+   - cibles `DOL` / `CAP` / `FALLBACK` ;
+   - sorties au BE ;
+   - trades sans partiel possible.
+4. Garde les 2 ou 3 couples modèle × session à espérance positive, coupe le reste avec leurs interrupteurs.
+5. Refais le test avec `InpDailyBiasMode = DBIAS_FILTER` sur la même période : garde le filtre s'il améliore l'espérance.
+6. Valide sur une autre période que celle qui a servi à choisir.
+
+Pour le break-even à 1 R, le MFE s'arrête à la sortie : compare plutôt deux backtests, `InpBEAtR = 1` contre `InpBEAtR = 0`.
+
+---
+
+# Historique : v2.50
 
 La v2.50 répond à « il n'est pas vraiment rentable, fais qu'il prenne des trades et trouve des entrées adaptées à mes stratégies ». **Tes entrées, tes SL, tes RR et ton risque ne changent pas.** Trois choses changent :
 

@@ -407,7 +407,8 @@ int main(int argc, char **argv) {
                         "JOIN signals s ON s.signal_uid = t.signal_uid AND s.decision = 'TAKEN'");
     printf("  réel / virtuel : écart moyen |R réel - R simulé| = %.3f R\n", gap);
 #if V251
-    CHECK(gap < 0.15, "suivi virtuel proche du réel (1re minute et partiels au lot minimum simulés comme en réel)");
+    if (VARIANT != V_OPEN)  // « prix d'ouverture » : le réel ne voit qu'un prix par bougie, la simulation voit haut / bas
+      CHECK(gap < 0.15, "suivi virtuel proche du réel (1re minute et partiels au lot minimum simulés comme en réel)");
 #endif
   }
 #endif
