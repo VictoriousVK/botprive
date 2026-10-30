@@ -8,7 +8,7 @@ import { Notice, Spinner, Stat } from "@/components/ui";
 import { api, ApiError, clock, dateFr, duration, fcfa, setCsrf, type Leader, type Me, type Payment } from "@/lib/api";
 
 type Overview = {
-  members: number; paying: Record<string, number>; to_review: number; revenue_30d_xof: number; leads: number; wave: string; copytrading: string;
+  members: number; unverified: number; paying: Record<string, number>; to_review: number; revenue_30d_xof: number; leads: number; wave: string; copytrading: string;
   bots: { id: string; name: string; strategy: string }[];
   labels: { access: Record<string, string>; course_status: Record<string, string>; providers: Record<string, string>; leader_status: Record<string, string> };
   offers: { key: string; label: string; price_xof: number | null; category: string; period: string; purchasable: boolean }[];
@@ -16,7 +16,7 @@ type Overview = {
 type AdminPart = { id: string; position: number; title: string; summary: string; duration_s: number; provider: string; provider_label: string; video_ref: string; chapters: { t: number; title: string }[]; free_preview: number; player: { kind: string; src: string } | null };
 type AdminCourse = { id: string; slug: string; title: string; subtitle: string; description: string; level: string; access: string; status: string; position: number; parts: AdminPart[] | number; duration_s?: number };
 
-const TABS = [["overview", "Vue d'ensemble"], ["payments", "Paiements"], ["members", "Membres"], ["academy", "Académie"], ["copy", "Copytrading"], ["leads", "Prospects"], ["settings", "Réglages"]] as const;
+const TABS = [["overview", "Vue d'ensemble"], ["payments", "Paiements"], ["members", "Membres"], ["academy", "Académie"], ["copy", "Copytrading"], ["leads", "Prospects"], ["coach", "Coach IA"], ["settings", "Réglages"]] as const;
 type Tab = (typeof TABS)[number][0];
 const op = <T,>(path: string, method = "GET", body?: unknown) => api<T>(path, { method, body, as: "operator" });
 
@@ -74,7 +74,7 @@ export function AdminView() {
         </div>
       </div>
       <div className="mt-8">
-        {!ov ? <Spinner /> : tab === "overview" ? <OverviewTab ov={ov} /> : tab === "payments" ? <PaymentsTab onChange={loadOv} /> : tab === "members" ? <MembersTab ov={ov} /> : tab === "academy" ? <AcademyTab ov={ov} /> : tab === "copy" ? <CopyTab ov={ov} /> : tab === "leads" ? <LeadsTab /> : <SettingsTab />}
+        {!ov ? <Spinner /> : tab === "overview" ? <OverviewTab ov={ov} /> : tab === "payments" ? <PaymentsTab onChange={loadOv} /> : tab === "members" ? <MembersTab ov={ov} /> : tab === "academy" ? <AcademyTab ov={ov} /> : tab === "copy" ? <CopyTab ov={ov} /> : tab === "leads" ? <LeadsTab /> : tab === "coach" ? <CoachTab /> : <SettingsTab />}
       </div>
     </div>
   );
@@ -110,7 +110,7 @@ function OverviewTab({ ov }: { ov: Overview }) {
   return (
     <div className="grid gap-5">
       <div className="card grid grid-cols-2 gap-6 p-6 md:grid-cols-5">
-        <Stat label="Membres" value={ov.members} />
+        <Stat label="Membres confirmés" value={<>{ov.members}{ov.unverified > 0 && <span className="ml-2 text-xs font-normal text-gold-300">+{ov.unverified} en attente</span>}</>} hint="Les inscriptions en attente n'ont pas encore cliqué sur le lien de confirmation (supprimées après 7 jours)." />
         <Stat label="Abonnés actifs" value={paying} />
         <Stat label="Encaissé (30 j)" value={fcfa(ov.revenue_30d_xof)} />
         <Stat label="À vérifier" value={ov.to_review} tone={ov.to_review ? "text-gold-300" : ""} />
@@ -214,7 +214,7 @@ function MembersTab({ ov }: { ov: Overview }) {
       <input className="input mb-4 max-w-sm" placeholder="Rechercher (nom, e-mail)" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="card scroll-x">
         {!rows ? <div className="p-6"><Spinner /></div> : (
-          <table className="table min-w-[760px]">
+          <table className="table min-w-[900px]">
             <thead><tr><th>Membre</th><th>Téléphone</th><th>Offre</th><th>Inscrit le</th><th>Statut</th><th /></tr></thead>
             <tbody>
               {rows.map((m) => (
@@ -227,9 +227,13 @@ function MembersTab({ ov }: { ov: Overview }) {
                     ))}
                   </td>
                   <td className="num text-muted">{dateFr(m.created_at)}</td>
-                  <td><span className={`chip ${m.status === "active" ? "chip-green" : "chip-red"}`}>{m.status === "active" ? "Actif" : "Suspendu"}</span></td>
+                  <td>
+                    <span className={`chip ${m.status === "active" ? "chip-green" : "chip-red"}`}>{m.status === "active" ? "Actif" : "Suspendu"}</span>
+                    {!m.email_verified && <span className="chip chip-gold ml-1" title="Le membre n'a pas encore cliqué sur le lien reçu par e-mail">E-mail non confirmé</span>}
+                  </td>
                   <td className="text-right">
                     <div className="flex justify-end gap-2">
+                      {!m.email_verified && <button className="btn btn-ghost btn-sm" onClick={() => run(() => op(`/api/admin/members/${m.id}/verify-email`, "POST"), "Adresse confirmée.").then(load)}>Confirmer l&apos;e-mail</button>}
                       <button className="btn btn-ghost btn-sm" onClick={() => setGrant({ id: m.id, offer: "pro_trader", months: 1, reason: "" })}>Attribuer</button>
                       <button className="btn btn-ghost btn-sm" onClick={() => run(() => op(`/api/admin/members/${m.id}/status`, "POST", { status: m.status === "active" ? "suspended" : "active" })).then(load)}>
                         {m.status === "active" ? "Suspendre" : "Réactiver"}
@@ -512,6 +516,40 @@ function LeadsTab() {
           <tbody>{rows.map((r) => <tr key={`${r.email}-${r.interest}`}><td>{r.email}</td><td>{label[r.interest] ?? r.interest}</td><td className="num text-muted">{dateFr(r.created_at)}</td></tr>)}</tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+// ---------------- IA coach ----------------
+type CoachQuestion = { id: number; ts: number; question: string; sources: string[]; out_of_base: boolean; email: string | null };
+function CoachTab() {
+  const [data, setData] = useState<{ enabled: boolean; questions: CoachQuestion[] } | null>(null);
+  const [onlyOut, setOnlyOut] = useState(false);
+  useEffect(() => {
+    op<{ enabled: boolean; questions: CoachQuestion[] }>("/api/admin/coach").then(setData);
+  }, []);
+  if (!data) return <Spinner />;
+  const rows = onlyOut ? data.questions.filter((q) => q.out_of_base) : data.questions;
+  return (
+    <div className="grid gap-4">
+      {!data.enabled && <Notice kind="warn">Coach désactivé : ajoutez ANTHROPIC_API_KEY dans les réglages du serveur (voir docs/SITE.md), puis redémarrez.</Notice>}
+      <Notice>Les questions « hors base » montrent ce qu&apos;il manque au coach. Ajoutez une fiche dans <code>hedgefund/coach/knowledge/</code> pour y répondre.</Notice>
+      <label className="flex items-center gap-2 text-sm text-muted"><input type="checkbox" className="size-4 accent-brand-500" checked={onlyOut} onChange={(e) => setOnlyOut(e.target.checked)} /> Seulement les questions hors base</label>
+      <div className="card scroll-x">
+        {rows.length === 0 ? <p className="p-6 text-sm text-muted">Aucune question pour le moment.</p> : (
+          <table className="table min-w-[720px]">
+            <thead><tr><th>Date</th><th>Membre</th><th>Question</th><th>Fiches utilisées</th></tr></thead>
+            <tbody>{rows.map((q) => (
+              <tr key={q.id}>
+                <td className="num whitespace-nowrap text-muted">{dateFr(q.ts)}</td>
+                <td className="text-xs">{q.email ?? "—"}</td>
+                <td className="max-w-md">{q.question}</td>
+                <td>{q.out_of_base ? <span className="chip chip-gold">Hors base</span> : <span className="text-xs text-faint">{q.sources.join(", ") || "—"}</span>}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

@@ -226,6 +226,19 @@ class MemberSettings:
     media_hosts: tuple[str, ...] = field(default_factory=tuple)
     telegram_url: str = ""  # private invite links: environment or admin settings, never the repository
     discord_url: str = ""
+    # anti-bot: e-mail confirmation, Cloudflare Turnstile, extra blocked domains
+    email_verification: bool = True
+    turnstile_site_key: str = ""
+    turnstile_secret: str = ""
+    blocked_email_domains: frozenset[str] = frozenset()
+    # IA Trading Coach (needs ANTHROPIC_API_KEY)
+    coach_enabled: bool = False
+    coach_model: str = "claude-sonnet-5-5"
+    coach_daily_limit: int = 30
+
+    @property
+    def turnstile_enabled(self) -> bool:
+        return bool(self.turnstile_site_key and self.turnstile_secret)
 
     @classmethod
     def from_env(cls) -> "MemberSettings":
@@ -234,7 +247,15 @@ class MemberSettings:
             copy = "demo"
         if copy == "live" and not _flag("LF_COPYTRADING_LEGAL_OK"):
             copy = "demo"  # live copy needs the legal green light to be recorded explicitly
+        coach_default = "1" if os.environ.get("ANTHROPIC_API_KEY", "").strip() else "0"
         return cls(
+            email_verification=_flag("LF_EMAIL_VERIFICATION", "1"),
+            turnstile_site_key=os.environ.get("LF_TURNSTILE_SITE_KEY", "").strip(),
+            turnstile_secret=os.environ.get("LF_TURNSTILE_SECRET", "").strip(),
+            blocked_email_domains=frozenset(d.strip().lower() for d in os.environ.get("LF_BLOCKED_EMAIL_DOMAINS", "").split(",") if d.strip()),
+            coach_enabled=_flag("LF_COACH", coach_default),
+            coach_model=os.environ.get("LF_COACH_MODEL", "claude-sonnet-5-5").strip() or "claude-sonnet-5-5",
+            coach_daily_limit=max(1, int(os.environ.get("LF_COACH_DAILY_LIMIT", "30") or 30)),
             public_url=os.environ.get("LF_PUBLIC_URL", "").strip().rstrip("/"),
             wave_api_key=os.environ.get("LF_WAVE_API_KEY", "").strip(),
             wave_webhook_secret=os.environ.get("LF_WAVE_WEBHOOK_SECRET", "").strip(),

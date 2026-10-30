@@ -1,5 +1,11 @@
 # botprive
 
+> **v0.4** : confirmation d'e-mail et anti-robots, mot de passe oublié, Coach IA ICT
+> (`/coach/`), Sentry. Mise en route : [docs/MISE_EN_ROUTE_V0.4.md](docs/MISE_EN_ROUTE_V0.4.md).
+> Documents produit : [PRD](docs/PRD.md) · [TRD](docs/TRD.md) · [App Flow](docs/APP_FLOW.md) ·
+> [UI/UX](docs/UI_UX_DESIGN.md) · [Backend](docs/BACKEND_SCHEMA.md) ·
+> [Implementation](docs/IMPLEMENTATION.md) · [Outils Claude Code](docs/CLAUDE_CODE_OUTILS.md).
+
 This repository holds three things:
 
 - **Web platform for MetaTrader 5** (`hedgefund/web`, `hedgefund/mt5`, `hedgefund/bots`): a

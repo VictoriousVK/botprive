@@ -14,6 +14,7 @@ from hedgefund.bots.templates import new_bot_id
 from hedgefund.config import load_config
 from hedgefund.core.clock import SimClock
 from hedgefund.members.academy import AcademyError, parse_chapters, parse_video, player
+from hedgefund.members.mailer import LogMailer
 from hedgefund.members.site import MemberSettings, load_site
 from hedgefund.members.wave import sign, verify_signature
 from hedgefund.web.app import SitePages, WebSettings, create_app
@@ -61,8 +62,8 @@ def site_app(tmp_path):
         auth = AuthService(eng.store)
         if auth.user_count() == 0:
             auth.create_user("vic", PW)
-        ms = MemberSettings(public_url="https://lf.test" if wave else "", wave_api_key="k" if wave else "", wave_webhook_secret="whsec", copytrading=copytrading, media_hosts=("media.lf.test",))
-        app = create_app(eng, auth, WebSettings(cookie_secure=False, hsts=False), start_engine=False, site=_site(tmp_path, manual), member_settings=ms, site_dir=site_dir or tmp_path / "nosite")
+        ms = MemberSettings(public_url="https://lf.test", wave_api_key="k" if wave else "", wave_webhook_secret="whsec", copytrading=copytrading, media_hosts=("media.lf.test",))
+        app = create_app(eng, auth, WebSettings(cookie_secure=False, hsts=False), start_engine=False, site=_site(tmp_path, manual), member_settings=ms, site_dir=site_dir or tmp_path / "nosite", mailer=LogMailer())
         fake = None
         if wave:
             fake = app.state.members.wave = FakeWave()
@@ -70,9 +71,20 @@ def site_app(tmp_path):
     return make
 
 
+def last_link(c, path="/compte/verifier/"):
+    text = c.app.state.mailer.outbox[-1].text
+    assert f"https://lf.test{path}?jeton=" in text
+    return text.split("jeton=", 1)[1].split()[0]
+
+
 def register(c, email="awa@example.com", **kw):
+    """Signs up and clicks the confirmation link, like a member would."""
     body = {"email": email, "password": PW, "name": "Awa Ndiaye", "phone": "+221 77 123 45 67", "accept_terms": True, **kw}
     r = c.post("/api/m/register", json=body)
+    if r.status_code != 200:
+        return r, {}
+    assert r.json() == {"pending": True, "email": email.strip().lower()} and "set-cookie" not in r.headers
+    r = c.post("/api/m/verify", json={"token": last_link(c)})
     return r, ({"X-CSRF-Token": r.json()["csrf"]} if r.status_code == 200 else {})
 
 

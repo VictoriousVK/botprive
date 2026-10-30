@@ -1,13 +1,14 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, CircleCheck, Copy, ExternalLink, GraduationCap, LogOut, RefreshCw, Smartphone, Wallet } from "lucide-react";
+import { ArrowRight, Bot, CircleCheck, Copy, ExternalLink, GraduationCap, LogOut, MailCheck, RefreshCw, Smartphone, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { Emblem } from "@/components/brand";
+import { Turnstile } from "@/components/turnstile";
 import { Notice, Spinner } from "@/components/ui";
-import { api, dateFr, dollars, fcfa, type CheckoutResult, type Me, type Payment } from "@/lib/api";
+import { api, dateFr, dollars, fcfa, type CheckoutResult, type Me, type Payment, type Pending } from "@/lib/api";
 import { useSession } from "@/lib/session";
 
 export function AccountView() {
@@ -20,31 +21,50 @@ export function AccountView() {
 // ---------------- sign in / sign up ----------------
 function AuthPanel({ initial }: { initial: "login" | "register" }) {
   const { setMe, site } = useSession();
-  const [tab, setTab] = useState<"login" | "register">(initial);
-  const [f, setF] = useState({ name: "", email: "", phone: "", password: "", totp: "", accept: false });
+  const [tab, setTab] = useState<"login" | "register" | "forgot">(initial);
+  const [f, setF] = useState({ name: "", email: "", phone: "", password: "", totp: "", accept: false, website: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [needTotp, setNeedTotp] = useState(false);
+  const [pending, setPending] = useState<string | null>(null); // e-mail waiting for confirmation
+  const [unconfirmed, setUnconfirmed] = useState(false); // login refused: e-mail not confirmed
+  const [sentReset, setSentReset] = useState(false);
+  const [captcha, setCaptcha] = useState<string | null>(null);
+  const [captchaKey, setCaptchaKey] = useState(0); // re-renders the check after a failed attempt
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const turnstile = tab === "register" ? site?.turnstile_site_key : "";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setErr(null);
+    setUnconfirmed(false);
     try {
-      const m =
-        tab === "login"
-          ? await api<Me>("/api/m/login", { method: "POST", body: { email: f.email, password: f.password, totp: f.totp || null } })
-          : await api<Me>("/api/m/register", { method: "POST", body: { email: f.email, password: f.password, name: f.name, phone: f.phone, accept_terms: f.accept } });
-      setMe(m);
+      if (tab === "forgot") {
+        await api("/api/m/password/forgot", { method: "POST", body: { email: f.email } });
+        setSentReset(true);
+      } else if (tab === "login") {
+        setMe(await api<Me>("/api/m/login", { method: "POST", body: { email: f.email, password: f.password, totp: f.totp || null } }));
+      } else {
+        const r = await api<Me | Pending>("/api/m/register", { method: "POST", body: { email: f.email, password: f.password, name: f.name, phone: f.phone, accept_terms: f.accept, website: f.website, captcha } });
+        if ("pending" in r) setPending(r.email);
+        else setMe(r);
+      }
     } catch (e2) {
       const msg = e2 instanceof Error ? e2.message : "Erreur";
       if (msg.includes("2FA")) setNeedTotp(true);
+      if (msg.toLowerCase().includes("non confirmé")) setUnconfirmed(true);
+      if (tab === "register" && turnstile) {
+        setCaptcha(null);
+        setCaptchaKey((k) => k + 1);
+      }
       setErr(msg);
     } finally {
       setBusy(false);
     }
   };
+
+  if (pending) return <CheckInbox email={pending} onBack={() => { setPending(null); setTab("login"); }} />;
 
   return (
     <div className="container-x grid min-h-[70vh] place-items-center py-14">
@@ -52,22 +72,30 @@ function AuthPanel({ initial }: { initial: "login" | "register" }) {
         <div className="flex items-center gap-3">
           <Emblem size={44} />
           <div>
-            <div className="font-[family-name:var(--font-display)] text-lg font-bold">Espace membre</div>
+            <div className="font-[family-name:var(--font-display)] text-lg font-bold">{tab === "forgot" ? "Mot de passe oublié" : "Espace membre"}</div>
             <div className="text-xs text-muted">Liberté Financière</div>
           </div>
         </div>
-        <div className="mt-7 grid grid-cols-2 rounded-xl border border-white/10 bg-ink-950 p-1" role="tablist">
-          {(["login", "register"] as const).map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} onClick={() => { setTab(t); setErr(null); }} className={`relative rounded-lg py-2 text-sm font-semibold ${tab === t ? "text-white" : "text-muted"}`}>
-              {tab === t && <motion.span layoutId="auth-tab" className="absolute inset-0 rounded-lg bg-white/[0.07]" />}
-              <span className="relative">{t === "login" ? "Connexion" : "Inscription"}</span>
-            </button>
-          ))}
-        </div>
+        {tab !== "forgot" && (
+          <div className="mt-7 grid grid-cols-2 rounded-xl border border-white/10 bg-ink-950 p-1" role="tablist">
+            {(["login", "register"] as const).map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} onClick={() => { setTab(t); setErr(null); setUnconfirmed(false); }} className={`relative rounded-lg py-2 text-sm font-semibold ${tab === t ? "text-white" : "text-muted"}`}>
+                {tab === t && <motion.span layoutId="auth-tab" className="absolute inset-0 rounded-lg bg-white/[0.07]" />}
+                <span className="relative">{t === "login" ? "Connexion" : "Inscription"}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {tab === "register" && site && !site.registration_open ? (
           <Notice className="mt-6">Les inscriptions ouvrent bientôt.</Notice>
+        ) : tab === "forgot" && sentReset ? (
+          <div className="mt-6 grid gap-4">
+            <Notice kind="ok">Si un compte confirmé existe pour <strong>{f.email}</strong>, un lien pour choisir un nouveau mot de passe vient d&apos;être envoyé. Il est valable 1 heure. Pensez à regarder dans les spams.</Notice>
+            <button className="btn btn-ghost" onClick={() => { setTab("login"); setSentReset(false); }}>Retour à la connexion</button>
+          </div>
         ) : (
           <form onSubmit={submit} className="mt-6 grid gap-4">
+            {tab === "forgot" && <p className="text-sm text-muted">Entrez l&apos;adresse de votre compte : nous vous envoyons un lien pour choisir un nouveau mot de passe.</p>}
             <AnimatePresence initial={false}>
               {tab === "register" && (
                 <motion.div key="reg" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="grid gap-4 overflow-hidden">
@@ -77,26 +105,83 @@ function AuthPanel({ initial }: { initial: "login" | "register" }) {
               )}
             </AnimatePresence>
             <label className="field"><span>E-mail</span><input className="input" type="email" required autoComplete="email" value={f.email} onChange={set("email")} /></label>
-            <label className="field">
-              <span>Mot de passe {tab === "register" && "(12 caractères minimum)"}</span>
-              <input className="input" type="password" required minLength={tab === "register" ? 12 : 1} autoComplete={tab === "register" ? "new-password" : "current-password"} value={f.password} onChange={set("password")} />
-            </label>
+            {tab !== "forgot" && (
+              <label className="field">
+                <span className="flex items-center justify-between gap-2">
+                  <span>Mot de passe {tab === "register" && "(12 caractères minimum)"}</span>
+                  {tab === "login" && <button type="button" className="text-xs font-normal text-brand-300 hover:underline" onClick={() => { setTab("forgot"); setErr(null); }}>Mot de passe oublié ?</button>}
+                </span>
+                <input className="input" type="password" required minLength={tab === "register" ? 12 : 1} autoComplete={tab === "register" ? "new-password" : "current-password"} value={f.password} onChange={set("password")} />
+              </label>
+            )}
             {tab === "login" && needTotp && (
               <label className="field"><span>Code 2FA</span><input className="input num" inputMode="numeric" maxLength={6} value={f.totp} onChange={set("totp")} /></label>
             )}
             {tab === "register" && (
-              <label className="flex gap-3 text-sm leading-relaxed text-muted">
-                <input type="checkbox" className="mt-1 size-4 accent-brand-500" checked={f.accept} onChange={set("accept")} required />
-                <span>J&apos;accepte les <Link href="/risques/#conditions" className="text-brand-300 underline">conditions</Link> et j&apos;ai lu l&apos;<Link href="/risques/" className="text-brand-300 underline">avertissement sur les risques</Link>.</span>
-              </label>
+              <>
+                {/* Honeypot: invisible to people, filled by form bots. Never remove "aria-hidden" or "tabIndex". */}
+                <div className="absolute -left-[10000px] top-auto h-px w-px overflow-hidden" aria-hidden="true">
+                  <label>Site web<input type="text" name="website" tabIndex={-1} autoComplete="off" value={f.website} onChange={set("website")} /></label>
+                </div>
+                <label className="flex gap-3 text-sm leading-relaxed text-muted">
+                  <input type="checkbox" className="mt-1 size-4 accent-brand-500" checked={f.accept} onChange={set("accept")} required />
+                  <span>J&apos;accepte les <Link href="/risques/#conditions" className="text-brand-300 underline">conditions</Link> et j&apos;ai lu l&apos;<Link href="/risques/" className="text-brand-300 underline">avertissement sur les risques</Link>.</span>
+                </label>
+                {turnstile && <Turnstile key={captchaKey} siteKey={turnstile} onToken={setCaptcha} />}
+              </>
             )}
             {err && <Notice kind="error">{err}</Notice>}
-            <button className="btn btn-primary mt-1" disabled={busy}>
-              {busy ? <Spinner label="" /> : tab === "login" ? "Se connecter" : "Créer mon compte"}
+            {unconfirmed && <ResendLink email={f.email} />}
+            <button className="btn btn-primary mt-1" disabled={busy || (!!turnstile && !captcha)}>
+              {busy ? <Spinner label="" /> : tab === "login" ? "Se connecter" : tab === "forgot" ? "Recevoir le lien" : "Créer mon compte"}
             </button>
+            {tab === "forgot" && <button type="button" className="btn btn-ghost" onClick={() => { setTab("login"); setErr(null); }}>Retour à la connexion</button>}
           </form>
         )}
       </div>
+    </div>
+  );
+}
+
+function ResendLink({ email }: { email: string }) {
+  const [state, setState] = useState<"idle" | "busy" | "sent" | "error">("idle");
+  const [msg, setMsg] = useState("");
+  const resend = async () => {
+    setState("busy");
+    try {
+      await api("/api/m/verify/resend", { method: "POST", body: { email } });
+      setState("sent");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Erreur");
+      setState("error");
+    }
+  };
+  if (state === "sent") return <Notice kind="ok">Nouveau lien envoyé à <strong>{email}</strong>. Il est valable 48 heures.</Notice>;
+  return (
+    <div className="grid gap-2">
+      {state === "error" && <Notice kind="error">{msg}</Notice>}
+      <button type="button" className="btn btn-ghost btn-sm" onClick={resend} disabled={state === "busy" || !email}>
+        {state === "busy" ? <Spinner label="" /> : <><MailCheck className="size-4" /> Renvoyer le lien de confirmation</>}
+      </button>
+    </div>
+  );
+}
+
+function CheckInbox({ email, onBack }: { email: string; onBack: () => void }) {
+  return (
+    <div className="container-x grid min-h-[70vh] place-items-center py-14">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="card w-full max-w-md p-7 text-center sm:p-9">
+        <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-brand-500/15 text-brand-300"><MailCheck className="size-7" /></div>
+        <h1 className="mt-5 font-[family-name:var(--font-display)] text-xl font-bold">Confirmez votre adresse e-mail</h1>
+        <p className="mt-3 text-sm leading-relaxed text-muted">
+          Nous avons envoyé un lien à <span className="text-fg">{email}</span>. Cliquez dessus pour activer votre compte. Le lien est valable 48 heures.
+        </p>
+        <p className="mt-2 text-xs text-faint">Rien reçu après quelques minutes ? Regardez dans les spams ou l&apos;onglet « Promotions », puis renvoyez le lien.</p>
+        <div className="mt-6 grid gap-2 text-left">
+          <ResendLink email={email} />
+          <button className="btn btn-ghost btn-sm" onClick={onBack}>J&apos;ai confirmé : me connecter</button>
+        </div>
+      </motion.div>
     </div>
   );
 }
@@ -178,6 +263,7 @@ function Dashboard({ me, params }: { me: Me; params: URLSearchParams }) {
           <QuickLink href="/academie/" icon={GraduationCap} title="Académie" text="Reprendre mes cours" />
           <QuickLink href="/copytrading/" icon={Copy} title="Copytrading" text="Mes copies démo" />
           <QuickLink href="/robots/" icon={Wallet} title="Robots" text="Catalogue et licences" />
+          {site?.coach && <QuickLink href="/coach/" icon={Bot} title="Coach IA" text="Questions sur ICT" />}
         </div>
       </div>
 

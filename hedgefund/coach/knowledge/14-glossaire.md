@@ -1,0 +1,36 @@
+# Glossaire ICT (sigles)
+
+- **AMD** : Accumulation, Manipulation, Distribution (voir Power of 3).
+- **BISI** : Buyside Imbalance Sellside Inefficiency = FVG haussier.
+- **BOS** : Break of Structure, cassure de structure dans le sens de la tendance.
+- **BPR** : Balanced Price Range, chevauchement d'un FVG haussier et d'un FVG baissier.
+- **BSL / SSL** : Buy-side / Sell-side liquidity, au-dessus des sommets / sous les creux.
+- **CBDR** : Central Bank Dealers Range, 14:00–20:00 heure de New York.
+- **CE** : Consequent Encroachment, 50 % d'un FVG (ou d'une mèche).
+- **CHoCH** : Change of Character, terme **SMC** (pas ICT) proche du MSS.
+- **DOL** : Draw on Liquidity, la cible probable du prix.
+- **DXY** : indice dollar.
+- **EQ** : équilibre, 50 % d'un range.
+- **EQH / EQL** : Equal Highs / Equal Lows, sommets/creux égaux (liquidité).
+- **ERL / IRL** : External / Internal Range Liquidity.
+- **FVG** : Fair Value Gap.
+- **HTF / LTF** : Higher / Lower Time Frame, unité de temps supérieure / inférieure.
+- **IFVG** : Inversion Fair Value Gap, FVG invalidé qui change de rôle.
+- **IPDA** : Interbank Price Delivery Algorithm, l'algorithme de livraison du prix selon ICT.
+- **ITH / ITL, STH / STL, LTH / LTL** : sommets/creux intermédiaires, court terme, long terme.
+- **KZ** : Killzone.
+- **MMBM / MMSM (MMXM)** : Market Maker Buy / Sell Model.
+- **MSS** : Market Structure Shift, premier changement de structure après une prise de
+  liquidité, avec déplacement.
+- **MT** : Mean Threshold, 50 % d'un order block.
+- **NDOG / NWOG** : New Day / New Week Opening Gap.
+- **OB** : Order Block.
+- **OTE** : Optimal Trade Entry, retracement 62–79 % (sweet spot 70,5 %).
+- **PD array** : zone de référence premium/discount (OB, FVG, breaker…).
+- **PDH / PDL, PWH / PWL** : plus haut / plus bas de la veille, de la semaine précédente.
+- **PO3** : Power of 3.
+- **SIBI** : Sellside Imbalance Buyside Inefficiency = FVG baissier.
+- **SB** : Silver Bullet.
+- **SMC** : Smart Money Concepts, dérivés d'ICT par d'autres éducateurs.
+- **SMT** : divergence entre actifs corrélés.
+- **VI** : Volume Imbalance.

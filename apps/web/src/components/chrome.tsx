@@ -60,7 +60,8 @@ export function Ticker() {
 
 export function Nav() {
   const path = usePathname();
-  const { me } = useSession();
+  const { me, site } = useSession();
+  const links = site?.coach ? [...LINKS.slice(0, 4), { href: "/coach/", label: "Coach IA" }, ...LINKS.slice(4)] : LINKS;
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => setOpen(false), [path]);
@@ -82,7 +83,7 @@ export function Nav() {
           <Lockup />
         </Link>
         <div className="hidden items-center gap-1 md:flex">
-          {LINKS.map((l) => {
+          {links.map((l) => {
             const active = path?.startsWith(l.href);
             return (
               <Link key={l.href} href={l.href} className={`relative rounded-lg px-3 py-2 text-sm font-medium transition-colors ${active ? "text-white" : "text-muted hover:text-white"}`}>
@@ -121,7 +122,7 @@ export function Nav() {
             exit={{ opacity: 0 }}
           >
             <div className="container-x flex flex-col gap-1 py-6">
-              {LINKS.map((l, i) => (
+              {links.map((l, i) => (
                 <motion.div key={l.href} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.04 * i }}>
                   <Link href={l.href} className="flex items-center justify-between rounded-xl px-3 py-4 text-lg font-semibold hover:bg-white/5">
                     {l.label} <ArrowUpRight className="size-5 text-faint" />

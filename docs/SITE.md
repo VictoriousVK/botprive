@@ -1,5 +1,9 @@
 # Site Liberté Financière : guide des cofondateurs
 
+> **Nouveau (v0.4).** Les inscriptions doivent être confirmées par e-mail, « mot de passe
+> oublié » existe, un Coach IA ICT est disponible pour l'offre Quant Elite et Sentry peut
+> surveiller les erreurs. Réglages à faire : [MISE_EN_ROUTE_V0.4.md](MISE_EN_ROUTE_V0.4.md).
+
 La plateforme sert maintenant deux espaces sur la même adresse :
 
 | Adresse | Pour qui | Contenu |

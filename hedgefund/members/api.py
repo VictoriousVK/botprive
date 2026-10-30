@@ -21,10 +21,12 @@ from hedgefund import __version__
 from hedgefund.bots.templates import TEMPLATES
 from hedgefund.core.ledger import Kind
 from hedgefund.members.academy import ACCESS, PROVIDERS, STATUSES, Academy, AcademyError
+from hedgefund.members.antibot import verify_turnstile
 from hedgefund.members.copytrading import LEADER_STATUS, Copytrading, CopyError
 from hedgefund.members.service import MemberError, Members
 from hedgefund.members.site import ROBOT_STATUSES, MemberSettings, SiteConfig
 from hedgefund.members.wave import verify_signature
+from hedgefund.web.observability import browser_config, set_member
 from hedgefund.web.security import Session
 
 MEMBER_COOKIE = "lf_session"
@@ -37,6 +39,30 @@ class RegisterIn(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     phone: str = Field(default="", max_length=24)
     accept_terms: bool
+    website: str = Field(default="", max_length=200)  # honeypot: hidden field, people leave it empty
+    captcha: str | None = Field(default=None, max_length=2048)  # Cloudflare Turnstile token, when enabled
+
+
+class EmailIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class TokenIn(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
+class ResetIn(TokenIn):
+    password: str = Field(min_length=1, max_length=200)
+
+
+class CoachTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=6000)
+
+
+class CoachIn(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+    history: list[CoachTurn] = Field(default_factory=list, max_length=12)
 
 
 class MemberLoginIn(BaseModel):
@@ -141,6 +167,9 @@ class SiteContext:
     client_ip: Callable[[Request], str]
     operator: Callable[..., Session]  # FastAPI dependency: console session (with CSRF check)
     check_write: Callable[[Request, str], None]  # Origin + CSRF check for a state-changing call
+    public_origin: str = ""  # https://domain used in e-mail links (never taken from the Host header)
+    captcha: Callable[[str | None, str], bool] | None = None  # (token, ip) -> passed; default: Cloudflare Turnstile
+    coach: Any = None  # hedgefund.coach.Coach, when the IA Trading Coach is enabled
 
 
 def mount_members(app: FastAPI, ctx: SiteContext) -> None:
@@ -159,8 +188,9 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
         if s is None:
             return None
         m = members.get(s.user_id)
-        if m is None or m["status"] != "active":
+        if m is None or m["status"] != "active" or not members.is_verified(m):
             return None
+        set_member(m["id"])
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             ctx.check_write(request, s.csrf)
         return s, m
@@ -178,7 +208,11 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
     @app.get("/api/site")
     def site_info() -> dict:
         wave = "api" if members.wave is not None else ("manual" if site.public()["billing"]["wave_manual"] else "off")
-        return {**site.public(), "copytrading": copy.mode, "wave": wave, "registration_open": settings.registration_open, "version": __version__}
+        return {
+            **site.public(), "copytrading": copy.mode, "wave": wave, "registration_open": settings.registration_open, "version": __version__,
+            "email_verification": settings.email_verification, "turnstile_site_key": settings.turnstile_site_key if settings.turnstile_enabled else "",
+            "coach": ctx.coach is not None, "sentry": browser_config(),
+        }
 
     @app.get("/api/site/robots")
     def robots() -> list[dict]:
@@ -253,21 +287,84 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
     def set_cookie(response: Response, token: str) -> None:
         response.set_cookie(MEMBER_COOKIE, token, max_age=members.auth.session_s, httponly=True, secure=ctx.cookie_secure, samesite="lax", path="/")
 
+    def base_url(request: Request) -> str:
+        """Origin written into e-mail links. Never the request's Host header (an attacker could
+        point a reset link to their own site): LF_PUBLIC_URL / HF_PUBLIC_HOST, or localhost."""
+        if ctx.public_origin:
+            return ctx.public_origin
+        if request.url.hostname in ("127.0.0.1", "localhost", "::1"):
+            return str(request.base_url).rstrip("/")
+        raise HTTPException(503, "envoi d'e-mail impossible : l'adresse publique du site (LF_PUBLIC_URL) n'est pas configurée")
+
+    def captcha_ok(token: str | None, ip: str) -> bool:
+        if ctx.captcha is not None:
+            return ctx.captcha(token, ip)
+        if not settings.turnstile_enabled:
+            return True
+        return verify_turnstile(settings.turnstile_secret, token, ip)
+
+    def signed_in(response: Response, request: Request, member_id: int) -> dict:
+        token, s = members.auth.open_session(member_id, ctx.client_ip(request), request.headers.get("user-agent", ""))
+        set_cookie(response, token)
+        return me_payload(s, members.get(member_id))
+
     @app.post("/api/m/register")
     def register(body: RegisterIn, request: Request, response: Response) -> dict:
         if not body.accept_terms:
             raise HTTPException(400, "acceptez les conditions et l'avertissement sur les risques")
+        email = body.email.strip().lower()
         ip = ctx.client_ip(request)
+        if body.website.strip():  # honeypot filled: a bot. Same answer as a real sign-up, nothing created.
+            audit("signup_blocked", reason="honeypot", ip=ip)
+            return {"pending": True, "email": email}
+        if not captcha_ok(body.captcha, ip):
+            raise HTTPException(400, "vérification anti-robot échouée : rechargez la page et réessayez")
         try:
-            members.register(body.email, body.password, body.name, body.phone, ip=ip)
+            member_id = members.register(email, body.password, body.name, body.phone, ip=ip)
         except (MemberError, ValueError) as e:
             raise fail(e) from e
-        res = members.auth.login(body.email.strip().lower(), body.password, None, ip, request.headers.get("user-agent", ""))
-        if res is None:
-            raise HTTPException(500, "compte créé : connectez-vous")
-        token, s = res
-        set_cookie(response, token)
-        return me_payload(s, members.get(s.user_id))
+        if settings.email_verification:
+            members.send_verification(member_id, base_url(request))
+            return {"pending": True, "email": email}
+        return signed_in(response, request, member_id)
+
+    @app.post("/api/m/verify")
+    def verify_email(body: TokenIn, request: Request, response: Response) -> dict:
+        try:
+            m = members.verify_email(body.token)
+        except MemberError as e:
+            raise fail(e) from e
+        if m["status"] != "active":
+            raise HTTPException(403, "compte suspendu : contactez l'équipe")
+        audit("email_verified", member=m["email"])
+        return signed_in(response, request, m["id"])
+
+    @app.post("/api/m/verify/resend")
+    def resend_verification(body: EmailIn, request: Request) -> dict:
+        try:
+            members.resend_verification(body.email, base_url(request), ip=ctx.client_ip(request))
+        except MemberError as e:
+            raise HTTPException(429, str(e)) from e
+        return {"ok": True}
+
+    @app.post("/api/m/password/forgot")
+    def forgot_password(body: EmailIn, request: Request) -> dict:
+        try:
+            members.request_password_reset(body.email, base_url(request), ip=ctx.client_ip(request))
+        except MemberError as e:
+            raise HTTPException(429, str(e)) from e
+        return {"ok": True}
+
+    @app.post("/api/m/password/reset")
+    def reset_password(body: ResetIn, request: Request, response: Response) -> dict:
+        try:
+            m = members.reset_password(body.token, body.password)
+        except (MemberError, ValueError) as e:
+            raise fail(e) from e
+        audit("member_password_reset", member=m["email"])
+        if m["status"] != "active" or m["totp_enabled"]:
+            return {"member": None}  # sign in normally (2FA code needed)
+        return {"member": signed_in(response, request, m["id"])}
 
     @app.post("/api/m/login")
     def login(body: MemberLoginIn, request: Request, response: Response) -> dict:
@@ -284,6 +381,9 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
         if m is None or m["status"] != "active":
             members.auth.logout(token)
             raise HTTPException(403, "compte suspendu : contactez l'équipe")
+        if not members.is_verified(m):
+            members.auth.logout(token)
+            raise HTTPException(403, "e-mail non confirmé : cliquez sur le lien reçu par e-mail (pensez aux spams), ou demandez un nouveau lien")
         set_cookie(response, token)
         return me_payload(s, m)
 
@@ -358,6 +458,32 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
         except AcademyError as e:
             raise fail(e) from e
         return {"ok": True}
+
+    # ---------------- IA Trading Coach ----------------
+    @app.get("/api/m/coach")
+    def coach_state(sm=Depends(member)) -> dict:
+        coach = ctx.coach
+        entitled = "coach_ia" in members.entitlements(sm[1])
+        if coach is None:
+            return {"enabled": False, "entitled": entitled, "remaining": 0, "limit": 0, "topics": []}
+        return {
+            "enabled": True, "entitled": entitled, "remaining": coach.remaining(engine.store, sm[1]["id"]) if entitled else 0, "limit": coach.daily_limit,
+            "topics": [{"id": f.id, "title": f.title} for f in coach.fiches],
+        }
+
+    @app.post("/api/m/coach")
+    def coach_ask(body: CoachIn, sm=Depends(member)) -> dict:
+        from hedgefund.coach import CoachError
+
+        coach = ctx.coach
+        if coach is None:
+            raise HTTPException(503, "le coach IA n'est pas encore activé")
+        if "coach_ia" not in members.entitlements(sm[1]):
+            raise HTTPException(403, "le coach IA est inclus dans l'offre Quant Elite")
+        try:
+            return coach.answer_for(engine.store, sm[1]["id"], body.question.strip(), [t.model_dump() for t in body.history])
+        except CoachError as e:
+            raise HTTPException(429 if "limite" in str(e) else 503, str(e)) from e
 
     # ---------------- copytrading ----------------
     @app.get("/api/m/copy")
@@ -443,6 +569,15 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
         audit("member_status", operator=s.username, member_id=member_id, status=body.status)
         return {"ok": True}
 
+    @app.post("/api/admin/members/{member_id}/verify-email")
+    def admin_verify_email(member_id: int, s: Session = Depends(op)) -> dict:
+        try:
+            members.mark_verified(member_id)
+        except MemberError as e:
+            raise fail(e) from e
+        audit("member_email_verified", operator=s.username, member_id=member_id)
+        return {"ok": True}
+
     @app.get("/api/admin/payments")
     def admin_payments(status: str = "", s: Session = Depends(op)) -> list[dict]:
         return members.list_payments(status[:20])
@@ -464,6 +599,12 @@ def mount_members(app: FastAPI, ctx: SiteContext) -> None:
             raise fail(e) from e
         audit("payment_rejected", operator=s.username, payment=payment_id, reason=body.reason)
         return members.public_payment(members.payment(payment_id))
+
+    @app.get("/api/admin/coach")
+    def admin_coach(s: Session = Depends(op)) -> dict:
+        from hedgefund.coach import Coach
+
+        return {"enabled": ctx.coach is not None, "questions": Coach.recent_questions(engine.store)}
 
     @app.get("/api/admin/leads")
     def admin_leads(s: Session = Depends(op)) -> list[dict]:
